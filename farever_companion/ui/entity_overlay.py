@@ -400,6 +400,21 @@ class EntityOverlay(OverlayWindow):
         self._open_drops()
         self._refresh()
 
+    def select_by_key(self, kind, key):
+        """Select an item from the HUD list by kind and key (from external clicks)."""
+        targets = self._targets()
+        match = None
+        for t_kind, t_key in targets:
+            if t_kind == kind:
+                if isinstance(t_key, int) and str(t_key) == str(key):
+                    match = (t_kind, t_key)
+                    break
+                elif str(t_key).lower() == str(key).lower():
+                    match = (t_kind, t_key)
+                    break
+        if match:
+            self._select(*match)
+
     # public actions for global hotkeys (selection works while the game is focused)
     def select_prev(self):
         self._move_selection(-1)
@@ -492,8 +507,16 @@ class EntityOverlay(OverlayWindow):
         self._comps = self.model.nearest_companions(xyz, self.s.companion_count) \
             if self.s.show_companions else []
         self._orbs = self._ranked_orbs(xyz) if self.s.show_orbs else []
-        self._chests = self.model.nearest_chests_merged(
+        # Automatically mark opened chests as done in settings so they persist
+        for e in self.model.live_chests():
+            if e.elem_id and e.state and e.state.lower() in ("opened", "open", "looted"):
+                if e.elem_id not in self.s.poi_done:
+                    self.s.poi_done.append(e.elem_id)
+                    self.s.save()
+
+        raw_chests = self.model.nearest_chests_merged(
             xyz, self.s.chest_count, self.s.max_dist) if self.s.show_chests else []
+        self._chests = [c for c in raw_chests if c.chest_id not in self.s.poi_done]
 
         # 2) keep selection valid (auto-flip to first available target)
         targets = self._targets()
@@ -593,21 +616,30 @@ class EntityOverlay(OverlayWindow):
                 sel = ("chest", c.chest_id) == self._sel
                 anomaly = bool(c.live and c.anomaly)
                 color = self.s.hud_accent if (sel or anomaly) else theme.CHEST
-                label = names.loot_table_label(c.loot_table) if c.loot_table \
+                label = names.humanize(c.loot_table) if c.loot_table \
                     else names.humanize(c.chest_id)
                 sub_bits = []
                 if c.state:
                     sub_bits.append(c.state.upper())
                 if anomaly:
                     sub_bits.append("★ ANOMALY")
-                # world-activity loot drops get their own marker art
-                accent = theme.KIND_COLOR["activity"] if anomaly else theme.CHEST
+                accent = theme.CHEST
+                cx, cy, cz = 0.0, 0.0, 0.0
+                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
+                if sc:
+                    cx, cy, cz = sc.x, sc.y, sc.z
+                else:
+                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
+                    if lc:
+                        cx, cy, cz = lc.x, lc.y, lc.z
                 specs.append(RowSpec(
                     None, None, accent, label, color,
                     sub="  ·  ".join(sub_bits), value=f"{c.dist:.0f}m",
                     bold=sel, highlight=sel,
-                    cb=(lambda cid=c.chest_id: self._select("chest", cid)),
-                    marker="activity" if anomaly else "chest"))
+                    cb=(lambda cid=c.chest_id, lbl=label, x=cx, y=cy, z=cz:
+                        (self._select("chest", cid),
+                         self._track("pos", f"{x:.1f},{y:.1f},{z:.1f}|{lbl}"))),
+                    marker="chest"))
             self.chest_box.fill(specs, isz)
             self.chest_box.header.set_tag(f"{len(self._chests)} · CLICK FOR LOOT")
         else:

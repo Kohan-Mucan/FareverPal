@@ -102,7 +102,7 @@ class _Canvas(QtWidgets.QWidget):
                 static_ids = {c.chest_id for c in self.model.chests}
                 for e in self.model.live_chests():
                     if (e.elem_id or "") not in static_ids:
-                        pois.append((e.x, e.y, e.z, "activity", e.elem_id or "loot",
+                        pois.append((e.x, e.y, e.z, "chest", e.elem_id or "loot",
                                      e.elem_id or f"ch{e.addr}"))
             except Exception:
                 pass
@@ -386,6 +386,19 @@ class _Canvas(QtWidgets.QWidget):
             poi = self._poi_at(e.position())
             if poi is not None and tr is not None:
                 wx, wy, wz, kind, label, poi_id = poi
+                
+                # Highlight and select the clicked item in the EntityOverlay if it is open
+                if tr.parent() is not None:
+                    entity_ov = getattr(tr.parent(), "overlays", {}).get("entity")
+                    if entity_ov is not None and entity_ov.isVisible():
+                        clean_key = poi_id
+                        if kind == "enemy" and isinstance(poi_id, str) and poi_id.startswith("e"):
+                            try:
+                                clean_key = int(poi_id[1:])
+                            except ValueError:
+                                pass
+                        entity_ov.select_by_key(kind, clean_key)
+                
                 if kind == "orb" and poi_id and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)
                 elif kind == "enemy" and label and label != "?":

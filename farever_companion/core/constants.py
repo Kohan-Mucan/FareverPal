@@ -72,7 +72,7 @@ CONFIG_SCAN_BYTES = 0x800     # how far into GameLayer to hunt the config pointe
 
 # interactible element fields
 OFF_ELEMID = 0x268       # element-id String
-OFF_ELEMSTATE = 0x290    # element state String
+OFF_ELEMSTATE = 0x2a0    # element state String
 
 # --- *Attributes struct ----------------------------------------------------
 OFF_HEALTH = 0xF0        # *Attributes + 0xF0 -> current Health (f64)
