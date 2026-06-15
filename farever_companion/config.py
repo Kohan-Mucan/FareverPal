@@ -31,8 +31,8 @@ def config_dir() -> Path:
     if getattr(sys, "frozen", False):
         d = Path(sys.executable).parent
     else:
-        base = os.environ.get("APPDATA") or str(Path.home())
-        d = Path(base) / "FareverCompanion"
+        # Save next to run.py/companion directory for portable dev testing
+        d = Path(__file__).resolve().parent.parent
     d.mkdir(parents=True, exist_ok=True)
     return d
 
