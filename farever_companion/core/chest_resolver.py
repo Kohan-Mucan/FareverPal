@@ -54,6 +54,12 @@ class ChestResolver:
                               live_chests, max_dist: float = 0.0) -> list[ChestRow]:
         rows: dict[str, ChestRow] = {}
         for c, d in chestdb.nearest(self.chests, *xyz, n=10 ** 6):
+            # Exclude BossChests, Activity triggers, and Camps
+            if (c.chest_id.startswith("BossChest") or
+                "activity" in c.chest_id.lower() or
+                "camp" in c.chest_id.lower() or
+                (c.loot_table and "activity" in c.loot_table.lower())):
+                continue
             tbl = self.chest_table(c.chest_id, dungeon_boss, c.loot_table)
             # drop a static boss chest belonging to a different boss
             if (tbl and dungeon_boss and tbl != dungeon_boss
@@ -61,9 +67,15 @@ class ChestResolver:
                 continue
             rows[c.chest_id] = ChestRow(c.chest_id, d, tbl, c.level, None, False)
         for e in live_chests:
+            if not e.elem_id:
+                continue
+            # Exclude BossChests and Activity/Vault triggers from live scan
+            elem_id_lower = e.elem_id.lower()
+            if "activity" in elem_id_lower or "vault" in elem_id_lower or e.elem_id.startswith("BossChest"):
+                continue
             d = e.dist(*xyz)
-            rows[e.elem_id or "?"] = ChestRow(
-                e.elem_id or "?", d, self.chest_table(e.elem_id or "?", dungeon_boss),
+            rows[e.elem_id] = ChestRow(
+                e.elem_id, d, self.chest_table(e.elem_id, dungeon_boss),
                 None, e.state, True, anomaly=(e.elem_id not in self._static_ids))
         out = sorted(rows.values(), key=lambda r: r.dist)
         if max_dist > 0:

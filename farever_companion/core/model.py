@@ -203,7 +203,12 @@ class LiveModel:
 
     def live_chests(self) -> list[Element]:
         try:
-            return [e for e in self.scene.elements(self.player_addr) if e.is_chest]
+            return [e for e in self.scene.elements(self.player_addr)
+                    if e.is_chest and e.elem_id and not (
+                        "activity" in e.elem_id.lower() or
+                        "vault" in e.elem_id.lower() or
+                        e.elem_id.startswith("BossChest")
+                    )]
         except ProcError:
             return []
 
