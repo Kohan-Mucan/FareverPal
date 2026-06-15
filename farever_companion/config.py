@@ -27,8 +27,12 @@ def experimental_enabled() -> bool:
 
 
 def config_dir() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home())
-    d = Path(base) / "FareverCompanion"
+    import sys
+    if getattr(sys, "frozen", False):
+        d = Path(sys.executable).parent
+    else:
+        base = os.environ.get("APPDATA") or str(Path.home())
+        d = Path(base) / "FareverCompanion"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
