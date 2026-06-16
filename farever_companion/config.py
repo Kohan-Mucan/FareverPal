@@ -29,10 +29,10 @@ def experimental_enabled() -> bool:
 def config_dir() -> Path:
     import sys
     if getattr(sys, "frozen", False):
-        d = Path(sys.executable).parent
+        d = Path(sys.executable).parent / "data"
     else:
         # Save next to run.py/companion directory for portable dev testing
-        d = Path(__file__).resolve().parent.parent
+        d = Path(__file__).resolve().parent.parent / "data"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -175,8 +175,10 @@ class Settings:
     geometry: dict = field(default_factory=dict)
     # collectibles marked done (set of ids, stored as list)
     poi_done: list = field(default_factory=list)
-    # profile-split done lists: character_name_hash -> list of done ids
-    poi_done_by_profile: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Runtime-only cache of loaded profile progress lists
+        self._profile_progress: dict[str, list[str]] = {}
 
     @classmethod
     def load(cls) -> "Settings":
@@ -189,18 +191,37 @@ class Settings:
 
     def save(self) -> None:
         try:
-            _settings_path().write_text(json.dumps(asdict(self), indent=1), encoding="utf-8")
+            # Exclude runtime-only cached attributes starting with underscore
+            serialized = {k: v for k, v in asdict(self).items() if not k.startswith("_")}
+            _settings_path().write_text(json.dumps(serialized, indent=1), encoding="utf-8")
         except OSError:
             pass
 
     # --- poi done set helpers -------------------------------------------
     def get_poi_done(self, profile: str | None = None) -> list[str]:
-        if profile:
-            if profile not in self.poi_done_by_profile:
-                # Migrate existing progress from global list to character profile on first load
-                self.poi_done_by_profile[profile] = list(self.poi_done)
-            return self.poi_done_by_profile[profile]
-        return self.poi_done
+        if not profile:
+            return self.poi_done
+            
+        if profile not in self._profile_progress:
+            path = config_dir() / f"progress_{profile}.json"
+            if path.exists():
+                try:
+                    self._profile_progress[profile] = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    self._profile_progress[profile] = []
+            else:
+                # Migrate existing progress from global list on first load
+                self._profile_progress[profile] = list(self.poi_done)
+                self.save_profile_progress(profile, self._profile_progress[profile])
+                
+        return self._profile_progress[profile]
+
+    def save_profile_progress(self, profile: str, done_list: list[str]) -> None:
+        try:
+            path = config_dir() / f"progress_{profile}.json"
+            path.write_text(json.dumps(done_list, indent=1), encoding="utf-8")
+        except OSError:
+            pass
 
     def is_done(self, poi_id: str, profile: str | None = None) -> bool:
         return poi_id in self.get_poi_done(profile)
@@ -213,5 +234,9 @@ class Settings:
         else:
             done_list.append(poi_id)
             done = True
-        self.save()
+            
+        if profile:
+            self.save_profile_progress(profile, done_list)
+        else:
+            self.save()
         return done
