@@ -118,6 +118,13 @@ class Settings:
     track_id: str = ""
     show_gatherables: bool = True
     show_obelisks: bool = True
+    show_compass: bool = False
+    open_overlay_entity: bool = False
+    open_overlay_dps: bool = False
+    open_overlay_skills: bool = False
+    open_overlay_map: bool = False
+    open_overlay_crosshair: bool = False
+    open_overlay_speedrun: bool = False
     # crosshair overlay
     crosshair_style: str = "Cross + Dot"   # Cross + Dot | Circle | Cross | Dot | T-Shape
     crosshair_size: int = 10               # arm length (px)

@@ -24,12 +24,15 @@ class EntityPageMixin:
             ("show_companions", "Wild companions"), ("show_gatherables", "Gatherables"),
             ("show_orbs", "Secret orbs"), ("show_drops", "Closest drops"),
             ("enemies_only", "Enemies only"), ("class_only", "Class-relevant only"),
+            ("show_compass", "Compass needle"),
         ]
         for i, (attr, label) in enumerate(toggles):
             t = C.LabeledToggle(label, getattr(self.s, attr))
             if attr == "show_enemies":
                 t.toggled.connect(lambda on: (self._set("show_enemies", on),
                                               self._enemy_filter_box.setVisible(on)))
+            elif attr == "show_compass":
+                t.toggled.connect(self._set_show_compass)
             else:
                 t.toggled.connect(lambda on, a=attr: self._set(a, on))
             grid.addWidget(t, i // 2, i % 2)
@@ -202,3 +205,14 @@ class EntityPageMixin:
         (cur.add if hidden else cur.discard)(utype)
         self.s.entity_hidden_types = sorted(cur)
         self.s.save()
+
+    def _set_show_compass(self, on: bool) -> None:
+        self._set("show_compass", on)
+        tracker = self.overlay_mgr.tracker
+        if on:
+            if tracker.model is not None and tracker.s.track_kind and tracker.s.track_id:
+                tracker._start()
+        else:
+            tracker._timer.stop()
+            if tracker._needle is not None:
+                tracker._needle.hide()

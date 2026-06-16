@@ -139,6 +139,11 @@ class TrackController(QtCore.QObject):
 
     # --- tick --------------------------------------------------------------
     def _start(self) -> None:
+        if not getattr(self.s, "show_compass", False):
+            if self._needle is not None:
+                self._needle.hide()
+            self._timer.stop()
+            return
         if self._needle is None:
             self._needle = NeedleOverlay(self.s)
         self._needle.show()
