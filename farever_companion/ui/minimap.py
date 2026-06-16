@@ -246,7 +246,7 @@ class _Canvas(QtWidgets.QWidget):
                 if (self.s.minimap_icons and not edge) else None
             if pm is not None:
                 if done:
-                    p.setOpacity(0.4)
+                    p.setOpacity(0.45)
                 z = pm.width()
                 p.drawPixmap(int(sx - z / 2), int(sy - z / 2), pm)
                 if done:
@@ -254,7 +254,7 @@ class _Canvas(QtWidgets.QWidget):
             else:
                 col = QtGui.QColor(theme.KIND_COLOR.get(kind, theme.TEXT))
                 if done:
-                    col.setAlpha(70)
+                    col.setAlpha(115)
                 p.setPen(QtCore.Qt.NoPen)
                 p.setBrush(col)
                 p.drawEllipse(QtCore.QPointF(sx, sy), 3 if edge else 4, 3 if edge else 4)
