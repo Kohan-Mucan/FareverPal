@@ -29,10 +29,10 @@ def experimental_enabled() -> bool:
 def config_dir() -> Path:
     import sys
     if getattr(sys, "frozen", False):
-        d = Path(sys.executable).parent / "data"
+        d = Path(sys.executable).parent / "moddata"
     else:
         # Save next to run.py/companion directory for portable dev testing
-        d = Path(__file__).resolve().parent.parent / "data"
+        d = Path(__file__).resolve().parent.parent / "moddata"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

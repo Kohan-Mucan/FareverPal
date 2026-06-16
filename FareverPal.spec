@@ -20,11 +20,18 @@ import os
 from PyInstaller.utils.hooks import get_module_file_attribute
 
 # --- the native memory reader (built by maturin into the env) --------------
-# collect_dynamic_libs() returns an empty list for single-file .pyd modules,
-# so we collect the extension explicitly instead.
+# Since farever_native is a package containing __init__.py and farever_native.pyd,
+# we need to collect the compiled .pyd binary under the package directory.
 try:
-    _native = get_module_file_attribute("farever_native")
-    binaries = [(_native, ".")] if _native else []
+    import farever_native
+    import os
+    pkg_dir = os.path.dirname(farever_native.__file__)
+    pyd_path = os.path.join(pkg_dir, "farever_native.pyd")
+    if os.path.exists(pyd_path):
+        binaries = [(pyd_path, "farever_native")]
+    else:
+        _native = get_module_file_attribute("farever_native")
+        binaries = [(_native, ".")] if _native else []
 except Exception:
     binaries = []
 
@@ -38,21 +45,25 @@ datas = [
     ("assets/app_icon.ico", "assets"),
 ]
 
-# --- data: optional sibling game-data dirs ---------------------------------
-# Added only if they exist next to this repo, so a full local build includes the
-# CDB sheets + wiki data + icons, while a bare checkout (e.g. CI) still builds
-# successfully without them.
+# --- data: optional sibling/local game-data dirs ---------------------------
+# Added only if they exist, checking both the project root (.) and sibling (..)
+# directory layouts. This ensures a full local build includes the CDB sheets +
+# wiki data + icons, while a bare checkout still builds.
 for _rel, dst in (
-    (os.path.join("..", "data", "sheets"), "data/sheets"),
-    (os.path.join("..", "htdocs", "assets", "icons"), "htdocs/assets/icons"),
-    (os.path.join("..", "htdocs", "assets", "data"), "htdocs/assets/data"),
-    (os.path.join("..", "notes", "chest_loot_index.json"), "notes"),
-    (os.path.join("..", "notes", "chest_positions.json"), "notes"),
-    (os.path.join("..", "notes", "orb_positions.json"), "notes"),
+    (os.path.join("data", "sheets"), "data/sheets"),
+    (os.path.join("htdocs", "assets", "icons"), "htdocs/assets/icons"),
+    (os.path.join("htdocs", "assets", "data"), "htdocs/assets/data"),
+    (os.path.join("notes", "chest_loot_index.json"), "notes"),
+    (os.path.join("notes", "chest_positions.json"), "notes"),
+    (os.path.join("notes", "orb_positions.json"), "notes"),
 ):
     src = os.path.join(SPECPATH, _rel)
     if os.path.exists(src):
         datas.append((src, dst))
+    else:
+        sibling_src = os.path.join(SPECPATH, "..", _rel)
+        if os.path.exists(sibling_src):
+            datas.append((sibling_src, dst))
 
 # --- excludes: Qt modules the app never uses (trim the bundle) -------------
 # Keep only QtCore, QtGui, QtWidgets, QtSvg and the windows platform plugin
