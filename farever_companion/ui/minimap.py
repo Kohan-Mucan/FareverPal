@@ -202,6 +202,7 @@ class _Canvas(QtWidgets.QWidget):
                 p.drawEllipse(QtCore.QPointF(cx, cy), rad * f, rad * f)
         # POIs
         track_pos = self._track_pos()
+        profile = self.model.player_profile()
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
             dx, dy = self._rel(wx, wy, scale, phi)
             edge = False
@@ -222,7 +223,7 @@ class _Canvas(QtWidgets.QWidget):
                     dx *= k; dy *= k
                     edge = True
             sx, sy = cx + dx, cy - dy
-            done = bool(poi_id and self.s.is_done(poi_id))
+            done = bool(poi_id and self.s.is_done(poi_id, profile))
             if self._is_waypoint(kind, label, poi_id, wx, wy, track_pos):
                 # the compass waypoint: accent ring so the target is obvious
                 ring = QtGui.QColor(self.s.hud_accent)
@@ -435,10 +436,11 @@ class _Canvas(QtWidgets.QWidget):
             if d < bestd and poi_id:
                 best, bestd = poi_id, d
         if best:
-            self.s.toggle_done(best)
+            profile = self.model.player_profile()
+            self.s.toggle_done(best, profile)
             # collecting the needle's target ends the tracking
             tr = getattr(self.window(), "_tracker", None)
-            if tr is not None and tr.is_tracked("orb", best) and self.s.is_done(best):
+            if tr is not None and tr.is_tracked("orb", best) and self.s.is_done(best, profile):
                 tr.clear()
             self.update()
 

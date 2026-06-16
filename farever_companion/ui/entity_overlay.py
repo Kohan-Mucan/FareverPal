@@ -478,9 +478,9 @@ class EntityOverlay(OverlayWindow):
             self._drop_win.set_target(*self._selected_source())
 
     # --- helpers ---------------------------------------------------------
-    def _ranked_orbs(self, xyz):
+    def _ranked_orbs(self, xyz, profile):
         """Nearest uncollected orbs, plain distance order."""
-        pool = [o for o in geo_orbs.load_orbs() if not self.s.is_done(o.orb_id)]
+        pool = [o for o in geo_orbs.load_orbs() if not self.s.is_done(o.orb_id, profile)]
         return sorted(((o, o.dist(*xyz)) for o in pool),
                       key=lambda t: t[1])[:self.s.orb_count]
 
@@ -497,6 +497,7 @@ class EntityOverlay(OverlayWindow):
             return
         self.pos.setText(f"X {xyz[0]:.0f}   Y {xyz[1]:.0f}   Z {xyz[2]:.0f}")
         isz = round(self.s.icon_size * self._scale)
+        profile = self.model.player_profile()
 
         # 1) gather every section's list (selection cycles across all of them)
         self._enemies = self.model.nearest_enemies(
@@ -506,17 +507,18 @@ class EntityOverlay(OverlayWindow):
             if self.s.show_enemies else []
         self._comps = self.model.nearest_companions(xyz, self.s.companion_count) \
             if self.s.show_companions else []
-        self._orbs = self._ranked_orbs(xyz) if self.s.show_orbs else []
+        self._orbs = self._ranked_orbs(xyz, profile) if self.s.show_orbs else []
         # Automatically mark opened chests as done in settings so they persist
+        done_list = self.s.get_poi_done(profile)
         for e in self.model.live_chests():
             if e.elem_id and e.state and e.state.lower() in ("opened", "open", "looted"):
-                if e.elem_id not in self.s.poi_done:
-                    self.s.poi_done.append(e.elem_id)
+                if e.elem_id not in done_list:
+                    done_list.append(e.elem_id)
                     self.s.save()
 
         raw_chests = self.model.nearest_chests_merged(
             xyz, self.s.chest_count, self.s.max_dist) if self.s.show_chests else []
-        self._chests = [c for c in raw_chests if c.chest_id not in self.s.poi_done]
+        self._chests = [c for c in raw_chests if c.chest_id not in done_list]
 
         # 2) keep selection valid (auto-flip to first available target)
         targets = self._targets()

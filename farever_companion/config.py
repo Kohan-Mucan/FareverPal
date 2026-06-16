@@ -175,6 +175,8 @@ class Settings:
     geometry: dict = field(default_factory=dict)
     # collectibles marked done (set of ids, stored as list)
     poi_done: list = field(default_factory=list)
+    # profile-split done lists: character_name_hash -> list of done ids
+    poi_done_by_profile: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls) -> "Settings":
@@ -192,15 +194,24 @@ class Settings:
             pass
 
     # --- poi done set helpers -------------------------------------------
-    def is_done(self, poi_id: str) -> bool:
-        return poi_id in self.poi_done
+    def get_poi_done(self, profile: str | None = None) -> list[str]:
+        if profile:
+            if profile not in self.poi_done_by_profile:
+                # Migrate existing progress from global list to character profile on first load
+                self.poi_done_by_profile[profile] = list(self.poi_done)
+            return self.poi_done_by_profile[profile]
+        return self.poi_done
 
-    def toggle_done(self, poi_id: str) -> bool:
-        if poi_id in self.poi_done:
-            self.poi_done.remove(poi_id)
+    def is_done(self, poi_id: str, profile: str | None = None) -> bool:
+        return poi_id in self.get_poi_done(profile)
+
+    def toggle_done(self, poi_id: str, profile: str | None = None) -> bool:
+        done_list = self.get_poi_done(profile)
+        if poi_id in done_list:
+            done_list.remove(poi_id)
             done = False
         else:
-            self.poi_done.append(poi_id)
+            done_list.append(poi_id)
             done = True
         self.save()
         return done

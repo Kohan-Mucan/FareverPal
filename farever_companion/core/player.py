@@ -229,3 +229,51 @@ class PlayerLocator:
             return self.hl.i32(self.address + OFF_HERO_ISCOMBAT) != 0
         except ProcError:
             return None
+
+    def player_profile(self) -> str | None:
+        """Find the unique name_hash key of the current character using reflection."""
+        hero = self.live_address()
+        if not hero:
+            return None
+        # OFF_HERO_OWNERPLAYER = 16
+        player = self.hl.ptr(hero + 16)
+        if not player:
+            return None
+        type_ptr = self.hl.u64(player)
+        if not is_ptr(type_ptr):
+            return None
+
+        # 1) Resolve name/username
+        name = None
+        for fn in ("name", "userName", "playerName"):
+            off = self.hl.field_offset(type_ptr, fn)
+            if off is not None:
+                str_ptr = self.hl.ptr(player + off)
+                if str_ptr:
+                    name = self.hl.hl_string(str_ptr)
+                    break
+        if not name:
+            return None
+
+        # 2) Resolve unique database/account/character ID
+        uid = None
+        for fn in ("dbId", "id", "uid", "pid", "playerId", "charId"):
+            off = self.hl.field_offset(type_ptr, fn)
+            if off is not None:
+                try:
+                    # String ID check
+                    val_ptr = self.hl.ptr(player + off)
+                    if val_ptr and self.hl.class_of(val_ptr) == "String":
+                        uid = self.hl.hl_string(val_ptr)
+                        break
+                    # Numeric ID check
+                    val_i32 = self.hl.i32(player + off)
+                    if val_i32 != 0:
+                        uid = f"{val_i32 & 0xffffffff:08x}"
+                        break
+                except Exception:
+                    continue
+
+        if uid:
+            return f"{name}_{uid}"
+        return name

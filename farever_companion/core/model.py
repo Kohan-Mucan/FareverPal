@@ -54,6 +54,7 @@ class LiveModel:
         self.deaths: int = 0
         self._was_alive: bool = False
         self.units_ok: bool = True   # False while the units read fails (zone swap)
+        self._last_profile: str | None = None
 
     # --- lifecycle -------------------------------------------------------
     def locate_player(self) -> int | None:
@@ -364,6 +365,17 @@ class LiveModel:
                               ) -> list[ChestRow]:
         return self.chests_resolver.nearest_chests_merged(
             xyz, n, self.dungeon_boss, self.live_chests(), max_dist)
+
+    def player_profile(self) -> str | None:
+        """The character profile string, cached so load boundaries don't cause a None fallback."""
+        try:
+            prof = self.locator.player_profile()
+            if prof:
+                self._last_profile = prof
+                return prof
+        except Exception:
+            pass
+        return self._last_profile
 
     def closest_loot(self, xyz: XYZ, default_level: int) -> Nearest | None:
         cands: list[tuple[float, Nearest]] = []
