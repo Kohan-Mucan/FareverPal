@@ -141,6 +141,9 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
                  "(if another memory tool is running, unload it first to avoid "
                  "interference). The crosshair needs no attach.")
 
+        if getattr(self.s, "open_overlay_crosshair", False):
+            self._request_overlay("crosshair", True)
+
     # The live session is owned by `self.attach_ctl`; the overlay windows + cards
     # by `self.overlay_mgr`. These properties keep the existing `self.proc` /
     # `self.model` / `self.overlays` / `self._overlay_cards` access working

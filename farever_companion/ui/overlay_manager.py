@@ -40,6 +40,7 @@ class OverlayManager(QtCore.QObject):
         self.model = None       # set via set_model on attach; None when detached
         self.overlays: dict[str, QtWidgets.QWidget | None] = {}
         self.cards: dict[str, list] = {}
+        self._detaching = False
         # the one compass-needle target, shared by every overlay
         self.tracker = TrackController(settings, self)
         # auto-sync collected orbs from the live glow-fx signal (1 Hz, only
@@ -121,6 +122,10 @@ class OverlayManager(QtCore.QObject):
             ov = self.overlays.get(key)
             if ov is not None:
                 ov.close()      # WA_DeleteOnClose -> _on_closed
+            setting_name = f"open_overlay_{key}"
+            if hasattr(self.s, setting_name):
+                setattr(self.s, setting_name, False)
+                self.s.save()
             return
         if key != "crosshair" and (self.model is None or self.model.player_addr is None):
             self.log.emit("Attach and locate the player first.")
@@ -138,17 +143,31 @@ class OverlayManager(QtCore.QObject):
         self.overlays[key] = ov
         self.sync_cards(key)
         self.log.emit(f"Opened {key} overlay.")
+        setting_name = f"open_overlay_{key}"
+        if hasattr(self.s, setting_name):
+            setattr(self.s, setting_name, True)
+            self.s.save()
 
     def _on_closed(self, key: str) -> None:
         self.overlays[key] = None
         self.sync_cards(key)
+        if not self._detaching:
+            setting_name = f"open_overlay_{key}"
+            if hasattr(self.s, setting_name):
+                setattr(self.s, setting_name, False)
+                self.s.save()
 
     def close_all(self) -> None:
         """Tear down every open overlay (detach / app close)."""
+        self._detaching = True
         for key, ov in list(self.overlays.items()):
             if ov is not None:
                 ov.close()
             self.overlays[key] = None
+        QtCore.QTimer.singleShot(0, self._reset_detaching)
+
+    def _reset_detaching(self) -> None:
+        self._detaching = False
 
     # --- global HUD settings ---------------------------------------------
     def set_opacity(self, value) -> None:

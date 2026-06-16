@@ -82,3 +82,9 @@ class OverlaysPageMixin:
 
     def _set_overlay_cards_enabled(self, on: bool):
         self.overlay_mgr.set_cards_enabled(on)
+        if on:
+            for key in ("entity", "dps", "skills", "map", "speedrun"):
+                setting_name = f"open_overlay_{key}"
+                if getattr(self.s, setting_name, False):
+                    if self.overlay_mgr.overlays.get(key) is None:
+                        self._request_overlay(key, True)
