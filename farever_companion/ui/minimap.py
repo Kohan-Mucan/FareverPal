@@ -392,7 +392,7 @@ class _Canvas(QtWidgets.QWidget):
                 k = (rad - 4) / m
                 dx *= k; dy *= k
             d = math.hypot(cx + dx - pos.x(), cy - dy - pos.y())
-            if d >= 12.0:
+            if d >= 16.0:
                 continue
             rank = (self._CLICK_PRIORITY.get(poi[3], 9), d)
             if best_rank is None or rank < best_rank:
@@ -421,7 +421,13 @@ class _Canvas(QtWidgets.QWidget):
                                 clean_key = int(poi_id[1:])
                             except ValueError:
                                 pass
-                        entity_ov.select_by_key(kind, clean_key)
+                        # Temporarily remove tracker to prevent select_by_key from double-tracking
+                        old_tracker = entity_ov._tracker
+                        entity_ov._tracker = None
+                        try:
+                            entity_ov.select_by_key(kind, clean_key, open_drops=False)
+                        finally:
+                            entity_ov._tracker = old_tracker
                 
                 if kind == "orb" and poi_id and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)

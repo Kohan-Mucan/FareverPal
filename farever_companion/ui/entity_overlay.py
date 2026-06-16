@@ -408,7 +408,7 @@ class EntityOverlay(OverlayWindow):
             self._tracker.track("orb", key)
         self._refresh()
 
-    def select_by_key(self, kind, key):
+    def select_by_key(self, kind, key, open_drops=True) -> bool:
         """Select an item from the HUD list by kind and key (from external clicks)."""
         targets = self._targets()
         match = None
@@ -421,7 +421,17 @@ class EntityOverlay(OverlayWindow):
                     match = (t_kind, t_key)
                     break
         if match:
-            self._select(*match)
+            if not open_drops:
+                old_show = self.s.show_drop_window
+                self.s.show_drop_window = False
+                try:
+                    self._select(*match)
+                finally:
+                    self.s.show_drop_window = old_show
+            else:
+                self._select(*match)
+            return True
+        return False
 
     # public actions for global hotkeys (selection works while the game is focused)
     def select_prev(self):
@@ -470,6 +480,8 @@ class EntityOverlay(OverlayWindow):
         return locked is None or locked == addr
 
     def _open_drops(self):
+        if not self.s.show_drop_window:
+            return
         if self._sel is None:
             return
         if self._drop_win is None or not self._drop_win.isVisible():
@@ -482,6 +494,9 @@ class EntityOverlay(OverlayWindow):
         self._drop_win.set_target(*self._selected_source())
 
     def _update_drops(self):
+        if not self.s.show_drop_window:
+            self.close_drops()
+            return
         if self._drop_win is not None and self._drop_win.isVisible():
             if self._sel is None:
                 self.close_drops()
@@ -627,7 +642,7 @@ class EntityOverlay(OverlayWindow):
                     marker="orb"))
             self.orb_box.fill(specs, isz)
             self.orb_box.header.set_tag(
-                f"{len(self._orbs)} · CLICK TO TRACK" if self._orbs else "ALL MARKED")
+                f"{len(self._orbs)}" if self._orbs else "ALL MARKED")
         else:
             self.orb_box.hide()
 
@@ -664,7 +679,7 @@ class EntityOverlay(OverlayWindow):
                          self._track("pos", f"{x:.1f},{y:.1f},{z:.1f}|{lbl}"))),
                     marker="chest"))
             self.chest_box.fill(specs, isz)
-            self.chest_box.header.set_tag(f"{len(self._chests)} · CLICK FOR LOOT")
+            self.chest_box.header.set_tag(f"{len(self._chests)}")
         else:
             self.chest_box.hide()
 

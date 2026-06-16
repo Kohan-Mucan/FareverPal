@@ -24,7 +24,7 @@ class EntityPageMixin:
             ("show_companions", "Wild companions"), ("show_gatherables", "Gatherables"),
             ("show_orbs", "Secret orbs"), ("show_drops", "Closest drops"),
             ("enemies_only", "Enemies only"), ("class_only", "Class-relevant only"),
-            ("show_compass", "Compass needle"),
+            ("show_compass", "Compass needle"), ("show_drop_window", "Show drop window"),
         ]
         for i, (attr, label) in enumerate(toggles):
             t = C.LabeledToggle(label, getattr(self.s, attr))

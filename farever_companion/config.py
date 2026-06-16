@@ -66,6 +66,8 @@ class Settings:
     ui_scale: float = 1.0
     click_through: bool = False
     lock_overlays: bool = False      # lock HUD position + make click-through (mouse passes to game)
+    show_drop_window: bool = False
+    combat_click_through: bool = False
     auto_attach: bool = True         # watch for Farever.exe -> attach/locate/detach with zero clicks
     auto_check_updates: bool = True  # check GitHub Releases (via the website) for a newer exe on startup
     entity_scale: float = 1.0        # per-overlay UI zoom

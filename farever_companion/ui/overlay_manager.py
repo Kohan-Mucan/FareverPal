@@ -51,15 +51,23 @@ class OverlayManager(QtCore.QObject):
         # account collection state (None = signed out / unknown); the entity
         # overlay marks wild companions that aren't collected yet
         self.collection_owned: set | None = None
+        self._combat_lock_active = False
+        self._combat_timer = QtCore.QTimer(self)
+        self._combat_timer.setInterval(300)
+        self._combat_timer.timeout.connect(self._combat_tick)
 
     def set_model(self, model) -> None:
         self.model = model
         self.tracker.set_model(model)
         if model is None:
             self._orb_timer.stop()
+            self._combat_timer.stop()
+            if self._combat_lock_active:
+                self._restore_click_through()
         else:
             self._orb_sync = orb_sync.FxSync()
             self._orb_timer.start(1000)
+            self._combat_timer.start(300)
 
     def _orb_tick(self) -> None:
         """Mark loaded world orbs with no glow fx as collected (debounced);
@@ -205,3 +213,41 @@ class OverlayManager(QtCore.QObject):
         for ov in self.overlays.values():
             if ov is not None and hasattr(ov, "apply_accent"):
                 ov.apply_accent(color)
+
+    def set_combat_click_through(self, on: bool) -> None:
+        self.s.combat_click_through = on
+        self.s.save()
+        if not on and self._combat_lock_active:
+            self._restore_click_through()
+
+    def _combat_tick(self) -> None:
+        m = self.model
+        if m is None or not self.s.combat_click_through:
+            if self._combat_lock_active:
+                self._restore_click_through()
+            return
+        
+        try:
+            in_combat = False
+            if m.locator and hasattr(m.locator, "in_combat"):
+                in_combat = bool(m.locator.in_combat())
+        except Exception:
+            in_combat = False
+            
+        if in_combat:
+            if not self._combat_lock_active:
+                for key in HUD_OVERLAYS:
+                    ov = self.overlays.get(key)
+                    if ov is not None and hasattr(ov, "set_click_through"):
+                        ov.set_click_through(True)
+                self._combat_lock_active = True
+        else:
+            if self._combat_lock_active:
+                self._restore_click_through()
+
+    def _restore_click_through(self) -> None:
+        for key in HUD_OVERLAYS:
+            ov = self.overlays.get(key)
+            if ov is not None and hasattr(ov, "set_click_through"):
+                ov.set_click_through(self.s.lock_overlays)
+        self._combat_lock_active = False

@@ -24,7 +24,7 @@ from .scene import OFF_GAMELAYER, OFF_UNITS_ARR
 OFF_HERO_OWNERPLAYER: int | None = None   # ent.Hero -> st.Player
 OFF_PLAYER_ISME: int | None = None        # st.Player.isMe (i32/bool)
 OFF_PLAYER_HERO: int | None = None        # st.Player.hero -> ent.Hero
-OFF_HERO_ISCOMBAT: int | None = None      # ent.Hero.isInCombat (bool)
+OFF_HERO_ISCOMBAT: int | None = 0x2a8     # ent.Hero.isInCombat (bool)
 
 # The ent.Hero heap-scan fallback is OPT-IN only (FAREVER_HEAPSCAN=1). It scans
 # the multi-GB GC heap, and when fired against a half-initialized process (the

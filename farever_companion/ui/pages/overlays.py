@@ -33,12 +33,19 @@ class OverlaysPageMixin:
             self._register_card(key, card)
             cards.addWidget(card, i // 3, i % 3)
         v.addLayout(cards)
-
-        v.addWidget(C.SectionHeader("Overlay Settings"))
-        self.lock_toggle = C.LabeledToggle("Lock overlays (click-through + fixed position)",
-                                           self.s.lock_overlays)
+        v.addSpacing(16)
+        v.addWidget(C.SectionHeader("Lock the UI from clicks"))
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(12)
+        self.lock_toggle = C.LabeledToggle("Lock overlays (click-through)", self.s.lock_overlays)
         self.lock_toggle.toggled.connect(self._set_lock)
-        v.addWidget(self.lock_toggle)
+        self.combat_toggle = C.LabeledToggle("Auto lock while in combat", self.s.combat_click_through)
+        self.combat_toggle.toggled.connect(self._set_combat_click_through)
+        row.addWidget(self.lock_toggle)
+        row.addWidget(self.combat_toggle)
+        v.addLayout(row)
+
+        v.addWidget(C.SectionHeader("Appearance"))
         op = C.SliderRow("Overlay opacity", 30, 100, int(self.s.opacity * 100),
                          lambda x: f"{x}%")
         op.valueChanged.connect(self._set_opacity)
@@ -48,6 +55,10 @@ class OverlaysPageMixin:
         v.addWidget(C.Field("Highlight color", hl))
         v.addStretch(1)
         return page
+
+    def _set_combat_click_through(self, on: bool) -> None:
+        self._set("combat_click_through", on)
+        self.overlay_mgr.set_combat_click_through(on)
 
     def _set_entity_scale(self, v):
         sc = v / 100.0
