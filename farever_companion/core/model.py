@@ -207,7 +207,6 @@ class LiveModel:
             return [e for e in self.scene.elements(self.player_addr)
                     if e.is_chest and e.elem_id and not (
                         "activity" in e.elem_id.lower() or
-                        "vault" in e.elem_id.lower() or
                         e.elem_id.startswith("BossChest")
                     )]
         except ProcError:
@@ -228,7 +227,11 @@ class LiveModel:
     def live_orbs(self) -> list[Element]:
         """Dungeon secret orbs (InstanceOrb) in the loaded scene."""
         try:
-            return [e for e in self.scene.elements(self.player_addr) if e.is_orb]
+            return [e for e in self.scene.elements(self.player_addr)
+                    if e.is_orb and e.elem_id and (
+                        "redorb" in e.elem_id.lower() or
+                        "secretorb" in e.elem_id.lower()
+                    )]
         except ProcError:
             return []
 

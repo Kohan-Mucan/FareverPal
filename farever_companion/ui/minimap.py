@@ -134,6 +134,10 @@ class _Canvas(QtWidgets.QWidget):
                                  t.elem_id or f"tp{t.addr}"))
         except Exception:
             pass
+
+        # Sort all POIs by 2D distance to player so the closest are processed first
+        pois.sort(key=lambda p: math.hypot(p[0] - self._px, p[1] - self._py))
+
         self._pois = pois
         self.update()
 
@@ -203,6 +207,7 @@ class _Canvas(QtWidgets.QWidget):
         # POIs
         track_pos = self._track_pos()
         profile = self.model.player_profile()
+        edge_counts = {"chest": 0, "orb": 0}
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
             dx, dy = self._rel(wx, wy, scale, phi)
             edge = False
@@ -222,6 +227,12 @@ class _Canvas(QtWidgets.QWidget):
                     k = (rad - 4) / dist
                     dx *= k; dy *= k
                     edge = True
+
+            if edge and kind in edge_counts:
+                if edge_counts[kind] >= 5:
+                    continue
+                edge_counts[kind] += 1
+
             sx, sy = cx + dx, cy - dy
             done = bool(poi_id and self.s.is_done(poi_id, profile))
             if self._is_waypoint(kind, label, poi_id, wx, wy, track_pos):
@@ -231,7 +242,7 @@ class _Canvas(QtWidgets.QWidget):
                 p.setBrush(QtCore.Qt.NoBrush)
                 r_hl = (self.s.minimap_icon_size / 2 + 3) if not edge else 6
                 p.drawEllipse(QtCore.QPointF(sx, sy), r_hl, r_hl)
-            pm = self._poi_pixmap(kind, label, self.s.minimap_icon_size) \
+            pm = self._poi_pixmap(kind, label, self.s.minimap_icon_size, done) \
                 if (self.s.minimap_icons and not edge) else None
             if pm is not None:
                 if done:
@@ -250,16 +261,26 @@ class _Canvas(QtWidgets.QWidget):
         # compass + player (drawn unclipped so edge letters aren't cut)
         p.setClipping(False)
         self._draw_compass(p, cx, cy, rad, phi)
-        # player marker + facing arrow (uses the live Highlight color)
+        # player marker + facing arrow (uses the live Highlight color or arrow.png)
         accent = QtGui.QColor(self.s.hud_accent)
         # north-up frame: world heading's y-component inverts, so -heading
         fwd = (phi - self._heading) if self._heading is not None else (math.pi / 2)
-        p.setBrush(accent)
-        p.setPen(QtCore.Qt.NoPen)
-        p.drawEllipse(QtCore.QPointF(cx, cy), 4, 4)
-        p.setPen(QtGui.QPen(accent, 2))
-        p.drawLine(QtCore.QPointF(cx, cy),
-                   QtCore.QPointF(cx + math.cos(fwd) * 13, cy - math.sin(fwd) * 13))
+
+        arrow_pm = icons.asset_icon("arrow", 24)
+        if arrow_pm is not None and not arrow_pm.isNull():
+            p.save()
+            p.translate(cx, cy)
+            deg = 90.0 - math.degrees(fwd)
+            p.rotate(deg)
+            p.drawPixmap(int(-arrow_pm.width() / 2), int(-arrow_pm.height() / 2), arrow_pm)
+            p.restore()
+        else:
+            p.setBrush(accent)
+            p.setPen(QtCore.Qt.NoPen)
+            p.drawEllipse(QtCore.QPointF(cx, cy), 4, 4)
+            p.setPen(QtGui.QPen(accent, 2))
+            p.drawLine(QtCore.QPointF(cx, cy),
+                       QtCore.QPointF(cx + math.cos(fwd) * 13, cy - math.sin(fwd) * 13))
         p.end()
 
     def _draw_map(self, p, cx, cy, scale, phi):
@@ -291,7 +312,7 @@ class _Canvas(QtWidgets.QWidget):
     _MARKER = {"chest": "chest", "gatherable": "gatherable", "obelisk": "obelisk",
                "orb": "orb", "activity": "activity", "dungeon": "dungeon"}
 
-    def _poi_pixmap(self, kind, label, size):
+    def _poi_pixmap(self, kind, label, size, done=False):
         """A POI marker pixmap: enemies show the real per-unit game icon (organic
         outline); chests/crates, gatherables and obelisks use the bundled flat
         marker icons (assets/map_icons). Falls back to a tinted UI
@@ -300,6 +321,8 @@ class _Canvas(QtWidgets.QWidget):
             return icons.outlined("unit", label, size, theme.DANGER)
         name = self._MARKER.get(kind)
         if name:
+            if done and name in ("chest", "orb"):
+                name = name + "2"
             pm = icons.marker(name, size)
             if pm is not None:
                 return pm

@@ -115,7 +115,8 @@ class MapPageMixin:
             ov.canvas.refresh()
 
     def _refresh_orb_progress(self):
-        prog = geo_orbs.region_progress(self.s.poi_done)
+        profile = self.model.player_profile() if self.model else None
+        prog = geo_orbs.region_progress(self.s.get_poi_done(profile))
         if not prog:
             self._orb_progress.setText("")
             return

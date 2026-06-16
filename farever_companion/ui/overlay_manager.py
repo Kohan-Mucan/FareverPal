@@ -68,17 +68,23 @@ class OverlayManager(QtCore.QObject):
         if m is None:
             return
         try:
+            profile = m.player_profile()
+            done_list = self.s.get_poi_done(profile)
             mark, unmark = self._orb_sync.update(
-                m.world_orb_fx(), set(self.s.poi_done))
+                m.world_orb_fx(), set(done_list))
         except Exception:
             return
         if not mark and not unmark:
             return
-        done = set(self.s.poi_done)
+        done = set(done_list)
         done.update(mark)
         done.difference_update(unmark)
-        self.s.poi_done = sorted(done)
-        self.s.save()
+        done_list.clear()
+        done_list.extend(sorted(done))
+        if profile:
+            self.s.save_profile_progress(profile, done_list)
+        else:
+            self.s.save()
         for oid in mark:                    # collected the needle's target
             if self.tracker.is_tracked("orb", oid):
                 self.tracker.clear()

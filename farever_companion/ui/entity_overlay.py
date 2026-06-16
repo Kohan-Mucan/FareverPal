@@ -397,7 +397,15 @@ class EntityOverlay(OverlayWindow):
 
     def _select(self, kind, key):
         self._sel = (kind, key)
-        self._open_drops()
+        if kind in ("enemy", "chest"):
+            self._open_drops()
+        elif kind == "comp" and self._tracker is not None:
+            e = next((e for e, _ in self._comps
+                      if getattr(e, "addr", None) == key), None)
+            if e is not None:
+                self._tracker.track("unit", e.unit_id)
+        elif kind == "orb" and self._tracker is not None:
+            self._tracker.track("orb", key)
         self._refresh()
 
     def select_by_key(self, kind, key):
@@ -474,7 +482,14 @@ class EntityOverlay(OverlayWindow):
         self._drop_win.set_target(*self._selected_source())
 
     def _update_drops(self):
-        if self._drop_win is not None and self._drop_win.isVisible() and self._sel is not None:
+        if self._drop_win is not None and self._drop_win.isVisible():
+            if self._sel is None:
+                self.close_drops()
+                return
+            kind, key = self._sel
+            if kind not in ("enemy", "chest"):
+                self.close_drops()
+                return
             self._drop_win.set_target(*self._selected_source())
 
     # --- helpers ---------------------------------------------------------
@@ -510,11 +525,17 @@ class EntityOverlay(OverlayWindow):
         self._orbs = self._ranked_orbs(xyz, profile) if self.s.show_orbs else []
         # Automatically mark opened chests as done in settings so they persist
         done_list = self.s.get_poi_done(profile)
+        chest_changed = False
         for e in self.model.live_chests():
             if e.elem_id and e.state and e.state.lower() in ("opened", "open", "looted"):
                 if e.elem_id not in done_list:
                     done_list.append(e.elem_id)
-                    self.s.save()
+                    chest_changed = True
+        if chest_changed:
+            if profile:
+                self.s.save_profile_progress(profile, done_list)
+            else:
+                self.s.save()
 
         raw_chests = self.model.nearest_chests_merged(
             xyz, self.s.chest_count, self.s.max_dist) if self.s.show_chests else []

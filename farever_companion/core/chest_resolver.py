@@ -69,9 +69,9 @@ class ChestResolver:
         for e in live_chests:
             if not e.elem_id:
                 continue
-            # Exclude BossChests and Activity/Vault triggers from live scan
+            # Exclude BossChests and Activity triggers from live scan
             elem_id_lower = e.elem_id.lower()
-            if "activity" in elem_id_lower or "vault" in elem_id_lower or e.elem_id.startswith("BossChest"):
+            if "activity" in elem_id_lower or e.elem_id.startswith("BossChest"):
                 continue
             d = e.dist(*xyz)
             rows[e.elem_id] = ChestRow(
