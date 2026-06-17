@@ -21,17 +21,19 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import theme
 
 SIDE = 500          # legacy-mode window size (px; fits needle + 2 text lines)
-PIVOT_DY = 96       # needle pivot sits this far below the player (screen px)
+PIVOT_DY = 180      # needle pivot sits this far below the player (screen px)
 DEFAULT_SQUASH = 0.55   # ground foreshortening until the camera pitch is read
-R_IN = 26           # needle starts here (local plane units), centre stays clear
-R_TIP = 110         # needle tip radius (local plane units)
-R_DIAL = 64         # faint ground-ring radius
+R_IN = 18           # needle starts here (local plane units), centre stays clear
+R_TIP = 75          # needle tip radius (local plane units)
+R_DIAL = 44         # faint ground-ring radius
 ARRIVE = 4.0        # world units = "you are here"
 LEVEL_DZ = 3.0      # |dz| above this counts as above/below
 
 COL_LEVEL = theme.GOOD      # target on our level
-COL_ABOVE = "#ef4444"       # target above the player
-COL_BELOW = "#3b82f6"       # target below the player
+COL_NEEDLE_ABOVE = "#3b82f6"  # needle blue for up
+COL_NEEDLE_BELOW = "#ef4444"  # needle red for down
+COL_TEXT_ABOVE = "#ef4444"    # text red for up
+COL_TEXT_BELOW = "#3b82f6"    # text blue for down
 
 
 class NeedleOverlay(QtWidgets.QWidget):
@@ -117,9 +119,9 @@ class NeedleOverlay(QtWidgets.QWidget):
 
     def _state_color(self) -> QtGui.QColor:
         if self._dz > LEVEL_DZ:
-            return QtGui.QColor(COL_ABOVE)
+            return QtGui.QColor(COL_NEEDLE_ABOVE)
         if self._dz < -LEVEL_DZ:
-            return QtGui.QColor(COL_BELOW)
+            return QtGui.QColor(COL_NEEDLE_BELOW)
         return QtGui.QColor(COL_LEVEL)
 
     def paintEvent(self, _e):
@@ -136,14 +138,7 @@ class NeedleOverlay(QtWidgets.QWidget):
         here = not searching and self._dist <= ARRIVE
         color = QtGui.QColor(theme.GOOD) if here else self._state_color()
 
-        # faint ground ring (squashed by the camera tilt -> lies on the floor)
-        ring = QtGui.QColor(theme.BORDER)
-        ring.setAlpha(110)
-        pen = QtGui.QPen(ring, 1)
-        pen.setCosmetic(True)
-        p.setPen(pen)
-        p.setBrush(QtCore.Qt.NoBrush)
-        p.drawEllipse(QtCore.QPointF(px, py), R_DIAL, R_DIAL * sq)
+        # faint ground ring (removed)
 
         if here:
             # on the spot: green ground pulse instead of a direction
@@ -155,7 +150,7 @@ class NeedleOverlay(QtWidgets.QWidget):
             self._draw_needle(p, px, py, self._angle, color, sq)
 
         # distance + label at a FIXED y (independent of tilt, no jitter)
-        ty = py + R_TIP + 6
+        ty = py + 45
         p.setPen(QtGui.QColor(theme.TEXT))
         f = p.font()
         f.setFamily(theme.MONO_FONT)
@@ -164,15 +159,29 @@ class NeedleOverlay(QtWidgets.QWidget):
         p.setFont(f)
         if searching:
             txt = "NOT IN SCENE"
+            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt)
         elif here:
             txt = "HERE"
+            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt)
         else:
-            txt = f"{self._dist:.0f}m"
-            if self._dz > LEVEL_DZ:
-                txt += " ▲"
-            elif self._dz < -LEVEL_DZ:
-                txt += " ▼"
-        p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt)
+            txt_dist = f"{self._dist:.0f}m"
+            fm = p.fontMetrics()
+            w_dist = fm.horizontalAdvance(txt_dist)
+            
+            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt_dist)
+            
+            if abs(self._dz) > LEVEL_DZ:
+                arrow = " ▲ UP" if self._dz > LEVEL_DZ else " ▼ DOWN"
+                col = COL_TEXT_ABOVE if self._dz > LEVEL_DZ else COL_TEXT_BELOW
+                arrow_x = (SIDE + w_dist) / 2
+                
+                f_arrow = QtGui.QFont(f)
+                f_arrow.setPointSize(11)
+                p.setFont(f_arrow)
+                p.setPen(QtGui.QColor(col))
+                p.drawText(QtCore.QPointF(arrow_x, ty + 14), arrow)
+                p.setFont(f)
+                p.setPen(QtGui.QColor(theme.TEXT))
         if self._label:
             f.setPointSize(8)
             f.setBold(False)
@@ -191,29 +200,27 @@ class NeedleOverlay(QtWidgets.QWidget):
         color = QtGui.QColor(theme.GOOD) if here else self._state_color()
         keyline = QtGui.QColor(11, 14, 20, 210)
 
-        ring_poly = QtGui.QPolygonF([QtCore.QPointF(*pt) for pt in ring])
-        rc = QtGui.QColor(color if here else theme.TEXT)
-        rc.setAlpha(230 if here else 120)
-        pen = QtGui.QPen(rc, 3 if here else 2)
-        pen.setCosmetic(True)
-        p.setPen(pen)
-        p.setBrush(QtCore.Qt.NoBrush)
-        p.drawPolygon(ring_poly)
+        if here:
+            ring_poly = QtGui.QPolygonF([QtCore.QPointF(*pt) for pt in ring])
+            rc = QtGui.QColor(color)
+            rc.setAlpha(230)
+            pen = QtGui.QPen(rc, 3)
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawPolygon(ring_poly)
 
-        if head and tail:
+        if head:
             hp = QtGui.QPolygonF([QtCore.QPointF(*pt) for pt in head])
-            tp = QtGui.QPolygonF([QtCore.QPointF(*pt) for pt in tail])
             side = QtGui.QColor(color).darker(220)
-            for dy, fh, ft in ((4, side, QtGui.QColor(keyline)),
-                               (0, QtGui.QColor(color), QtGui.QColor(theme.MUTED))):
+            for dy, fh in ((4, side),
+                            (0, QtGui.QColor(color))):
                 pen = QtGui.QPen(keyline, 2, QtCore.Qt.SolidLine,
                                  QtCore.Qt.RoundCap, QtCore.Qt.RoundJoin)
                 pen.setCosmetic(True)
                 p.setPen(pen)
                 p.setBrush(fh)
                 p.drawPolygon(hp.translated(0, dy))
-                p.setBrush(ft)
-                p.drawPolygon(tp.translated(0, dy))
 
         # distance + label under the ring
         tx, ty = text_xy
@@ -225,15 +232,29 @@ class NeedleOverlay(QtWidgets.QWidget):
         p.setFont(f)
         if searching:
             txt = "NOT IN SCENE"
+            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt)
         elif here:
             txt = "HERE"
+            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt)
         else:
-            txt = f"{self._dist:.0f}m"
-            if self._dz > LEVEL_DZ:
-                txt += " ▲"
-            elif self._dz < -LEVEL_DZ:
-                txt += " ▼"
-        p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt)
+            txt_dist = f"{self._dist:.0f}m"
+            fm = p.fontMetrics()
+            w_dist = fm.horizontalAdvance(txt_dist)
+            
+            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt_dist)
+            
+            if abs(self._dz) > LEVEL_DZ:
+                arrow = " ▲ UP" if self._dz > LEVEL_DZ else " ▼ DOWN"
+                col = COL_TEXT_ABOVE if self._dz > LEVEL_DZ else COL_TEXT_BELOW
+                arrow_x = tx + w_dist / 2
+                
+                f_arrow = QtGui.QFont(f)
+                f_arrow.setPointSize(11)
+                p.setFont(f_arrow)
+                p.setPen(QtGui.QColor(col))
+                p.drawText(QtCore.QPointF(arrow_x, ty + 14), arrow)
+                p.setFont(f)
+                p.setPen(QtGui.QColor(theme.TEXT))
         if self._label:
             f.setPointSize(8)
             f.setBold(False)
@@ -248,14 +269,14 @@ class NeedleOverlay(QtWidgets.QWidget):
         mid = -(R_IN + (R_TIP - R_IN) * 0.30)
         head = QtGui.QPolygonF([
             QtCore.QPointF(0, -R_TIP),
-            QtCore.QPointF(11, mid),
+            QtCore.QPointF(5, mid),
             QtCore.QPointF(0, -R_IN),
-            QtCore.QPointF(-11, mid),
+            QtCore.QPointF(-5, mid),
         ])
         tail = QtGui.QPolygonF([
-            QtCore.QPointF(7, R_IN),
-            QtCore.QPointF(0, R_IN + 20),
-            QtCore.QPointF(-7, R_IN),
+            QtCore.QPointF(5, R_IN),
+            QtCore.QPointF(0, R_IN + 14),
+            QtCore.QPointF(-5, R_IN),
         ])
         return head, tail
 
@@ -271,7 +292,7 @@ class NeedleOverlay(QtWidgets.QWidget):
         side = QtGui.QColor(color).darker(220)
         extrude = 2 + 8 * (1.0 - sq)
 
-        def pass_(dy, fill_head, fill_tail, outline):
+        def pass_(dy, fill_head, outline):
             p.save()
             p.translate(px, py + dy)
             p.scale(1.0, sq)
@@ -282,10 +303,8 @@ class NeedleOverlay(QtWidgets.QWidget):
             p.setPen(pen)
             p.setBrush(fill_head)
             p.drawPolygon(head)
-            p.setBrush(fill_tail)
-            p.drawPolygon(tail)
             p.restore()
 
         # extruded side (slightly lower), then the lit top face
-        pass_(extrude, side, QtGui.QColor(keyline), keyline)
-        pass_(0, QtGui.QColor(color), QtGui.QColor(theme.MUTED), keyline)
+        pass_(extrude, side, keyline)
+        pass_(0, QtGui.QColor(color), keyline)

@@ -47,7 +47,7 @@ class Settings:
     show_enemies: bool = True
     show_chests: bool = True
     show_drops: bool = True
-    enemies_only: bool = True
+    enemies_only: bool = False
     enemy_count: int = 8
     chest_count: int = 6
     # wild catchable companions (critters) as their own HUD section
@@ -116,6 +116,7 @@ class Settings:
     minimap_obelisks: bool = True
     minimap_orbs: bool = True         # secret orbs (Collector achievements)
     minimap_dungeons: bool = True     # dungeon entrances / teleporters
+    minimap_companions: bool = True   # wild companions / critters
     # compass-needle target ("" = none): kind "orb" tracks a static secret orb,
     # kind "unit" locks onto the nearest live instance of that unit id
     track_kind: str = ""
@@ -123,6 +124,7 @@ class Settings:
     show_gatherables: bool = True
     show_obelisks: bool = True
     show_compass: bool = False
+    auto_select_next_collectible: bool = True
     open_overlay_entity: bool = False
     open_overlay_dps: bool = False
     open_overlay_skills: bool = False

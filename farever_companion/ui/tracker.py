@@ -24,13 +24,13 @@ TICK_MS = 33
 ARRIVE = 4.0          # world units = "you are here" (matches nav_needle)
 
 # world-space needle decal dimensions (world units, ground plane)
-N_TIP = 4.2
-N_SHOULDER = 1.7
-N_HALF_W = 0.55
-N_BASE = 0.9
-N_TAIL = 1.8
-N_TAIL_W = 0.35
-RING_R = 1.0
+N_TIP = 3.0
+N_SHOULDER = 1.2
+N_HALF_W = 0.25
+N_BASE = 0.65
+N_TAIL = 1.3
+N_TAIL_W = 0.25
+RING_R = 0.7
 
 
 def _game_window_rect(pid: int):
@@ -203,6 +203,9 @@ class TrackController(QtCore.QObject):
         m = self.model
         if m is None or self._needle is None:
             return
+        if m.player_addr is None:
+            self.clear()
+            return
         tgt = self._target()
         if tgt is None:
             self.clear()
@@ -285,6 +288,6 @@ class TrackController(QtCore.QObject):
             n.setGeometry(rx, ry, rw, rh)
         all_pts = ring + (head or []) + (tail or [])
         text_xy = (sum(p[0] for p in ring) / len(ring),
-                   max(p[1] for p in all_pts) + 16)
+                   max(p[1] for p in all_pts) + 6)
         n.set_scene(head, tail, ring, text_xy, dist, dz, label)
         return True

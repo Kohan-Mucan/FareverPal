@@ -178,14 +178,15 @@ class LiveModel:
         return ranked[:n]
 
     def nearest_enemies(self, xyz: XYZ, n: int, max_dist: float = 0.0,
-                        enemies_only: bool = True,
+                        enemies_only: bool = False,
                         hide_types: set[str] | None = None,
                         hide_units: set[str] | None = None):
         # wild companions (critters) are ent.Foe but not enemies - they get
         # their own list (nearest_companions)
         pool = [e for e in self.units()
-                if (e.is_enemy if enemies_only else (e.is_foe or e.is_hero))
-                and not udata.is_companion(e.unit_id)]
+                if (e.is_enemy or (enemies_only and e.is_hero))
+                and not udata.is_companion(e.unit_id)
+                and e.addr != self.player_addr]
         if hide_types:
             pool = [e for e in pool if udata.unit_type(e.unit_id) not in hide_types]
         if hide_units:

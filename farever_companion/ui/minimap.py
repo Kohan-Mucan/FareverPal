@@ -62,11 +62,28 @@ class _Canvas(QtWidgets.QWidget):
         self._cam_yaw: float | None = None    # free-look camera yaw
         self._mtx = None                      # engine view-proj matrix
         self._drag = None
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._pan_start_x = 0.0
+        self._pan_start_y = 0.0
+        self._right_drag_start = None
+        self._right_click_panned = False
+        self._last_player_pos = None
 
     def _read_player(self) -> bool:
         xyz = self.model.player_xyz()
         if xyz is None:
             return False
+        
+        # Reset pan if player moved from the position where panning started/occurred
+        if (self._pan_x != 0.0 or self._pan_y != 0.0) and self._last_player_pos is not None:
+            dx = xyz[0] - self._last_player_pos[0]
+            dy = xyz[1] - self._last_player_pos[1]
+            if math.hypot(dx, dy) > 0.5:
+                self._pan_x = 0.0
+                self._pan_y = 0.0
+                self.update()
+
         self._px, self._py, self._pz = xyz
         self._heading = self.model.player_heading()       # movement facing (arrow)
         self._cam_yaw = self.model.camera_yaw()           # free-look yaw (fallback)
@@ -111,6 +128,9 @@ class _Canvas(QtWidgets.QWidget):
             if s.minimap_enemies:
                 for e in self.model.enemies():
                     pois.append((e.x, e.y, e.z, "enemy", e.unit_id or "?", f"e{e.addr}"))
+            if getattr(s, "minimap_companions", True):
+                for e, d in self.model.nearest_companions(xyz, s.companion_count):
+                    pois.append((e.x, e.y, e.z, "companion", e.unit_id or "?", f"comp{e.addr}"))
             if s.minimap_gatherables:
                 for g in self.model.gatherables():
                     pois.append((g.x, g.y, g.z, "gatherable", g.elem_id or "?",
@@ -132,6 +152,32 @@ class _Canvas(QtWidgets.QWidget):
                 for t in self.model.teleporters():
                     pois.append((t.x, t.y, t.z, "dungeon", t.elem_id or "teleport",
                                  t.elem_id or f"tp{t.addr}"))
+        except Exception:
+            pass
+
+        # Force include the player's currently tracked target
+        try:
+            tk, tid = s.track_kind, s.track_id
+            if tk == "orb" and tid:
+                if not any(p[3] == "orb" and p[5] == tid for p in pois):
+                    o = geo_orbs.by_id().get(tid)
+                    if o:
+                        pois.append((o.x, o.y, o.z, "orb", o.orb_id, o.orb_id))
+            elif tk == "unit" and tid:
+                if not any(p[4] == tid for p in pois):
+                    from ..data import units as udata
+                    for e in self.model.units():
+                        if e.unit_id == tid:
+                            kind = "companion" if udata.is_companion(e.unit_id) else "enemy"
+                            pois.append((e.x, e.y, e.z, kind, e.unit_id or "?", f"{'comp' if kind == 'companion' else 'e'}{e.addr}"))
+            elif tk == "pos" and tid:
+                try:
+                    coords, _, label = tid.partition("|")
+                    tx, ty, tz = (float(v) for v in coords.split(","))
+                    if not any(abs(p[0] - tx) < 0.5 and abs(p[1] - ty) < 0.5 for p in pois):
+                        pois.append((tx, ty, tz, "pos", label or "Waypoint", "tracked_pos"))
+                except ValueError:
+                    pass
         except Exception:
             pass
 
@@ -201,7 +247,7 @@ class _Canvas(QtWidgets.QWidget):
         phi = self._phi()
         # world map texture (under the rings/POIs)
         if self.s.minimap_texture:
-            self._draw_map(p, cx, cy, scale, phi)
+            self._draw_map(p, cx + self._pan_x, cy + self._pan_y, scale, phi)
         # rings (outline only - NoBrush, else they'd fill over the map texture)
         p.setPen(QtGui.QColor(theme.BORDER))
         p.setBrush(QtCore.Qt.NoBrush)
@@ -216,42 +262,51 @@ class _Canvas(QtWidgets.QWidget):
         edge_counts = {"chest": 0, "orb": 0}
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
             dx, dy = self._rel(wx, wy, scale, phi)
+            dx_c = dx + self._pan_x
+            dy_c = dy - self._pan_y
             edge = False
             if square:
                 limit_x = rad_x - 4
                 limit_y = rad_y - 4
-                kx = limit_x / abs(dx) if dx != 0 else float('inf')
-                ky = limit_y / abs(dy) if dy != 0 else float('inf')
+                kx = limit_x / abs(dx_c) if dx_c != 0 else float('inf')
+                ky = limit_y / abs(dy_c) if dy_c != 0 else float('inf')
                 k = min(kx, ky)
                 if k < 1.0:
-                    dx *= k; dy *= k
+                    dx_c *= k; dy_c *= k
                     edge = True
             else:
-                dist = math.hypot(dx, dy)
+                dist = math.hypot(dx_c, dy_c)
                 limit_r = rad_x - 4
                 if dist > limit_r:
                     if dist == 0:
                         continue
                     k = limit_r / dist
-                    dx *= k; dy *= k
+                    dx_c *= k; dy_c *= k
                     edge = True
 
-            if edge and kind in edge_counts:
-                if edge_counts[kind] >= 5:
-                    continue
-                edge_counts[kind] += 1
-
-            sx, sy = cx + dx, cy - dy
             done = bool(poi_id and self.s.is_done(poi_id, profile))
+            is_wp = self._is_waypoint(kind, label, poi_id, wx, wy, track_pos)
+            if edge:
+                dist_to_player = math.hypot(wx - self._px, wy - self._py)
+                if not is_wp and (done or dist_to_player > 500.0):
+                    continue
+
+            if edge and kind in edge_counts:
+                if not is_wp and edge_counts[kind] >= 5:
+                    continue
+                if not is_wp:
+                    edge_counts[kind] += 1
+
+            sx, sy = cx + dx_c, cy - dy_c
+            pm = self._poi_pixmap(kind, label, self.s.minimap_icon_size, done) \
+                if self.s.minimap_icons else None
             if self._is_waypoint(kind, label, poi_id, wx, wy, track_pos):
                 # the compass waypoint: accent ring so the target is obvious
                 ring = QtGui.QColor(self.s.hud_accent)
                 p.setPen(QtGui.QPen(ring, 2))
                 p.setBrush(QtCore.Qt.NoBrush)
-                r_hl = (self.s.minimap_icon_size / 2 + 3) if not edge else 6
+                r_hl = (self.s.minimap_icon_size / 2 + 3) if pm is not None else 6
                 p.drawEllipse(QtCore.QPointF(sx, sy), r_hl, r_hl)
-            pm = self._poi_pixmap(kind, label, self.s.minimap_icon_size, done) \
-                if (self.s.minimap_icons and not edge) else None
             if pm is not None:
                 if done:
                     p.setOpacity(0.45)
@@ -277,7 +332,7 @@ class _Canvas(QtWidgets.QWidget):
         arrow_pm = icons.asset_icon("arrow", 24)
         if arrow_pm is not None and not arrow_pm.isNull():
             p.save()
-            p.translate(cx, cy)
+            p.translate(cx + self._pan_x, cy + self._pan_y)
             deg = 90.0 - math.degrees(fwd)
             p.rotate(deg)
             p.drawPixmap(int(-arrow_pm.width() / 2), int(-arrow_pm.height() / 2), arrow_pm)
@@ -285,10 +340,10 @@ class _Canvas(QtWidgets.QWidget):
         else:
             p.setBrush(accent)
             p.setPen(QtCore.Qt.NoPen)
-            p.drawEllipse(QtCore.QPointF(cx, cy), 4, 4)
+            p.drawEllipse(QtCore.QPointF(cx + self._pan_x, cy + self._pan_y), 4, 4)
             p.setPen(QtGui.QPen(accent, 2))
-            p.drawLine(QtCore.QPointF(cx, cy),
-                       QtCore.QPointF(cx + math.cos(fwd) * 13, cy - math.sin(fwd) * 13))
+            p.drawLine(QtCore.QPointF(cx + self._pan_x, cy + self._pan_y),
+                       QtCore.QPointF(cx + self._pan_x + math.cos(fwd) * 13, cy + self._pan_y - math.sin(fwd) * 13))
         p.end()
 
     def _draw_map(self, p, cx, cy, scale, phi):
@@ -325,8 +380,9 @@ class _Canvas(QtWidgets.QWidget):
         outline); chests/crates, gatherables and obelisks use the bundled flat
         marker icons (assets/map_icons). Falls back to a tinted UI
         glyph, then to a plain dot."""
-        if kind == "enemy" and label and icons.has_icon("unit", label):
-            return icons.outlined("unit", label, size, theme.DANGER)
+        if kind in ("enemy", "companion") and label and icons.has_icon("unit", label):
+            outline_col = theme.GOOD if kind == "companion" else theme.DANGER
+            return icons.outlined("unit", label, size, outline_col)
         name = self._MARKER.get(kind)
         if name:
             if done and name in ("chest", "orb"):
@@ -336,7 +392,7 @@ class _Canvas(QtWidgets.QWidget):
                 return pm
         glyph = {"chest": "box", "obelisk": "radio", "gatherable": "dice-5",
                  "enemy": "swords", "orb": "broadcast", "activity": "box",
-                 "dungeon": "map"}.get(kind)
+                 "dungeon": "map", "companion": "heart", "pos": "map-pin"}.get(kind)
         if glyph:
             return icons.ui_icon(glyph, theme.KIND_COLOR.get(kind, theme.TEXT), size)
         return None
@@ -372,9 +428,9 @@ class _Canvas(QtWidgets.QWidget):
         if tk == "orb":
             return kind == "orb" and poi_id == tid
         if tk == "unit":
-            return kind == "enemy" and label == tid
+            return kind in ("enemy", "companion") and label == tid
         if tk == "pos" and track_pos is not None:
-            return abs(wx - track_pos[0]) < 0.5 and abs(wy - track_pos[1]) < 0.5
+            return (abs(wx - track_pos[0]) < 0.5 and abs(wy - track_pos[1]) < 0.5) or poi_id == "tracked_pos"
         return False
 
     # overlapping markers: the click prefers the kind the player most likely
@@ -402,21 +458,23 @@ class _Canvas(QtWidgets.QWidget):
         for poi in self._pois:
             wx, wy = poi[0], poi[1]
             dx, dy = self._rel(wx, wy, scale, phi)
+            dx_c = dx + self._pan_x
+            dy_c = dy - self._pan_y
             if square:
                 limit_x = rad_x - 4
                 limit_y = rad_y - 4
-                kx = limit_x / abs(dx) if dx != 0 else float('inf')
-                ky = limit_y / abs(dy) if dy != 0 else float('inf')
+                kx = limit_x / abs(dx_c) if dx_c != 0 else float('inf')
+                ky = limit_y / abs(dy_c) if dy_c != 0 else float('inf')
                 k = min(kx, ky)
                 if k < 1.0:
-                    dx *= k; dy *= k
+                    dx_c *= k; dy_c *= k
             else:
-                dist = math.hypot(dx, dy)
+                dist = math.hypot(dx_c, dy_c)
                 limit_r = rad_x - 4
                 if dist > limit_r and dist > 0:
                     k = limit_r / dist
-                    dx *= k; dy *= k
-            d = math.hypot(cx + dx - pos.x(), cy - dy - pos.y())
+                    dx_c *= k; dy_c *= k
+            d = math.hypot(cx + dx_c - pos.x(), cy - dy_c - pos.y())
             if d >= 16.0:
                 continue
             rank = (self._CLICK_PRIORITY.get(poi[3], 9), d)
@@ -426,7 +484,11 @@ class _Canvas(QtWidgets.QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.RightButton:
-            self._mark_done(e)
+            self._right_drag_start = e.position()
+            self._pan_start_x = self._pan_x
+            self._pan_start_y = self._pan_y
+            self._right_click_panned = False
+            self._last_player_pos = (self._px, self._py, self._pz)
             return
         if e.button() == QtCore.Qt.LeftButton and not getattr(self.window(), "_locked", False):
             # any marker is a compass waypoint: enemies track the unit, orbs
@@ -456,7 +518,7 @@ class _Canvas(QtWidgets.QWidget):
                 
                 if kind == "orb" and poi_id and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)
-                elif kind == "enemy" and label and label != "?":
+                elif kind in ("enemy", "companion") and label and label != "?":
                     tr.toggle("unit", label)
                 else:
                     # incl. live dungeon orbs (not in the static index):
@@ -469,21 +531,30 @@ class _Canvas(QtWidgets.QWidget):
     def mouseMoveEvent(self, e):
         if self._drag is not None and e.buttons() & QtCore.Qt.LeftButton:
             self.window().move(e.globalPosition().toPoint() - self._drag)
+        elif self._right_drag_start is not None and e.buttons() & QtCore.Qt.RightButton:
+            delta = e.position() - self._right_drag_start
+            if delta.manhattanLength() > 3:
+                self._right_click_panned = True
+                self._pan_x = self._pan_start_x + delta.x()
+                self._pan_y = self._pan_start_y + delta.y()
+                self.update()
 
-    def mouseReleaseEvent(self, _e):
+    def mouseReleaseEvent(self, e):
         if self._drag is not None:
             self._drag = None
             win = self.window()
             if hasattr(win, "persist_geometry"):
                 win.persist_geometry()
+        if e.button() == QtCore.Qt.RightButton:
+            if not self._right_click_panned:
+                self._mark_done(e)
+            self._right_drag_start = None
 
     def mouseDoubleClickEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton:
             win = self.window()
             if hasattr(win, "set_bare"):
                 win.set_bare(not win.s.minimap_bare)
-
-
 
     def _mark_done(self, e):
         # mark the nearest plotted POI done (hit-test in the same rotated space)
@@ -493,7 +564,9 @@ class _Canvas(QtWidgets.QWidget):
         best, bestd = None, 12.0
         for (wx, wy, _wz, _k, _l, poi_id) in self._pois:
             dx, dy = self._rel(wx, wy, scale, phi)
-            sx, sy = cx + dx, cy - dy
+            dx_c = dx + self._pan_x
+            dy_c = dy - self._pan_y
+            sx, sy = cx + dx_c, cy - dy_c
             d = math.hypot(sx - e.position().x(), sy - e.position().y())
             if d < bestd and poi_id:
                 best, bestd = poi_id, d
@@ -502,14 +575,29 @@ class _Canvas(QtWidgets.QWidget):
             self.s.toggle_done(best, profile)
             # collecting the needle's target ends the tracking
             tr = getattr(self.window(), "_tracker", None)
-            if tr is not None and tr.is_tracked("orb", best) and self.s.is_done(best, profile):
-                tr.clear()
+            if tr is not None and self.s.is_done(best, profile):
+                should_clear = False
+                if tr.is_tracked("orb", best):
+                    should_clear = True
+                elif self.s.track_kind == "pos" and self.s.track_id:
+                    try:
+                        coords = self.s.track_id.split("|", 1)[0].split(",")
+                        tx, ty = float(coords[0]), float(coords[1])
+                        poi_entry = next((p for p in self._pois if p[5] == best), None)
+                        if poi_entry:
+                            pwx, pwy = poi_entry[0], poi_entry[1]
+                            if math.hypot(tx - pwx, ty - pwy) < 1.0:
+                                should_clear = True
+                    except (ValueError, IndexError):
+                        pass
+                if should_clear:
+                    tr.clear()
             self.update()
 
 
 class MinimapOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
-        super().__init__("MAP", settings, geo_key="minimap", parent=parent)
+        super().__init__("Minimap", settings, geo_key="minimap", parent=parent)
         self.s = settings
         self._tracker = None
         
@@ -520,8 +608,8 @@ class MinimapOverlay(OverlayWindow):
         zout = QtWidgets.QPushButton("−"); zout.setObjectName("Icon")
         zin.setStyleSheet("color: #22c55e; font-size: 20px; font-weight: bold; margin-bottom: 2px;") # green
         zout.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: bold; margin-bottom: 2px;") # blue
-        zin.clicked.connect(lambda: self._zoom(1.25))
-        zout.clicked.connect(lambda: self._zoom(0.8))
+        zin.clicked.connect(lambda: self._zoom(0.8))
+        zout.clicked.connect(lambda: self._zoom(1.25))
         for wdg in (zout, zin):
             self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 2, wdg)
 

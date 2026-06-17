@@ -162,6 +162,7 @@ class MapPageMixin:
         grid.setHorizontalSpacing(12)
         for i, (attr, label) in enumerate([
                 ("minimap_enemies", "Enemies"),
+                ("minimap_companions", "Companions"),
                 ("minimap_chests", "Chests / loot"),
                 ("minimap_gatherables", "Gatherables"),
                 ("minimap_obelisks", "Obelisks"),

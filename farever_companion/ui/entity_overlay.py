@@ -399,13 +399,6 @@ class EntityOverlay(OverlayWindow):
         self._sel = (kind, key)
         if kind in ("enemy", "chest"):
             self._open_drops()
-        elif kind == "comp" and self._tracker is not None:
-            e = next((e for e, _ in self._comps
-                      if getattr(e, "addr", None) == key), None)
-            if e is not None:
-                self._tracker.track("unit", e.unit_id)
-        elif kind == "orb" and self._tracker is not None:
-            self._tracker.track("orb", key)
         self._refresh()
 
     def select_by_key(self, kind, key, open_drops=True) -> bool:
@@ -511,8 +504,12 @@ class EntityOverlay(OverlayWindow):
     def _ranked_orbs(self, xyz, profile):
         """Nearest uncollected orbs, plain distance order."""
         pool = [o for o in geo_orbs.load_orbs() if not self.s.is_done(o.orb_id, profile)]
-        return sorted(((o, o.dist(*xyz)) for o in pool),
-                      key=lambda t: t[1])[:self.s.orb_count]
+        cands = []
+        for o in pool:
+            d = o.dist(*xyz)
+            if d <= 500.0:
+                cands.append((o, d))
+        return sorted(cands, key=lambda t: t[1])[:self.s.orb_count]
 
     def _tick(self):
         try:
@@ -531,13 +528,19 @@ class EntityOverlay(OverlayWindow):
 
         # 1) gather every section's list (selection cycles across all of them)
         self._enemies = self.model.nearest_enemies(
-            xyz, self.s.enemy_count, self.s.max_dist, self.s.enemies_only,
+            xyz, self.s.enemy_count, 500.0, self.s.enemies_only,
             hide_types=set(self.s.entity_hidden_types),
             hide_units=set(self.s.entity_hidden_units)) \
             if self.s.show_enemies else []
         self._comps = self.model.nearest_companions(xyz, self.s.companion_count) \
             if self.s.show_companions else []
         self._orbs = self._ranked_orbs(xyz, profile) if self.s.show_orbs else []
+        if self.s.track_kind == "orb" and self.s.track_id:
+            if not any(o.orb_id == self.s.track_id for o, _ in self._orbs):
+                o = geo_orbs.by_id().get(self.s.track_id)
+                if o and not self.s.is_done(o.orb_id, profile):
+                    self._orbs.append((o, o.dist(*xyz)))
+
         # Automatically mark opened chests as done in settings so they persist
         done_list = self.s.get_poi_done(profile)
         chest_changed = False
@@ -553,13 +556,100 @@ class EntityOverlay(OverlayWindow):
                 self.s.save()
 
         raw_chests = self.model.nearest_chests_merged(
-            xyz, self.s.chest_count, self.s.max_dist) if self.s.show_chests else []
+            xyz, self.s.chest_count, 500.0) if self.s.show_chests else []
         self._chests = [c for c in raw_chests if c.chest_id not in done_list]
+
+        # Force show the currently tracked chest/pos in the chests list if it's not already there
+        if self.s.track_kind == "pos" and self.s.track_id:
+            try:
+                import math
+                from ..core.chest_resolver import ChestRow
+                coords_str, _, label = self.s.track_id.partition("|")
+                tx, ty, tz = (float(v) for v in coords_str.split(","))
+                chest_id = label or "chest"
+                matching_c = next((c for c in self.model.chests if c.chest_id == chest_id), None)
+                if not matching_c:
+                    matching_c = next((c for c in self.model.chests if math.hypot(tx - c.x, ty - c.y) < 1.0), None)
+                raw_id = matching_c.chest_id if matching_c else chest_id
+                if raw_id not in done_list:
+                    is_in_list = False
+                    for c in self._chests:
+                        cx, cy = 0.0, 0.0
+                        sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
+                        if sc:
+                            cx, cy = sc.x, sc.y
+                        else:
+                            lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
+                            if lc:
+                                cx, cy = lc.x, lc.y
+                        if math.hypot(tx - cx, ty - cy) < 1.0 or c.chest_id == chest_id:
+                            is_in_list = True
+                            break
+                    if not is_in_list:
+                        dist = math.hypot(tx - xyz[0], ty - xyz[1])
+                        matching_c = next((c for c in self.model.chests if c.chest_id == chest_id), None)
+                        if matching_c:
+                            loot_table = matching_c.loot_table
+                            level = matching_c.level
+                        else:
+                            loot_table = label
+                            level = None
+                        self._chests.append(ChestRow(chest_id, dist, loot_table, level, None, False))
+            except (ValueError, IndexError):
+                pass
 
         # 2) keep selection valid (auto-flip to first available target)
         targets = self._targets()
         if self._sel not in targets:
-            self._sel = targets[0] if targets else None
+            old_sel = self._sel
+            self._sel = None
+            if old_sel and getattr(self.s, "auto_select_next_collectible", True):
+                if old_sel[0] in ("orb", "chest"):
+                    kind = old_sel[0]
+                    next_coll = next((t for t in targets if t[0] == kind), None)
+                    if next_coll:
+                        if next_coll[0] == "orb":
+                            self._sel = next_coll
+                            if self._tracker is not None:
+                                self._tracker.track("orb", next_coll[1])
+                        elif next_coll[0] == "chest":
+                            self._sel = next_coll
+                            c = next((ch for ch in self._chests if ch.chest_id == next_coll[1]), None)
+                            if c and self._tracker is not None:
+                                cx, cy, cz = 0.0, 0.0, 0.0
+                                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
+                                if sc:
+                                    cx, cy, cz = sc.x, sc.y, sc.z
+                                else:
+                                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
+                                    if lc:
+                                        cx, cy, cz = lc.x, lc.y, lc.z
+                                label = names.humanize(c.loot_table) if c.loot_table else names.humanize(c.chest_id)
+                                self._tracker.track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
+                    else:
+                        if self._tracker is not None:
+                            # Only clear if the tracker is currently tracking the old selection
+                            is_tracking_old = False
+                            if old_sel[0] == "orb" and self._tracker.is_tracked("orb", old_sel[1]):
+                                is_tracking_old = True
+                            elif old_sel[0] == "chest" and self.s.track_kind == "pos" and self.s.track_id:
+                                if old_sel[1] in self.s.track_id:
+                                    is_tracking_old = True
+                            if is_tracking_old:
+                                self._tracker.clear()
+                elif old_sel[0] == "enemy":
+                    next_enemy = next((t for t in targets if t[0] == "enemy"), None)
+                    if next_enemy:
+                        self._sel = next_enemy
+                        e_obj = next((e for e, _ in self._enemies if getattr(e, "addr", None) == next_enemy[1]), None)
+                        if e_obj and self._tracker is not None:
+                            self._tracker.track("unit", e_obj.unit_id)
+                    else:
+                        if self._tracker is not None:
+                            if old_sel[0] == "enemy" and self._tracker.is_tracked("unit", old_sel[1]):
+                                self._tracker.clear()
+            if self._sel is None:
+                self._sel = targets[0] if targets else None
 
         # 3) render enemies
         if self.s.show_enemies:
@@ -610,7 +700,8 @@ class EntityOverlay(OverlayWindow):
                     sub="  ·  ".join(sub_bits),
                     value=f"{d:.0f}m", bold=missing or sel,
                     highlight=missing or tracked or sel,
-                    cb=(lambda uid=e.unit_id: self._track("unit", uid))))
+                    cb=(lambda k=("comp", addr), uid=e.unit_id:
+                        (self._select(*k), self._track("unit", uid)))))
             self.comp_box.fill(specs, isz)
             if not getattr(self.model, "units_ok", True):
                 tag = "READ FAILED · RETRYING"
@@ -638,7 +729,8 @@ class EntityOverlay(OverlayWindow):
                     sub="◈ TRACKING" if tracked else geo_orbs.orb_region_name(o),
                     value=f"{d:.0f}m", bold=tracked or sel,
                     highlight=tracked or sel,
-                    cb=(lambda oid=o.orb_id: self._track("orb", oid)),
+                    cb=(lambda oid=o.orb_id:
+                        (self._select("orb", oid), self._track("orb", oid))),
                     marker="orb"))
             self.orb_box.fill(specs, isz)
             self.orb_box.header.set_tag(
