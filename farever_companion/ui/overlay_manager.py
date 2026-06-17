@@ -111,9 +111,11 @@ class OverlayManager(QtCore.QObject):
 
     def sync_cards(self, key: str) -> None:
         ov = self.overlays.get(key)
-        visible = bool(ov is not None and ov.isVisible())
+        visible = bool(ov is not None and (ov.isVisible() or getattr(ov, "_auto_hidden", False) or getattr(ov, "_alt_tabbed", False)))
         for card in self.cards.get(key, []):
             card.set_checked_silent(visible)
+
+
 
     def get(self, key: str):
         return self.overlays.get(key)
@@ -222,7 +224,61 @@ class OverlayManager(QtCore.QObject):
 
     def _combat_tick(self) -> None:
         m = self.model
-        if m is None or not self.s.combat_click_through:
+        if m is None:
+            if self._combat_lock_active:
+                self._restore_click_through()
+            return
+
+        # Alt-tab focus check
+        import ctypes
+        import os
+        game_focused = True
+        if m.proc is not None:
+            try:
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                if hwnd:
+                    pid = ctypes.c_ulong()
+                    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    game_focused = pid.value in (m.proc.pid, os.getpid())
+                else:
+                    game_focused = False
+            except Exception:
+                game_focused = True
+
+        # Auto-hide overlays when game menus are open (only check if game is active)
+        menu_open = False
+        if getattr(self.s, "auto_hide_menus", False) and game_focused:
+            try:
+                menu_open = bool(m.is_game_menu_open())
+            except Exception:
+                menu_open = False
+
+        for key, ov in list(self.overlays.items()):
+            if ov is not None:
+                # Handle Alt-Tab hiding first
+                is_alt_tabbed = getattr(ov, "_alt_tabbed", False)
+                if not game_focused:
+                    if not is_alt_tabbed and ov.isVisible():
+                        ov.hide()
+                        ov._alt_tabbed = True
+                    continue
+                else:
+                    if is_alt_tabbed:
+                        ov._alt_tabbed = False
+                        if not getattr(ov, "_auto_hidden", False):
+                            ov.show()
+
+                # Handle menu auto-hiding
+                is_hidden_by_menu = getattr(ov, "_auto_hidden", False)
+                if menu_open and not is_hidden_by_menu and ov.isVisible():
+                    ov.hide()
+                    ov._auto_hidden = True
+                elif not menu_open and is_hidden_by_menu:
+                    ov.show()
+                    ov._auto_hidden = False
+
+
+        if not self.s.combat_click_through:
             if self._combat_lock_active:
                 self._restore_click_through()
             return
@@ -244,6 +300,7 @@ class OverlayManager(QtCore.QObject):
         else:
             if self._combat_lock_active:
                 self._restore_click_through()
+
 
     def _restore_click_through(self) -> None:
         for key in HUD_OVERLAYS:

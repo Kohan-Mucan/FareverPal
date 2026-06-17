@@ -175,8 +175,14 @@ class _Canvas(QtWidgets.QWidget):
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         w, h = self.width(), self.height()
         cx, cy = w / 2, h / 2
-        rad = min(w, h) / 2 - 4
         square = self.s.minimap_shape == "Square"
+        if square:
+            rad_x = w / 2 - 4
+            rad_y = h / 2 - 4
+        else:
+            rad = min(w, h) / 2 - 4
+            rad_x = rad
+            rad_y = rad
         # backdrop + clip
         p.setBrush(QtGui.QColor(theme.PANEL))
         p.setPen(QtGui.QColor(theme.BORDER))
@@ -184,12 +190,12 @@ class _Canvas(QtWidgets.QWidget):
         # below is clipped correctly - a QRegion clip is not)
         clip = QtGui.QPainterPath()
         if square:
-            box = QtCore.QRectF(cx - rad, cy - rad, rad * 2, rad * 2)
+            box = QtCore.QRectF(4, 4, w - 8, h - 8)
             p.drawRect(box)
             clip.addRect(box)
         else:
-            p.drawEllipse(QtCore.QPointF(cx, cy), rad, rad)
-            clip.addEllipse(QtCore.QPointF(cx, cy), rad, rad)
+            p.drawEllipse(QtCore.QPointF(cx, cy), rad_x, rad_y)
+            clip.addEllipse(QtCore.QPointF(cx, cy), rad_x, rad_y)
         p.setClipPath(clip)
         scale = self._scale()
         phi = self._phi()
@@ -201,9 +207,9 @@ class _Canvas(QtWidgets.QWidget):
         p.setBrush(QtCore.Qt.NoBrush)
         for f in (0.5, 1.0):
             if square:
-                p.drawRect(QtCore.QRectF(cx - rad * f, cy - rad * f, rad * 2 * f, rad * 2 * f))
+                p.drawRect(QtCore.QRectF(cx - rad_x * f, cy - rad_y * f, rad_x * 2 * f, rad_y * 2 * f))
             else:
-                p.drawEllipse(QtCore.QPointF(cx, cy), rad * f, rad * f)
+                p.drawEllipse(QtCore.QPointF(cx, cy), rad_x * f, rad_y * f)
         # POIs
         track_pos = self._track_pos()
         profile = self.model.player_profile()
@@ -212,19 +218,21 @@ class _Canvas(QtWidgets.QWidget):
             dx, dy = self._rel(wx, wy, scale, phi)
             edge = False
             if square:
-                m = max(abs(dx), abs(dy))
-                if m > rad - 4:
-                    if m == 0:
-                        continue
-                    k = (rad - 4) / m
+                limit_x = rad_x - 4
+                limit_y = rad_y - 4
+                kx = limit_x / abs(dx) if dx != 0 else float('inf')
+                ky = limit_y / abs(dy) if dy != 0 else float('inf')
+                k = min(kx, ky)
+                if k < 1.0:
                     dx *= k; dy *= k
                     edge = True
             else:
                 dist = math.hypot(dx, dy)
-                if dist > rad - 4:
+                limit_r = rad_x - 4
+                if dist > limit_r:
                     if dist == 0:
                         continue
-                    k = (rad - 4) / dist
+                    k = limit_r / dist
                     dx *= k; dy *= k
                     edge = True
 
@@ -260,7 +268,7 @@ class _Canvas(QtWidgets.QWidget):
                 p.drawEllipse(QtCore.QPointF(sx, sy), 3 if edge else 4, 3 if edge else 4)
         # compass + player (drawn unclipped so edge letters aren't cut)
         p.setClipping(False)
-        self._draw_compass(p, cx, cy, rad, phi)
+        self._draw_compass(p, cx, cy, min(w, h) / 2 - 4, phi)
         # player marker + facing arrow (uses the live Highlight color or arrow.png)
         accent = QtGui.QColor(self.s.hud_accent)
         # north-up frame: world heading's y-component inverts, so -heading
@@ -378,19 +386,36 @@ class _Canvas(QtWidgets.QWidget):
         """The POI under a click, hit-testing the *drawn* position - same edge
         clamp as paintEvent, so far markers are clickable on the ring. Among
         everything within the hit radius, kind priority breaks the overlap."""
-        cx, cy = self.width() / 2, self.height() / 2
-        rad = min(self.width(), self.height()) / 2 - 4
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
         square = self.s.minimap_shape == "Square"
+        if square:
+            rad_x = w / 2 - 4
+            rad_y = h / 2 - 4
+        else:
+            rad = min(w, h) / 2 - 4
+            rad_x = rad
+            rad_y = rad
         scale = self._scale()
         phi = self._phi()
         best, best_rank = None, None
         for poi in self._pois:
             wx, wy = poi[0], poi[1]
             dx, dy = self._rel(wx, wy, scale, phi)
-            m = max(abs(dx), abs(dy)) if square else math.hypot(dx, dy)
-            if m > rad - 4 and m > 0:
-                k = (rad - 4) / m
-                dx *= k; dy *= k
+            if square:
+                limit_x = rad_x - 4
+                limit_y = rad_y - 4
+                kx = limit_x / abs(dx) if dx != 0 else float('inf')
+                ky = limit_y / abs(dy) if dy != 0 else float('inf')
+                k = min(kx, ky)
+                if k < 1.0:
+                    dx *= k; dy *= k
+            else:
+                dist = math.hypot(dx, dy)
+                limit_r = rad_x - 4
+                if dist > limit_r and dist > 0:
+                    k = limit_r / dist
+                    dx *= k; dy *= k
             d = math.hypot(cx + dx - pos.x(), cy - dy - pos.y())
             if d >= 16.0:
                 continue
@@ -452,6 +477,14 @@ class _Canvas(QtWidgets.QWidget):
             if hasattr(win, "persist_geometry"):
                 win.persist_geometry()
 
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == QtCore.Qt.LeftButton:
+            win = self.window()
+            if hasattr(win, "set_bare"):
+                win.set_bare(not win.s.minimap_bare)
+
+
+
     def _mark_done(self, e):
         # mark the nearest plotted POI done (hit-test in the same rotated space)
         cx, cy = self.width() / 2, self.height() / 2
@@ -479,17 +512,24 @@ class MinimapOverlay(OverlayWindow):
         super().__init__("MAP", settings, geo_key="minimap", parent=parent)
         self.s = settings
         self._tracker = None
+        
+        # Allow double clicking on the title bar to toggle bare mode
+        self.titlebar.mouseDoubleClickEvent = lambda e: self.set_bare(not self.s.minimap_bare) if e.button() == QtCore.Qt.LeftButton else None
+
         zin = QtWidgets.QPushButton("+"); zin.setObjectName("Icon")
         zout = QtWidgets.QPushButton("−"); zout.setObjectName("Icon")
+        zin.setStyleSheet("color: #22c55e; font-size: 20px; font-weight: bold; margin-bottom: 2px;") # green
+        zout.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: bold; margin-bottom: 2px;") # blue
         zin.clicked.connect(lambda: self._zoom(1.25))
         zout.clicked.connect(lambda: self._zoom(0.8))
         for wdg in (zout, zin):
-            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 1, wdg)
+            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 2, wdg)
 
         self.canvas = _Canvas(model, settings)
         self.content.addWidget(self.canvas, 1)
-        self._hint = QtWidgets.QLabel("click a marker = compass waypoint · right-click = mark done")
+        self._hint = QtWidgets.QLabel("Double click to hide/show boarder")
         self._hint.setObjectName("Muted")
+        self._hint.setAlignment(QtCore.Qt.AlignCenter)
         self.content.addWidget(self._hint)
 
         sz = settings.minimap_size
@@ -508,6 +548,8 @@ class MinimapOverlay(OverlayWindow):
     def set_bare(self, on: bool) -> None:
         """Chromeless: hide the titlebar, hint, and card panel, just the map.
         Drag the map body to move it (when unlocked)."""
+        self.s.minimap_bare = on
+        self.s.save()
         self.titlebar.setVisible(not on)
         self._hint.setVisible(not on)
         if on:
@@ -516,6 +558,14 @@ class MinimapOverlay(OverlayWindow):
         else:
             self._frame.setStyleSheet("")     # revert to the QSS #Card look
             self.content.setContentsMargins(8, 6, 8, 8)
+        
+        # Sync the checkbox in the main UI
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "_bare_toggle"):
+                p._bare_toggle.set_checked_silent(on)
+                break
+            p = p.parent()
         self.canvas.update()
 
     def _zoom(self, f):

@@ -30,11 +30,16 @@ class _TitleBar(QtWidgets.QFrame):
         lay.addWidget(self.title)
         lay.addStretch(1)
         self.extra = lay   # callers can insert controls before the close btn
+        min_btn = QtWidgets.QPushButton("🗕")
+        min_btn.setObjectName("Icon")
+        min_btn.clicked.connect(window.toggle_minimize)
+        lay.addWidget(min_btn)
         close = QtWidgets.QPushButton("✕")
         close.setObjectName("Icon")
         close.clicked.connect(window.close)
         lay.addWidget(close)
         self._drag = None
+
 
     def mousePressEvent(self, e):
         if getattr(self._win, "_locked", False):
@@ -84,13 +89,35 @@ class OverlayWindow(QtWidgets.QWidget):
         inner.setSpacing(0)
         self.titlebar = _TitleBar(title, self)
         inner.addWidget(self.titlebar)
-        self.content = QtWidgets.QVBoxLayout()
+        self.content_container = QtWidgets.QWidget()
+        self.content_container.setObjectName("ContentContainer")
+        self.content_container.setStyleSheet("background: transparent;")
+        inner.addWidget(self.content_container)
+        self.content = QtWidgets.QVBoxLayout(self.content_container)
         self.content.setContentsMargins(8, 6, 8, 8)
         self.content.setSpacing(6)
-        inner.addLayout(self.content)
+
 
         self._apply_style()        # tint to the saved accent (no-op if default)
         self._restore_geometry()
+
+    def toggle_minimize(self) -> None:
+        self.set_minimized(not getattr(self, "_is_minimized", False))
+
+    def set_minimized(self, on: bool) -> None:
+        self._is_minimized = on
+        self.content_container.setVisible(not on)
+        if on:
+            self._normal_height = self.height()
+            self.setFixedHeight(36)
+        else:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            h = getattr(self, "_normal_height", 0)
+            if h > 36:
+                self.resize(self.width(), h)
+            else:
+                self.adjustSize()
 
     # --- click-through (Win32) ------------------------------------------
     def set_click_through(self, on: bool) -> None:

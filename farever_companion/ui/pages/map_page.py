@@ -1,18 +1,133 @@
-from __future__ import annotations
-
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 from .. import components as C
 from ...data import loot
 from ...data import icons
 from ...geo import orbs as geo_orbs
 
+class MinimapCard(QtWidgets.QFrame):
+    toggled = QtCore.Signal(bool)
+
+    def __init__(self, icon_name: str, title: str, desc: str, bare_checked: bool, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+        self._active = False
+        self._icon_name = icon_name
+
+        from .. import theme
+        from ...data import icons
+
+        main_lay = QtWidgets.QHBoxLayout(self)
+        main_lay.setContentsMargins(16, 14, 16, 14)
+        main_lay.setSpacing(12)
+
+        # Left Column (labels)
+        left_v = QtWidgets.QVBoxLayout()
+        left_v.setSpacing(8)
+
+        # Line 1: Icon and title label side-by-side
+        row1 = QtWidgets.QHBoxLayout()
+        row1.setSpacing(8)
+        self._icon = QtWidgets.QLabel()
+        self._icon.setFixedSize(28, 28)
+        self._icon.setPixmap(icons.ui_icon(icon_name, theme.ACCENT, 28))
+        
+        title_lbl = QtWidgets.QLabel(title.upper())
+        title_lbl.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:16px;background:transparent;")
+        
+        row1.addWidget(self._icon)
+        row1.addWidget(title_lbl)
+        row1.addStretch(1)
+        left_v.addLayout(row1)
+
+        # Line 2: Description text
+        desc_lbl = QtWidgets.QLabel(desc)
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:12px;background:transparent;margin-left:36px;")
+        left_v.addWidget(desc_lbl)
+
+        # Right Column (toggles aligned on the right)
+        right_v = QtWidgets.QVBoxLayout()
+        right_v.setSpacing(8)
+
+        # Align main toggle with Line 1
+        self._toggle = C.ToggleSwitch()
+        self._toggle.toggled.connect(self._on_toggle)
+        right_v.addWidget(self._toggle, 0, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        # Align Boardless label and toggle on right side next to each other
+        bare_row = QtWidgets.QHBoxLayout()
+        bare_row.setSpacing(8)
+        bare_row.setContentsMargins(0, 0, 0, 0)
+
+        boardless_lbl = QtWidgets.QLabel("Boardless")
+        boardless_lbl.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:14px;background:transparent;")
+        
+        self._bare_toggle = C.ToggleSwitch(bare_checked)
+        
+        bare_row.addWidget(boardless_lbl)
+        bare_row.addWidget(self._bare_toggle)
+        
+        right_v.addLayout(bare_row)
+        right_v.addStretch(1)
+
+        main_lay.addLayout(left_v, 1)
+        main_lay.addLayout(right_v, 0)
+
+    def _on_toggle(self, on: bool) -> None:
+        self._active = on
+        self.update()
+        self.toggled.emit(on)
+
+    def setChecked(self, on: bool) -> None:
+        self._toggle.setChecked(on)
+
+    def set_checked_silent(self, on: bool) -> None:
+        self._toggle.set_checked_silent(on)
+        self._active = on
+        self.update()
+
+    def isChecked(self) -> bool:
+        return self._toggle.isChecked()
+
+    def restyle(self) -> None:
+        from .. import theme
+        from ...data import icons
+        self._icon.setPixmap(icons.ui_icon(self._icon_name, theme.ACCENT, 28))
+        self.update()
+
+    def setEnabled(self, on: bool) -> None:
+        super().setEnabled(on)
+        self._toggle.setEnabled(on)
+        if on:
+            self.setGraphicsEffect(None)
+        else:
+            eff = QtWidgets.QGraphicsOpacityEffect(self)
+            eff.setOpacity(0.4)
+            self.setGraphicsEffect(eff)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._active and self.isEnabled():
+            from .. import theme
+            p = QtGui.QPainter(self)
+            w, h = self.width(), self.height()
+            p.setPen(QtGui.QPen(QtGui.QColor(theme.ACCENT), 1))
+            p.setBrush(QtCore.Qt.NoBrush)
+            p.drawRect(0, 0, w - 1, h - 1)
+            p.fillRect(0, 0, 3, h, QtGui.QColor(theme.ACCENT))
+            p.end()
+
 class MapPageMixin:
     def _page_map(self):
         page, v = self._page_container()
-        card = C.OverlayCard("map", "Open Minimap",
-                             "Top-down POI radar centred on the player.")
+        card = MinimapCard("map", "Open Minimap",
+                           "Top-down POI radar centred on the player.",
+                           self.s.minimap_bare)
         card.toggled.connect(lambda on: self._request_overlay("map", on))
         self._register_card("map", card)
+        self._bare_toggle = card._bare_toggle
+        self._bare_toggle.toggled.connect(self._set_minimap_bare)
+
         v.addWidget(card)
 
         v.addWidget(C.SectionHeader("Shape"))
@@ -25,9 +140,6 @@ class MapPageMixin:
         tex = C.LabeledToggle("World map texture", self.s.minimap_texture)
         tex.toggled.connect(self._set_minimap_texture)
         v.addWidget(tex)
-        bare = C.LabeledToggle("Bare map (no panel/titlebar)", self.s.minimap_bare)
-        bare.toggled.connect(self._set_minimap_bare)
-        v.addWidget(bare)
         ico = C.LabeledToggle("POI icons (else dots)", self.s.minimap_icons)
         ico.toggled.connect(lambda on: (self._set("minimap_icons", on), self._touch_minimap()))
         v.addWidget(ico)

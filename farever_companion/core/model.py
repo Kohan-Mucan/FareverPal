@@ -503,3 +503,31 @@ class LiveModel:
         self.player_max_hp = 0.0
         self.deaths = 0
         self._was_alive = False
+
+    def is_game_menu_open(self) -> bool:
+        if self.player_addr is None:
+            return True
+        try:
+            ui_addr = self.locator.app.ui()
+            if not ui_addr:
+                return False
+            arr_ptr = self.hl.ptr(ui_addr + 0x90)
+            if not arr_ptr:
+                return False
+            arr_len = self.hl.i32(arr_ptr + 8)
+            native_arr = self.hl.ptr(arr_ptr + 0x10)
+            if not native_arr or arr_len <= 0:
+                return False
+            for i in range(arr_len):
+                item_ptr = self.hl.ptr(native_arr + 0x18 + i * 8)
+                if item_ptr:
+                    cls_name = self.hl.class_of(item_ptr)
+                    if cls_name == "ui.win.EscapeMenu":
+                        continue
+                    if self.hl.is_a(item_ptr, "ui.win.BaseWindow"):
+                        return True
+        except Exception:
+            pass
+        return False
+
+

@@ -34,16 +34,20 @@ class OverlaysPageMixin:
             cards.addWidget(card, i // 3, i % 3)
         v.addLayout(cards)
         v.addSpacing(16)
-        v.addWidget(C.SectionHeader("Lock the UI from clicks"))
+        v.addWidget(C.SectionHeader("Lock / Auto-Hide UI"))
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(12)
         self.lock_toggle = C.LabeledToggle("Lock overlays (click-through)", self.s.lock_overlays)
         self.lock_toggle.toggled.connect(self._set_lock)
         self.combat_toggle = C.LabeledToggle("Auto lock while in combat", self.s.combat_click_through)
         self.combat_toggle.toggled.connect(self._set_combat_click_through)
+        self.hide_toggle = C.LabeledToggle("Auto-hide overlays when in menus", self.s.auto_hide_menus)
+        self.hide_toggle.toggled.connect(self._set_auto_hide_menus)
         row.addWidget(self.lock_toggle)
         row.addWidget(self.combat_toggle)
+        row.addWidget(self.hide_toggle)
         v.addLayout(row)
+
 
         v.addWidget(C.SectionHeader("Appearance"))
         op = C.SliderRow("Overlay opacity", 30, 100, int(self.s.opacity * 100),
@@ -56,9 +60,18 @@ class OverlaysPageMixin:
         v.addStretch(1)
         return page
 
+    def _set_auto_hide_menus(self, on: bool) -> None:
+        self._set("auto_hide_menus", on)
+        if not on:
+            for key, ov in list(self.overlay_mgr.overlays.items()):
+                if ov is not None and getattr(ov, "_auto_hidden", False):
+                    ov.show()
+                    ov._auto_hidden = False
+
     def _set_combat_click_through(self, on: bool) -> None:
         self._set("combat_click_through", on)
         self.overlay_mgr.set_combat_click_through(on)
+
 
     def _set_entity_scale(self, v):
         sc = v / 100.0

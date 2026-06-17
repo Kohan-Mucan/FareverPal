@@ -262,7 +262,7 @@ class EntityOverlay(OverlayWindow):
     request_config = QtCore.Signal()
 
     def __init__(self, model, settings, parent=None):
-        super().__init__("FAREVER · ENTITY", settings, geo_key="entity", parent=parent)
+        super().__init__("Entity", settings, geo_key="entity", parent=parent)
         self.model = model
         self.s = settings
         self._enemies: list = []          # [(entity, dist)]

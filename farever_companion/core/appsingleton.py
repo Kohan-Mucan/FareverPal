@@ -33,6 +33,8 @@ CLS_HERO = "ent.Hero"
 CLS_PLAYER = "st.Player"
 CLS_LAYER = "st.GameLayer"
 CLS_CAMERA = "client.GameCamera"   # GameApp.camera/gameCamera; orbit yaw follows the mouse
+CLS_UI = "ui.GameUI"
+
 
 # How far into an object to look for the pointer fields we resolve by class.
 _FIELD_SCAN_BYTES = 0x400
@@ -50,6 +52,8 @@ class GameAppLocator:
         self.off_me: int | None = None
         self.off_layer: int | None = None
         self.off_camera: int | None = None     # GameApp.camera (client.BaseCamera)
+        self.off_ui: int | None = None
+
 
     # --- low-level safe reads --------------------------------------------
     def _u64(self, addr: int) -> int | None:
@@ -162,6 +166,8 @@ class GameAppLocator:
             # GameApp holds both `camera` (active) and `gameCamera`; in normal play
             # both point at the GameCamera, so the first (lower-offset) match wins.
             wanted[CLS_CAMERA] = "camera"
+        if self.off_ui is None:
+            wanted[CLS_UI] = "ui"
         if not wanted:
             return
         found = self._scan_for_class(singleton, wanted)
@@ -169,6 +175,8 @@ class GameAppLocator:
         self.off_me = found.get("me", self.off_me)
         self.off_layer = found.get("layer", self.off_layer)
         self.off_camera = found.get("camera", self.off_camera)
+        self.off_ui = found.get("ui", self.off_ui)
+
 
     def _try_chain(self, gameapp_obj: int) -> int | None:
         """Full chain for one candidate type_obj -> validated GameApp singleton,
@@ -282,3 +290,25 @@ class GameAppLocator:
         if self._addr is None or self.off_camera is None:
             return None
         return self.hl.ptr(self._addr + self.off_camera)
+
+    def ui(self) -> int | None:
+        if not self.reachable:
+            if self.locate() is None:
+                return None
+        return self.live_ui()
+
+    def live_ui(self) -> int | None:
+        if not self.reachable:
+            return None
+        singleton = self._u64(self._static_obj + self.off_inst)
+        if not is_ptr(singleton) or self.hl.class_of(singleton) != CLS_GAMEAPP:
+            self._addr = None
+            return None
+        self._addr = singleton
+        if self.off_ui is None:
+            self._resolve_fields(singleton)
+        if self.off_ui is None:
+            return None
+        ui_ptr = self._u64(singleton + self.off_ui)
+        return ui_ptr if is_ptr(ui_ptr) else None
+
