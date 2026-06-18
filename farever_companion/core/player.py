@@ -274,6 +274,51 @@ class PlayerLocator:
                 except Exception:
                     continue
 
+        # Prepared for later use: character-specific filenames including the class
+        # (e.g. Kohan_Rogue_S8c4ba8) to differentiate characters with the same name.
+        # Uncomment below if you wish to activate class-specific profiles:
+        #
+        # char_class = self.detect_class(hero)
+        # if uid:
+        #     if char_class:
+        #         return f"{name}_{char_class}_{uid}"
+        #     return f"{name}_{uid}"
+        # if char_class:
+        #     return f"{name}_{char_class}"
+        # return name
+
         if uid:
             return f"{name}_{uid}"
         return name
+
+    def detect_class(self, hero: int) -> str | None:
+        """Scan the hero's equipped skills to auto-detect their class (Warrior, Rogue, Mage, Priest)."""
+        hero_type = self.hl.u64(hero)
+        off = self.hl.field_offset(hero_type, "skillSlots")
+        if off is None:
+            return None
+        slots_ptr = self.hl.ptr(hero + off)
+        if not slots_ptr:
+            return None
+        try:
+            length = self.hl.i32(slots_ptr + 0x08)
+            native_arr = self.hl.ptr(slots_ptr + 0x10)
+            if not native_arr:
+                return None
+            classes = ("Warrior", "Rogue", "Mage", "Priest")
+            for i in range(length):
+                sk = self.hl.ptr(native_arr + 0x18 + i * 8)
+                if sk and self.hl.class_of(sk) == "String":
+                    val = self.hl.hl_string(sk)
+                    if val:
+                        for c in classes:
+                            if val.startswith(f"{c}_"):
+                                return c
+        except Exception:
+            pass
+        return None
+
+    def player_class(self) -> str | None:
+        """Auto-detected player class from skill slots."""
+        hero = self.live_address()
+        return self.detect_class(hero) if hero else None

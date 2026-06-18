@@ -381,6 +381,13 @@ class LiveModel:
             pass
         return self._last_profile
 
+    def player_class(self) -> str | None:
+        """The auto-detected player class (e.g. Rogue), parsed from equipped skills."""
+        try:
+            return self.locator.player_class()
+        except Exception:
+            return None
+
     def closest_loot(self, xyz: XYZ, default_level: int) -> Nearest | None:
         cands: list[tuple[float, Nearest]] = []
         for e, d in self.nearest_enemies(xyz, 6, 0.0, enemies_only=True):
