@@ -627,27 +627,27 @@ class EntityOverlay(OverlayWindow):
                                 label = names.humanize(c.loot_table) if c.loot_table else names.humanize(c.chest_id)
                                 self._tracker.track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
                     else:
+                        # Last item in the group is gone — always clear the compass
                         if self._tracker is not None:
-                            # Only clear if the tracker is currently tracking the old selection
-                            is_tracking_old = False
-                            if old_sel[0] == "orb" and self._tracker.is_tracked("orb", old_sel[1]):
-                                is_tracking_old = True
-                            elif old_sel[0] == "chest" and self.s.track_kind == "pos" and self.s.track_id:
-                                if old_sel[1] in self.s.track_id:
-                                    is_tracking_old = True
-                            if is_tracking_old:
-                                self._tracker.clear()
-                elif old_sel[0] == "enemy":
-                    next_enemy = next((t for t in targets if t[0] == "enemy"), None)
-                    if next_enemy:
-                        self._sel = next_enemy
-                        e_obj = next((e for e, _ in self._enemies if getattr(e, "addr", None) == next_enemy[1]), None)
-                        if e_obj and self._tracker is not None:
-                            self._tracker.track("unit", e_obj.unit_id)
+                            self._tracker.clear()
+                elif old_sel[0] in ("enemy", "comp"):
+                    next_same = next((t for t in targets if t[0] == old_sel[0]), None)
+                    if next_same:
+                        self._sel = next_same
+                        if old_sel[0] == "comp":
+                            e_obj = next((e for e, _ in self._comps
+                                          if getattr(e, "addr", None) == next_same[1]), None)
+                            if e_obj and self._tracker is not None:
+                                self._tracker.track("unit", e_obj.unit_id)
+                        else:
+                            e_obj = next((e for e, _ in self._enemies
+                                          if getattr(e, "addr", None) == next_same[1]), None)
+                            if e_obj and self._tracker is not None:
+                                self._tracker.track("unit", e_obj.unit_id)
                     else:
+                        # Last enemy/companion in the group is gone — always clear
                         if self._tracker is not None:
-                            if old_sel[0] == "enemy" and self._tracker.is_tracked("unit", old_sel[1]):
-                                self._tracker.clear()
+                            self._tracker.clear()
             if self._sel is None:
                 self._sel = targets[0] if targets else None
 
