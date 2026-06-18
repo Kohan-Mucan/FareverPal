@@ -23,6 +23,7 @@ from .constants import (   # offsets live in one place; re-exported for callers
     OFF_GAMELAYER, OFF_UNITS_ARR, OFF_ELEMS_ARR, OFF_OWNER, OFF_POS,
     OFF_UNITID, OFF_ELEMID, OFF_ELEMSTATE, UNIT_BLOCK,
     OFF_CONFIG_DIFFICULTY, OFF_CONFIG_MAPID, OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
+    OFF_MAIN_ACTIVITY,
 )
 
 _ELEM_KINDS = {
@@ -156,6 +157,25 @@ class Scene:
                 self._cfg_off = off
                 return d
         return None
+
+    def in_dungeon(self, pbase: int | None) -> bool:
+        """True when the player is inside a dungeon instance.
+
+        Reads GameLayer.mainActivity (fixed offset 0xd8) and checks whether its
+        class descends from st.activity.Dungeon.  This is the same signal the
+        game itself uses: the field is set when the layer is a dungeon instance
+        and cleared (or a different type) in the open world / town zones.  Far
+        more reliable than the old POI-mapId scan which missed dungeons whose
+        mapId doesn't contain 'POI'.
+        """
+        gl = self.gamelayer(pbase)
+        if gl is None:
+            return False
+        act = self.hl.ptr(gl + OFF_MAIN_ACTIVITY)
+        if act is None:
+            return False
+        cls = self.hl.class_of(act)
+        return cls == "st.activity.Dungeon"
 
     def _difficulty_at(self, cfg: int | None) -> int | None:
         """Read difficulty from a candidate config struct, validating it's the

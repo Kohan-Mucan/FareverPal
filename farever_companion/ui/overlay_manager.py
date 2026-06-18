@@ -253,9 +253,23 @@ class OverlayManager(QtCore.QObject):
             except Exception:
                 menu_open = False
 
-        for key, ov in list(self.overlays.items()):
+        # Check if in a dungeon (uses GameLayer.mainActivity class name — reliable
+        # for all dungeon types, no element scanning or POI string matching needed)
+        in_dungeon = False
+        try:
+            in_dungeon = m.is_in_dungeon()
+        except Exception:
+            pass
+
+
+        # Build list of overlays to check (including the compass needle if active)
+        items = list(self.overlays.items())
+        if self.tracker._needle is not None:
+            items.append(("compass", self.tracker._needle))
+
+        for key, ov in items:
             if ov is not None:
-                # Handle Alt-Tab hiding first
+                # 1. Alt-Tab handling
                 is_alt_tabbed = getattr(ov, "_alt_tabbed", False)
                 if not game_focused:
                     if not is_alt_tabbed and ov.isVisible():
@@ -265,17 +279,43 @@ class OverlayManager(QtCore.QObject):
                 else:
                     if is_alt_tabbed:
                         ov._alt_tabbed = False
-                        if not getattr(ov, "_auto_hidden", False):
+                        # Only show if not hidden by menu or dungeon
+                        if not getattr(ov, "_auto_hidden", False) and not getattr(ov, "_dungeon_hidden", False):
                             ov.show()
 
-                # Handle menu auto-hiding
+                # 2. Menu Auto-hide handling
                 is_hidden_by_menu = getattr(ov, "_auto_hidden", False)
-                if menu_open and not is_hidden_by_menu and ov.isVisible():
-                    ov.hide()
-                    ov._auto_hidden = True
-                elif not menu_open and is_hidden_by_menu:
-                    ov.show()
-                    ov._auto_hidden = False
+                if menu_open:
+                    if not is_hidden_by_menu and ov.isVisible():
+                        ov.hide()
+                        ov._auto_hidden = True
+                        self.log.emit(f"Hiding {key} (menu open)")
+                else:
+                    if is_hidden_by_menu:
+                        ov._auto_hidden = False
+                        self.log.emit(f"Restoring {key} (menu closed)")
+                        # Only show if not hidden by dungeon
+                        if not getattr(ov, "_dungeon_hidden", False):
+                            ov.show()
+
+                # 3. Dungeon Auto-hide handling
+                # Auto hide minimap ("map"), entity ("entity"), and compass ("compass") in dungeon.
+                # Do not hide dps meter ("dps") or speedrun meter ("speedrun").
+                hide_in_dungeon = in_dungeon and key in ("map", "entity", "compass")
+                is_hidden_by_dungeon = getattr(ov, "_dungeon_hidden", False)
+                
+                if hide_in_dungeon:
+                    if not is_hidden_by_dungeon and ov.isVisible():
+                        ov.hide()
+                        ov._dungeon_hidden = True
+                        self.log.emit(f"Hiding {key} (in dungeon)")
+                else:
+                    if is_hidden_by_dungeon:
+                        ov._dungeon_hidden = False
+                        self.log.emit(f"Restoring {key} (left dungeon)")
+                        # Only show if not hidden by menu
+                        if not getattr(ov, "_auto_hidden", False):
+                            ov.show()
 
 
         if not self.s.combat_click_through:

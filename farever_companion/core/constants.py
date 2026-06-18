@@ -58,6 +58,9 @@ UNIT_BLOCK = 0x258       # batched header read: type(0) .. unit-id(0x250)
 # st.GameLayer arrays
 OFF_UNITS_ARR = 0x128    # -> ArrayObj of ent.Hero / ent.Foe subclasses
 OFF_ELEMS_ARR = 0x120    # -> ArrayObj of interactibles (no units)
+OFF_MAIN_ACTIVITY = 0xd8 # -> st.Activity subclass (st.activity.Dungeon when in a dungeon,
+                          #    null or different class in the open world / town)
+
 
 # st.GameLayer.config {activityID:String, difficulty:Null<Int>, mapId:String}.
 # The config pointer's offset on GameLayer drifts between builds (seen at 0x470

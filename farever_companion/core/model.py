@@ -343,6 +343,19 @@ class LiveModel:
         except ProcError:
             return None
 
+    def is_in_dungeon(self) -> bool:
+        """True when the player is inside a dungeon instance.
+
+        Uses GameLayer.mainActivity class name (st.activity.Dungeon) — the game's
+        own activity system — so it works for every dungeon type without relying
+        on boss presence, InstanceOrb elements, or mapId strings.
+        """
+        try:
+            return self.scene.in_dungeon(self.player_addr)
+        except ProcError:
+            return False
+
+
     def detected_mode(self) -> str | None:
         diff = self.dungeon_difficulty()
         if diff is not None:

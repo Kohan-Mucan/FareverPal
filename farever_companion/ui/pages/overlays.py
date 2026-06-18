@@ -67,6 +67,10 @@ class OverlaysPageMixin:
                 if ov is not None and getattr(ov, "_auto_hidden", False):
                     ov.show()
                     ov._auto_hidden = False
+            needle = self.overlay_mgr.tracker._needle
+            if needle is not None and getattr(needle, "_auto_hidden", False):
+                needle.show()
+                needle._auto_hidden = False
 
     def _set_combat_click_through(self, on: bool) -> None:
         self._set("combat_click_through", on)
