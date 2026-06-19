@@ -160,17 +160,24 @@ class MapPageMixin:
         v.addWidget(C.SectionHeader("Layers"))
         grid = QtWidgets.QGridLayout()
         grid.setHorizontalSpacing(12)
-        for i, (attr, label) in enumerate([
+        layer_items = [
                 ("minimap_enemies", "Enemies"),
                 ("minimap_companions", "Companions"),
                 ("minimap_chests", "Chests / loot"),
                 ("minimap_gatherables", "Gatherables"),
                 ("minimap_obelisks", "Obelisks"),
                 ("minimap_orbs", "Secret orbs"),
-                ("minimap_dungeons", "Dungeons / teleports")]):
+                ("minimap_dungeons", "Dungeons / teleports")]
+        for i, (attr, label) in enumerate(layer_items):
             t = C.LabeledToggle(label, getattr(self.s, attr))
             t.toggled.connect(lambda on, a=attr: self._set_minimap_layer(a, on))
             grid.addWidget(t, i // 2, i % 2)
+        # "Hide collected" sits in the next grid cell so it matches the others
+        hide_coll = C.LabeledToggle("Hide collected", self.s.minimap_hide_collected)
+        hide_coll.toggled.connect(self._set_minimap_hide_collected)
+        self._hide_collected_toggle = hide_coll
+        n = len(layer_items)
+        grid.addWidget(hide_coll, n // 2, n % 2)
         v.addLayout(grid)
 
         note = QtWidgets.QLabel(
@@ -226,6 +233,16 @@ class MapPageMixin:
         ov = self.overlays.get("map")
         if ov is not None and hasattr(ov, "canvas"):
             ov.canvas.refresh()
+
+    def _set_minimap_hide_collected(self, on):
+        """Toggle hide-collected: update setting, overlay canvas, and its eye button."""
+        self._set("minimap_hide_collected", on)
+        ov = self.overlays.get("map")
+        if ov is not None:
+            if hasattr(ov, "set_hide_collected"):
+                ov.set_hide_collected(on)
+            elif hasattr(ov, "canvas"):
+                ov.canvas.refresh()
 
     def _refresh_orb_progress(self):
         profile = self.model.player_profile() if self.model else None

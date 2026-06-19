@@ -29,10 +29,11 @@ def experimental_enabled() -> bool:
 def config_dir() -> Path:
     import sys
     if getattr(sys, "frozen", False):
+        # Package structure: exe sits in dist/ with moddata/ next to it
         d = Path(sys.executable).parent / "moddata"
     else:
-        # Save next to run.py/companion directory for portable dev testing
-        d = Path(__file__).resolve().parent.parent / "moddata"
+        # Dev: save in dist/moddata for portable testing without polluting the root
+        d = Path(__file__).resolve().parent.parent / "dist" / "moddata"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -78,7 +79,7 @@ class Settings:
     # drop prediction
     level: int = 20
     player_class: str = "Auto"       # Auto | Warrior | Rogue | Mage | Priest | Off
-    class_only: bool = False
+    class_only: bool = True
     rows_per_rarity: int = 6
     # dps
     dps_radius: int = 30             # bosses are always tracked regardless
@@ -117,6 +118,7 @@ class Settings:
     minimap_orbs: bool = True         # secret orbs (Collector achievements)
     minimap_dungeons: bool = True     # dungeon entrances / teleporters
     minimap_companions: bool = True   # wild companions / critters
+    minimap_hide_collected: bool = False  # hide orbs & chests already marked done
     # compass-needle target ("" = none): kind "orb" tracks a static secret orb,
     # kind "unit" locks onto the nearest live instance of that unit id
     track_kind: str = ""

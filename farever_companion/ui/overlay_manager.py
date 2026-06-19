@@ -131,6 +131,12 @@ class OverlayManager(QtCore.QObject):
             ov.set_collection_owned(self.collection_owned)
         if hasattr(ov, "set_tracker"):
             ov.set_tracker(self.tracker)
+        # Wire the minimap's eye-button \u2192 map-page toggle sync callback
+        if key == "map" and hasattr(ov, "_sync_fn"):
+            panel = self.parent()
+            if panel is not None and hasattr(panel, "_hide_collected_toggle"):
+                tog = panel._hide_collected_toggle
+                ov._sync_fn = tog.set_checked_silent
         return ov
 
     def request(self, key: str, on: bool) -> None:
@@ -253,7 +259,7 @@ class OverlayManager(QtCore.QObject):
             except Exception:
                 menu_open = False
 
-        # Check if in a dungeon (uses GameLayer.mainActivity class name — reliable
+        # Check if in a dungeon (uses GameLayer.mainActivity class name \u2014 reliable
         # for all dungeon types, no element scanning or POI string matching needed)
         in_dungeon = False
         try:

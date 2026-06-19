@@ -26,6 +26,10 @@ __pycache__/
 # --- Logs ---
 *.log
 
+# --- local game data (optional sibling data) ---
+data/
+htdocs/
+
 # --- Secrets / credentials (none expected, but never commit these) ---
 .env
 .env.*

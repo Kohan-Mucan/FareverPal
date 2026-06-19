@@ -274,21 +274,15 @@ class PlayerLocator:
                 except Exception:
                     continue
 
-        # Prepared for later use: character-specific filenames including the class
-        # (e.g. Kohan_Rogue_S8c4ba8) to differentiate characters with the same name.
-        # Uncomment below if you wish to activate class-specific profiles:
-        #
-        # char_class = self.detect_class(hero)
-        # if uid:
-        #     if char_class:
-        #         return f"{name}_{char_class}_{uid}"
-        #     return f"{name}_{uid}"
-        # if char_class:
-        #     return f"{name}_{char_class}"
-        # return name
-
+        # Character-specific profile including the class
+        # to differentiate characters with the same name.
+        char_class = self.detect_class(hero)
         if uid:
+            if char_class:
+                return f"{name}_{char_class}_{uid}"
             return f"{name}_{uid}"
+        if char_class:
+            return f"{name}_{char_class}"
         return name
 
     def detect_class(self, hero: int) -> str | None:

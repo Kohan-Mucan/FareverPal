@@ -107,11 +107,15 @@ class _Canvas(QtWidgets.QWidget):
         pois = []
         s = self.s
         # static + live chests / crates / world-activity loot drops
+        hide_coll = getattr(s, "minimap_hide_collected", False)
+        profile = self.model.player_profile()
         if s.minimap_chests:
             try:
                 for r in self.model.nearest_chests_merged(xyz, n=60):
                     c = next((c for c in self.model.chests if c.chest_id == r.chest_id), None)
                     if c:
+                        if hide_coll and r.chest_id and s.is_done(r.chest_id, profile):
+                            continue
                         pois.append((c.x, c.y, c.z, "chest",
                                      r.loot_table or r.chest_id, r.chest_id))
                 # live-only chests (world-activity loot drops) have no static
@@ -119,6 +123,8 @@ class _Canvas(QtWidgets.QWidget):
                 static_ids = {c.chest_id for c in self.model.chests}
                 for e in self.model.live_chests():
                     if (e.elem_id or "") not in static_ids:
+                        if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
+                            continue
                         pois.append((e.x, e.y, e.z, "chest", e.elem_id or "loot",
                                      e.elem_id or f"ch{e.addr}"))
             except Exception:
@@ -142,12 +148,16 @@ class _Canvas(QtWidgets.QWidget):
             if s.minimap_orbs:
                 # static world orbs (Collector achievements) + live dungeon
                 # orbs; collected ones (auto-synced or right-clicked) draw
-                # greyed via the done state, like chests
+                # greyed via the done state (or hidden if hide_collected is on)
                 for ob in geo_orbs.load_orbs():
+                    if hide_coll and s.is_done(ob.orb_id, profile):
+                        continue
                     pois.append((ob.x, ob.y, ob.z, "orb", ob.orb_id, ob.orb_id))
                 for e in self.model.live_orbs():
-                    pois.append((e.x, e.y, e.z, "orb", e.elem_id or "orb",
-                                 e.elem_id or f"orb{e.addr}"))
+                    eid = e.elem_id or f"orb{e.addr}"
+                    if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
+                        continue
+                    pois.append((e.x, e.y, e.z, "orb", e.elem_id or "orb", eid))
             if s.minimap_dungeons:
                 for t in self.model.teleporters():
                     pois.append((t.x, t.y, t.z, "dungeon", t.elem_id or "teleport",
@@ -600,7 +610,8 @@ class MinimapOverlay(OverlayWindow):
         super().__init__("Minimap", settings, geo_key="minimap", parent=parent)
         self.s = settings
         self._tracker = None
-        
+        self._sync_fn = None   # callable(bool) set by overlay_manager to sync map-page toggle
+
         # Allow double clicking on the title bar to toggle bare mode
         self.titlebar.mouseDoubleClickEvent = lambda e: self.set_bare(not self.s.minimap_bare) if e.button() == QtCore.Qt.LeftButton else None
 
@@ -610,7 +621,16 @@ class MinimapOverlay(OverlayWindow):
         zout.setStyleSheet("color: #38bdf8; font-size: 20px; font-weight: bold; margin-bottom: 2px;") # blue
         zin.clicked.connect(lambda: self._zoom(0.8))
         zout.clicked.connect(lambda: self._zoom(1.25))
-        for wdg in (zout, zin):
+
+        # Hide-collected toggle button (eye icon) in the titlebar
+        self._hide_btn = QtWidgets.QPushButton()
+        self._hide_btn.setObjectName("Icon")
+        self._hide_btn.setFixedSize(22, 22)
+        self._hide_btn.setToolTip("Hide collected orbs & chests")
+        self._hide_btn.clicked.connect(self._toggle_hide_collected)
+        self._update_hide_btn()
+
+        for wdg in (zout, zin, self._hide_btn):
             self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 2, wdg)
 
         self.canvas = _Canvas(model, settings)
@@ -660,6 +680,29 @@ class MinimapOverlay(OverlayWindow):
         self.s.minimap_zoom = max(2.0, min(60.0, self.s.minimap_zoom * f))
         self.s.save()
         self.canvas.update()
+
+    def _toggle_hide_collected(self):
+        self.set_hide_collected(not getattr(self.s, "minimap_hide_collected", False))
+
+    def set_hide_collected(self, on: bool) -> None:
+        """Toggle hide-collected; updates setting, button icon, canvas, and any
+        registered sync callback (e.g. the map-page toggle)."""
+        self.s.minimap_hide_collected = on
+        self.s.save()
+        self._update_hide_btn()
+        self.canvas.refresh()
+        if self._sync_fn is not None:
+            self._sync_fn(on)
+
+    def _update_hide_btn(self) -> None:
+        on = getattr(self.s, "minimap_hide_collected", False)
+        icon_name = "eye-off" if on else "eye"
+        accent = self.s.hud_accent if on else theme.MUTED
+        pm = icons.ui_icon(icon_name, accent, 18)
+        self._hide_btn.setIcon(QtGui.QIcon(pm))
+        self._hide_btn.setIconSize(QtCore.QSize(18, 18))
+        tip = "Show collected orbs & chests" if on else "Hide collected orbs & chests"
+        self._hide_btn.setToolTip(tip)
 
     def set_tracker(self, tracker) -> None:
         """The shared TrackController; the tracked orb shows as an accent ring
