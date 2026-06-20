@@ -53,7 +53,7 @@ class OverlayManager(QtCore.QObject):
         self.collection_owned: set | None = None
         self._combat_lock_active = False
         self._combat_timer = QtCore.QTimer(self)
-        self._combat_timer.setInterval(300)
+        self._combat_timer.setInterval(500)
         self._combat_timer.timeout.connect(self._combat_tick)
 
     def set_model(self, model) -> None:
@@ -67,7 +67,7 @@ class OverlayManager(QtCore.QObject):
         else:
             self._orb_sync = orb_sync.FxSync()
             self._orb_timer.start(1000)
-            self._combat_timer.start(300)
+            self._combat_timer.start(500)
 
     def _orb_tick(self) -> None:
         """Mark loaded world orbs with no glow fx as collected (debounced);
@@ -132,11 +132,13 @@ class OverlayManager(QtCore.QObject):
         if hasattr(ov, "set_tracker"):
             ov.set_tracker(self.tracker)
         # Wire the minimap's eye-button \u2192 map-page toggle sync callback
-        if key == "map" and hasattr(ov, "_sync_fn"):
+        if key == "map":
             panel = self.parent()
-            if panel is not None and hasattr(panel, "_hide_collected_toggle"):
-                tog = panel._hide_collected_toggle
-                ov._sync_fn = tog.set_checked_silent
+            if panel is not None:
+                if hasattr(ov, "_sync_fn") and hasattr(panel, "_hide_collected_toggle"):
+                    ov._sync_fn = panel._hide_collected_toggle.set_checked_silent
+                if hasattr(ov, "_bare_sync_fn") and hasattr(panel, "_bare_toggle"):
+                    ov._bare_sync_fn = panel._bare_toggle.set_checked_silent
         return ov
 
     def request(self, key: str, on: bool) -> None:
@@ -238,28 +240,42 @@ class OverlayManager(QtCore.QObject):
         # Alt-tab focus check
         import ctypes
         import os
+        from ctypes import wintypes
+        active_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        is_strictly_game = False
         game_focused = True
-        if m.proc is not None:
-            try:
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
-                if hwnd:
-                    pid = ctypes.c_ulong()
-                    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    game_focused = pid.value in (m.proc.pid, os.getpid())
-                else:
-                    game_focused = False
-            except Exception:
-                game_focused = True
+        if active_hwnd:
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(active_hwnd, ctypes.byref(pid))
+            is_strictly_game = (m.proc is not None and pid.value == m.proc.pid)
+            game_focused = is_strictly_game or (pid.value == os.getpid())
+        else:
+            game_focused = False
 
         # Auto-hide overlays when game menus are open (only check if game is active)
-        menu_open = False
-        if getattr(self.s, "auto_hide_menus", False) and game_focused:
+        # Mouse snap releases for ANY menu; auto-hide only for non-Escape menus
+        menu_any = False
+        menu_hide = False
+        if (getattr(self.s, "auto_hide_menus", False) or getattr(self.s, "snap_mouse_to_player", False)) and game_focused:
             try:
-                menu_open = bool(m.is_game_menu_open())
+                menu_any = bool(m.is_game_menu_open(include_escape=True))
+                menu_hide = bool(m.is_game_menu_open(include_escape=False))
             except Exception:
-                menu_open = False
+                menu_any = False
+                menu_hide = False
 
-        # Check if in a dungeon (uses GameLayer.mainActivity class name \u2014 reliable
+        # Snap mouse to center of player window when not in menus
+        if getattr(self.s, "snap_mouse_to_player", False) and is_strictly_game and not menu_any:
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.GetClientRect(active_hwnd, ctypes.byref(rect)):
+                # center of client area
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                pt = wintypes.POINT(cx, cy)
+                ctypes.windll.user32.ClientToScreen(active_hwnd, ctypes.byref(pt))
+                ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
+
+        # Check if in a dungeon (uses GameLayer.mainActivity class name — reliable
         # for all dungeon types, no element scanning or POI string matching needed)
         in_dungeon = False
         try:
@@ -291,7 +307,7 @@ class OverlayManager(QtCore.QObject):
 
                 # 2. Menu Auto-hide handling
                 is_hidden_by_menu = getattr(ov, "_auto_hidden", False)
-                if menu_open:
+                if menu_hide:
                     if not is_hidden_by_menu and ov.isVisible():
                         ov.hide()
                         ov._auto_hidden = True

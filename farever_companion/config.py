@@ -62,6 +62,7 @@ class Settings:
     show_orbs: bool = True
     orb_count: int = 5
     max_dist: float = 0.0            # 0 = no cap
+    limit_by_zone: bool = True
     icon_size: int = 28
     opacity: float = 0.92
     ui_scale: float = 1.0

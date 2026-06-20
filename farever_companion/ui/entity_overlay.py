@@ -501,13 +501,18 @@ class EntityOverlay(OverlayWindow):
             self._drop_win.set_target(*self._selected_source())
 
     # --- helpers ---------------------------------------------------------
-    def _ranked_orbs(self, xyz, profile):
+    def _ranked_orbs(self, xyz, profile, player_zone=None):
         """Nearest uncollected orbs, plain distance order."""
         pool = [o for o in geo_orbs.load_orbs() if not self.s.is_done(o.orb_id, profile)]
         cands = []
         for o in pool:
+            if player_zone:
+                from ..geo import zones as geo_zones
+                ozone = geo_zones.get_area_id(o.zone)
+                if ozone != player_zone:
+                    continue
             d = o.dist(*xyz)
-            if d <= 500.0:
+            if d <= 500.0 or player_zone:
                 cands.append((o, d))
         return sorted(cands, key=lambda t: t[1])[:self.s.orb_count]
 
@@ -526,15 +531,22 @@ class EntityOverlay(OverlayWindow):
         isz = round(self.s.icon_size * self._scale)
         profile = self.model.player_profile()
 
+        # Resolve active zone if limit_by_zone setting is active
+        player_zone = None
+        if self.s.limit_by_zone:
+            from ..geo import zones as geo_zones
+            player_zone = geo_zones.resolve_zone(*xyz)
+
         # 1) gather every section's list (selection cycles across all of them)
         self._enemies = self.model.nearest_enemies(
             xyz, self.s.enemy_count, 500.0, self.s.enemies_only,
             hide_types=set(self.s.entity_hidden_types),
-            hide_units=set(self.s.entity_hidden_units)) \
+            hide_units=set(self.s.entity_hidden_units),
+            player_zone=player_zone) \
             if self.s.show_enemies else []
-        self._comps = self.model.nearest_companions(xyz, self.s.companion_count) \
+        self._comps = self.model.nearest_companions(xyz, self.s.companion_count, player_zone=player_zone) \
             if self.s.show_companions else []
-        self._orbs = self._ranked_orbs(xyz, profile) if self.s.show_orbs else []
+        self._orbs = self._ranked_orbs(xyz, profile, player_zone=player_zone) if self.s.show_orbs else []
         if self.s.track_kind == "orb" and self.s.track_id:
             if not any(o.orb_id == self.s.track_id for o, _ in self._orbs):
                 o = geo_orbs.by_id().get(self.s.track_id)
@@ -544,11 +556,18 @@ class EntityOverlay(OverlayWindow):
         # Automatically mark opened chests as done in settings so they persist
         done_list = self.s.get_poi_done(profile)
         chest_changed = False
+        # Do not limit live chests check to player_zone here (scans all loaded elements)
         for e in self.model.live_chests():
-            if e.elem_id and e.state and e.state.lower() in ("opened", "open", "looted"):
-                if e.elem_id not in done_list:
-                    done_list.append(e.elem_id)
-                    chest_changed = True
+            if e.elem_id:
+                is_open = e.state and e.state.lower() in ("opened", "open", "looted")
+                if is_open:
+                    if e.elem_id not in done_list:
+                        done_list.append(e.elem_id)
+                        chest_changed = True
+                else:
+                    if e.elem_id in done_list:
+                        done_list.remove(e.elem_id)
+                        chest_changed = True
         if chest_changed:
             if profile:
                 self.s.save_profile_progress(profile, done_list)
@@ -556,7 +575,7 @@ class EntityOverlay(OverlayWindow):
                 self.s.save()
 
         raw_chests = self.model.nearest_chests_merged(
-            xyz, self.s.chest_count, 500.0) if self.s.show_chests else []
+            xyz, self.s.chest_count, 500.0, player_zone=player_zone) if self.s.show_chests else []
         self._chests = [c for c in raw_chests if c.chest_id not in done_list]
 
         # Force show the currently tracked chest/pos in the chests list if it's not already there
@@ -579,7 +598,7 @@ class EntityOverlay(OverlayWindow):
                         if sc:
                             cx, cy = sc.x, sc.y
                         else:
-                            lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
+                            lc = next((lc for lc in self.model.live_chests(player_zone) if lc.elem_id == c.chest_id), None)
                             if lc:
                                 cx, cy = lc.x, lc.y
                         if math.hypot(tx - cx, ty - cy) < 1.0 or c.chest_id == chest_id:
@@ -762,6 +781,8 @@ class EntityOverlay(OverlayWindow):
                     lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
                     if lc:
                         cx, cy, cz = lc.x, lc.y, lc.z
+                is_recipe = "recipe" in c.chest_id.lower() or (c.loot_table and "recipe" in c.loot_table.lower())
+                marker = "Recipe" if is_recipe else "chest"
                 specs.append(RowSpec(
                     None, None, accent, label, color,
                     sub="  ·  ".join(sub_bits), value=f"{c.dist:.0f}m",
@@ -769,7 +790,7 @@ class EntityOverlay(OverlayWindow):
                     cb=(lambda cid=c.chest_id, lbl=label, x=cx, y=cy, z=cz:
                         (self._select("chest", cid),
                          self._track("pos", f"{x:.1f},{y:.1f},{z:.1f}|{lbl}"))),
-                    marker="chest"))
+                    marker=marker))
             self.chest_box.fill(specs, isz)
             self.chest_box.header.set_tag(f"{len(self._chests)}")
         else:

@@ -56,15 +56,15 @@ def notes_dir() -> Path:
 
 
 def chest_index_path() -> Path:
-    return notes_dir() / "chest_loot_index.json"
+    return sheets_dir() / "chest_loot_index.json"
 
 
 def chest_positions_path() -> Path:
-    return notes_dir() / "chest_positions.json"
+    return sheets_dir() / "chest_positions.json"
 
 
 def orb_positions_path() -> Path:
-    return notes_dir() / "orb_positions.json"
+    return sheets_dir() / "orb_positions.json"
 
 
 @lru_cache(maxsize=1)

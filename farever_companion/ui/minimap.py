@@ -116,7 +116,9 @@ class _Canvas(QtWidgets.QWidget):
                     if c:
                         if hide_coll and r.chest_id and s.is_done(r.chest_id, profile):
                             continue
-                        pois.append((c.x, c.y, c.z, "chest",
+                        is_recipe = "recipe" in r.chest_id.lower() or (r.loot_table and "recipe" in r.loot_table.lower())
+                        kind = "recipe" if is_recipe else "chest"
+                        pois.append((c.x, c.y, c.z, kind,
                                      r.loot_table or r.chest_id, r.chest_id))
                 # live-only chests (world-activity loot drops) have no static
                 # position row; plot them from the live element directly
@@ -125,7 +127,9 @@ class _Canvas(QtWidgets.QWidget):
                     if (e.elem_id or "") not in static_ids:
                         if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
                             continue
-                        pois.append((e.x, e.y, e.z, "chest", e.elem_id or "loot",
+                        is_recipe = "recipe" in (e.elem_id or "").lower()
+                        kind = "recipe" if is_recipe else "chest"
+                        pois.append((e.x, e.y, e.z, kind, e.elem_id or "loot",
                                      e.elem_id or f"ch{e.addr}"))
             except Exception:
                 pass
@@ -143,7 +147,7 @@ class _Canvas(QtWidgets.QWidget):
                                  g.elem_id or ""))
             if s.minimap_obelisks:
                 for o in self.model.obelisks():
-                    pois.append((o.x, o.y, o.z, "obelisk", o.elem_id or "obelisk",
+                    pois.append((o.x, o.y, o.z, o.kind, o.elem_id or o.kind,
                                  o.elem_id or f"ob{o.addr}"))
             if s.minimap_orbs:
                 # static world orbs (Collector achievements) + live dungeon
@@ -158,6 +162,20 @@ class _Canvas(QtWidgets.QWidget):
                     if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
                         continue
                     pois.append((e.x, e.y, e.z, "orb", e.elem_id or "orb", eid))
+                for e in self.model.live_chest_orbs():
+                    if not e.elem_id:
+                        continue
+                    # Common prefix for orbs in the same group (Chest or TimerRun)
+                    parent_id = e.elem_id
+                    for sep in ("_StartOrb_", "_startorb_", "_Orb_", "_orb_"):
+                        if sep in e.elem_id:
+                            parent_id = e.elem_id.split(sep)[0]
+                            break
+                    is_disabled = e.state and e.state.lower() in ("disabled", "disable")
+                    parent_done = s.is_done(parent_id, profile)
+                    if is_disabled or parent_done:
+                        continue
+                    pois.append((e.x, e.y, e.z, "chest_orb", e.elem_id, e.elem_id))
             if s.minimap_dungeons:
                 for t in self.model.teleporters():
                     pois.append((t.x, t.y, t.z, "dungeon", t.elem_id or "teleport",
@@ -297,6 +315,8 @@ class _Canvas(QtWidgets.QWidget):
             done = bool(poi_id and self.s.is_done(poi_id, profile))
             is_wp = self._is_waypoint(kind, label, poi_id, wx, wy, track_pos)
             if edge:
+                if kind in ("obelisk", "respawn", "dungeon"):
+                    continue
                 dist_to_player = math.hypot(wx - self._px, wy - self._py)
                 if not is_wp and (done or dist_to_player > 500.0):
                     continue
@@ -383,7 +403,8 @@ class _Canvas(QtWidgets.QWidget):
 
     # bundled flat marker icons (assets/map_icons) per layer
     _MARKER = {"chest": "chest", "gatherable": "gatherable", "obelisk": "obelisk",
-               "orb": "orb", "activity": "activity", "dungeon": "dungeon"}
+               "orb": "orb", "activity": "activity", "dungeon": "dungeon", "respawn": "RespawnPoint",
+               "recipe": "Recipe", "chest_orb": "GoldOrb"}
 
     def _poi_pixmap(self, kind, label, size, done=False):
         """A POI marker pixmap: enemies show the real per-unit game icon (organic
@@ -395,14 +416,15 @@ class _Canvas(QtWidgets.QWidget):
             return icons.outlined("unit", label, size, outline_col)
         name = self._MARKER.get(kind)
         if name:
-            if done and name in ("chest", "orb"):
+            if done and name in ("chest", "orb", "Recipe", "ChestOrb", "GoldOrb"):
                 name = name + "2"
             pm = icons.marker(name, size)
             if pm is not None:
                 return pm
         glyph = {"chest": "box", "obelisk": "radio", "gatherable": "dice-5",
                  "enemy": "swords", "orb": "broadcast", "activity": "box",
-                 "dungeon": "map", "companion": "heart", "pos": "map-pin"}.get(kind)
+                 "dungeon": "map", "companion": "heart", "pos": "map-pin",
+                 "recipe": "box", "chest_orb": "broadcast"}.get(kind)
         if glyph:
             return icons.ui_icon(glyph, theme.KIND_COLOR.get(kind, theme.TEXT), size)
         return None
@@ -611,6 +633,7 @@ class MinimapOverlay(OverlayWindow):
         self.s = settings
         self._tracker = None
         self._sync_fn = None   # callable(bool) set by overlay_manager to sync map-page toggle
+        self._bare_sync_fn = None # callable(bool) set by overlay_manager to sync boardless toggle
 
         # Allow double clicking on the title bar to toggle bare mode
         self.titlebar.mouseDoubleClickEvent = lambda e: self.set_bare(not self.s.minimap_bare) if e.button() == QtCore.Qt.LeftButton else None
@@ -668,12 +691,9 @@ class MinimapOverlay(OverlayWindow):
             self.content.setContentsMargins(8, 6, 8, 8)
         
         # Sync the checkbox in the main UI
-        p = self.parent()
-        while p is not None:
-            if hasattr(p, "_bare_toggle"):
-                p._bare_toggle.set_checked_silent(on)
-                break
-            p = p.parent()
+        if self._bare_sync_fn is not None:
+            self._bare_sync_fn(on)
+
         self.canvas.update()
 
     def _zoom(self, f):

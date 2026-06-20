@@ -98,7 +98,7 @@ class Element:
 
     @property
     def is_obelisk(self) -> bool:
-        return self.cls == "ent.interactible.Obelisk"
+        return self.cls in ("ent.interactible.Obelisk", "ent.interactible.RespawnPoint")
 
     @property
     def is_orb(self) -> bool:
@@ -106,7 +106,10 @@ class Element:
 
     @property
     def is_teleporter(self) -> bool:
-        return self.cls == "ent.interactible.Teleporter"
+        if not self.cls:
+            return False
+        cls_lower = self.cls.lower()
+        return "teleporter" in cls_lower or "portal" in cls_lower or "dungeon" in cls_lower
 
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))

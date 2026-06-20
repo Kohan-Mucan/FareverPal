@@ -51,7 +51,8 @@ class ChestResolver:
         return tbl
 
     def nearest_chests_merged(self, xyz, n: int, dungeon_boss: str | None,
-                              live_chests, max_dist: float = 0.0) -> list[ChestRow]:
+                              live_chests, max_dist: float = 0.0,
+                              player_zone: str | None = None) -> list[ChestRow]:
         rows: dict[str, ChestRow] = {}
         for c, d in chestdb.nearest(self.chests, *xyz, n=10 ** 6):
             # Exclude BossChests, Activity triggers, and Camps
@@ -60,6 +61,11 @@ class ChestResolver:
                 "camp" in c.chest_id.lower() or
                 (c.loot_table and "activity" in c.loot_table.lower())):
                 continue
+            if player_zone:
+                from ..geo import zones as geo_zones
+                czone = geo_zones.chest_zone(c.chest_id)
+                if czone != player_zone:
+                    continue
             tbl = self.chest_table(c.chest_id, dungeon_boss, c.loot_table)
             # drop a static boss chest belonging to a different boss
             if (tbl and dungeon_boss and tbl != dungeon_boss
@@ -78,6 +84,6 @@ class ChestResolver:
                 e.elem_id, d, self.chest_table(e.elem_id, dungeon_boss),
                 None, e.state, True, anomaly=(e.elem_id not in self._static_ids))
         out = sorted(rows.values(), key=lambda r: r.dist)
-        if max_dist > 0:
+        if max_dist > 0 and not player_zone:
             out = [r for r in out if r.dist <= max_dist]
         return out[:n]

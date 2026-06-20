@@ -180,7 +180,8 @@ class LiveModel:
     def nearest_enemies(self, xyz: XYZ, n: int, max_dist: float = 0.0,
                         enemies_only: bool = False,
                         hide_types: set[str] | None = None,
-                        hide_units: set[str] | None = None):
+                        hide_units: set[str] | None = None,
+                        player_zone: str | None = None):
         # wild companions (critters) are ent.Foe but not enemies - they get
         # their own list (nearest_companions)
         pool = [e for e in self.units()
@@ -191,9 +192,12 @@ class LiveModel:
             pool = [e for e in pool if udata.unit_type(e.unit_id) not in hide_types]
         if hide_units:
             pool = [e for e in pool if e.unit_id not in hide_units]
+        if player_zone:
+            from ..geo import zones as geo_zones
+            pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
         return self._ranked(pool, xyz, n, max_dist)
 
-    def nearest_companions(self, xyz: XYZ, n: int):
+    def nearest_companions(self, xyz: XYZ, n: int, player_zone: str | None = None):
         """Wild catchable companions (critters) near the player. Player-owned
         ones (equipped pets, own or other players') are excluded. Deliberately
         ignores the max-distance cap: critters are sparse and collectors want
@@ -201,15 +205,39 @@ class LiveModel:
         pool = [e for e in self.units()
                 if e.is_foe and udata.is_companion(e.unit_id)
                 and not e.is_player_owned]
+        if player_zone:
+            from ..geo import zones as geo_zones
+            pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
         return self._ranked(pool, xyz, n, 0.0)
 
-    def live_chests(self) -> list[Element]:
+    def live_chests(self, player_zone: str | None = None) -> list[Element]:
         try:
-            return [e for e in self.scene.elements(self.player_addr)
-                    if e.is_chest and e.elem_id and not (
-                        "activity" in e.elem_id.lower() or
-                        e.elem_id.startswith("BossChest")
-                    )]
+            import math
+            from dataclasses import replace
+            from ..geo import zones as geo_zones
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if e.is_chest and e.elem_id and not (
+                    "activity" in e.elem_id.lower() or
+                    e.elem_id.startswith("BossChest")
+                ):
+                    if player_zone:
+                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
+                        if ezone != player_zone:
+                            continue
+                    
+                    elem_id = e.elem_id
+                    if "fightstone" in elem_id.lower():
+                        fs_chests = [c for c in self.chests if "fightstone" in c.chest_id.lower()]
+                        if fs_chests:
+                            closest_static = min(fs_chests, key=lambda c: math.hypot(c.x - e.x, c.y - e.y))
+                            if math.hypot(closest_static.x - e.x, closest_static.y - e.y) < 5.0:
+                                elem_id = closest_static.chest_id
+                                
+                    if elem_id != e.elem_id:
+                        e = replace(e, elem_id=elem_id)
+                    out.append(e)
+            return out
         except ProcError:
             return []
 
@@ -225,21 +253,52 @@ class LiveModel:
         except ProcError:
             return []
 
-    def live_orbs(self) -> list[Element]:
+    def live_orbs(self, player_zone: str | None = None) -> list[Element]:
         """Dungeon secret orbs (InstanceOrb) in the loaded scene."""
         try:
-            return [e for e in self.scene.elements(self.player_addr)
-                    if e.is_orb and e.elem_id and (
-                        "redorb" in e.elem_id.lower() or
-                        "secretorb" in e.elem_id.lower()
-                    )]
+            from ..geo import zones as geo_zones
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if e.is_orb and e.elem_id and (
+                    "redorb" in e.elem_id.lower() or
+                    "secretorb" in e.elem_id.lower()
+                ):
+                    if player_zone:
+                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
+                        if ezone != player_zone:
+                            continue
+                    out.append(e)
+            return out
+        except ProcError:
+            return []
+
+    def live_chest_orbs(self) -> list[Element]:
+        """Chest orbs (ent.Element) and TimerCollectRun orbs in the loaded scene."""
+        try:
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if not e.elem_id:
+                    continue
+                eid_l = e.elem_id.lower()
+                if ("chestorb" in eid_l and "_orb_" in eid_l) or "timercollectrun" in eid_l:
+                    out.append(e)
+            return out
         except ProcError:
             return []
 
     def teleporters(self) -> list[Element]:
         """Dungeon entrances / teleporters in the loaded scene."""
         try:
-            return [e for e in self.scene.elements(self.player_addr) if e.is_teleporter]
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if e.is_teleporter:
+                    out.append(e)
+                elif e.is_orb and e.elem_id and not (
+                    "redorb" in e.elem_id.lower() or
+                    "secretorb" in e.elem_id.lower()
+                ):
+                    out.append(e)
+            return out
         except ProcError:
             return []
 
@@ -378,10 +437,10 @@ class LiveModel:
         return self.chests_resolver.chest_table(chest_id, self.dungeon_boss,
                                                 default_table)
 
-    def nearest_chests_merged(self, xyz: XYZ, n: int, max_dist: float = 0.0
-                              ) -> list[ChestRow]:
+    def nearest_chests_merged(self, xyz: XYZ, n: int, max_dist: float = 0.0,
+                              player_zone: str | None = None) -> list[ChestRow]:
         return self.chests_resolver.nearest_chests_merged(
-            xyz, n, self.dungeon_boss, self.live_chests(), max_dist)
+            xyz, n, self.dungeon_boss, self.live_chests(player_zone), max_dist, player_zone)
 
     def player_profile(self) -> str | None:
         """The character profile string, cached so load boundaries don't cause a None fallback."""
@@ -525,7 +584,7 @@ class LiveModel:
         self.deaths = 0
         self._was_alive = False
 
-    def is_game_menu_open(self) -> bool:
+    def is_game_menu_open(self, include_escape: bool = True) -> bool:
         if self.player_addr is None:
             return True
         try:
@@ -542,8 +601,7 @@ class LiveModel:
             for i in range(arr_len):
                 item_ptr = self.hl.ptr(native_arr + 0x18 + i * 8)
                 if item_ptr:
-                    cls_name = self.hl.class_of(item_ptr)
-                    if cls_name == "ui.win.EscapeMenu":
+                    if not include_escape and self.hl.class_of(item_ptr) == "ui.win.EscapeMenu":
                         continue
                     if self.hl.is_a(item_ptr, "ui.win.BaseWindow"):
                         return True

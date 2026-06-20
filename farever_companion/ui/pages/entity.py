@@ -26,6 +26,7 @@ class EntityPageMixin:
             ("enemies_only", "Enemies only"), ("class_only", "Class-relevant only"),
             ("show_compass", "Compass needle"), ("show_drop_window", "Show drop window"),
             ("auto_select_next_collectible", "Auto select next orb/chest"),
+            ("limit_by_zone", "Limit by zone"),
         ]
         for i, (attr, label) in enumerate(toggles):
             t = C.LabeledToggle(label, getattr(self.s, attr))
