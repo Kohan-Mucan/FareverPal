@@ -210,6 +210,88 @@ class LiveModel:
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
         return self._ranked(pool, xyz, n, 0.0)
 
+    def player_name(self, hero_addr: int) -> str | None:
+        try:
+            hero_type = self.hl.ptr(hero_addr)
+            owner_off = self.hl.field_offset(hero_type, "ownerPlayer") if hero_type else None
+            if owner_off is None:
+                owner_off = 0x10
+            player_ptr = self.hl.ptr(hero_addr + owner_off)
+            if not player_ptr:
+                return None
+            player_type = self.hl.ptr(player_ptr)
+            name_off = self.hl.field_offset(player_type, "name") if player_type else None
+            if name_off is None:
+                name_off = 0xa8
+            name_strobj = self.hl.ptr(player_ptr + name_off)
+            if name_strobj:
+                return self.hl.hl_string(name_strobj)
+        except Exception:
+            pass
+        return None
+
+    def are_in_same_group(self, other_hero_addr: int) -> bool:
+        try:
+            local_hero = self.player_addr
+            if not local_hero or other_hero_addr == local_hero:
+                return False
+            local_hero_type = self.hl.ptr(local_hero)
+            owner_off = self.hl.field_offset(local_hero_type, "ownerPlayer") if local_hero_type else None
+            if owner_off is None:
+                owner_off = 0x10
+            local_player = self.hl.ptr(local_hero + owner_off)
+            if not local_player:
+                return False
+            local_player_type = self.hl.ptr(local_player)
+            group_off = self.hl.field_offset(local_player_type, "group") if local_player_type else None
+            if group_off is None:
+                group_off = 0xe8
+            local_group = self.hl.ptr(local_player + group_off)
+            if not local_group:
+                return False
+            other_hero_type = self.hl.ptr(other_hero_addr)
+            other_owner_off = self.hl.field_offset(other_hero_type, "ownerPlayer") if other_hero_type else None
+            if other_owner_off is None:
+                other_owner_off = 0x10
+            other_player = self.hl.ptr(other_hero_addr + other_owner_off)
+            if not other_player:
+                return False
+            other_player_type = self.hl.ptr(other_player)
+            other_group_off = self.hl.field_offset(other_player_type, "group") if other_player_type else None
+            if other_group_off is None:
+                other_group_off = 0xe8
+            other_group = self.hl.ptr(other_player + other_group_off)
+            return other_group == local_group and other_group != 0
+        except Exception:
+            pass
+        return False
+
+    def hero_display_name(self, hero: Entity) -> str:
+        try:
+            from ..config import Settings
+            s = Settings.load()
+            show_all_names = getattr(s, "PlayerNames", False)
+        except Exception:
+            show_all_names = False
+        in_group = self.are_in_same_group(hero.addr)
+        if in_group or show_all_names:
+            p_name = self.player_name(hero.addr)
+            if p_name:
+                return p_name
+        cls_name = hero.cls or ""
+        if cls_name.startswith("ent.hero."):
+            return cls_name.replace("ent.hero.", "")
+        return hero.unit_id or "Hero"
+
+    def nearest_group_members(self, xyz: XYZ, n: int, max_dist: float = 0.0,
+                              player_zone: str | None = None):
+        pool = [e for e in self.units()
+                if e.is_hero and e.addr != self.player_addr]
+        if player_zone:
+            from ..geo import zones as geo_zones
+            pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
+        return self._ranked(pool, xyz, n, max_dist)
+
     def live_chests(self, player_zone: str | None = None) -> list[Element]:
         try:
             import math

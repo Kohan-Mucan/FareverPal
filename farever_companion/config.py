@@ -48,7 +48,8 @@ class Settings:
     show_enemies: bool = True
     show_chests: bool = True
     show_drops: bool = True
-    enemies_only: bool = False
+    show_group_members: bool = False
+    PlayerNames: bool = False
     enemy_count: int = 8
     chest_count: int = 6
     # wild catchable companions (critters) as their own HUD section
@@ -71,6 +72,8 @@ class Settings:
     show_drop_window: bool = False
     combat_click_through: bool = False
     auto_hide_menus: bool = False
+    snap_mouse_to_player: bool = False  # snap mouse to center of game window when not in menus
+    mouse_snap_rate: int = 500         # interval in ms for mouse snapping/checks (500, 250, 100)
 
     auto_attach: bool = True         # watch for Farever.exe -> attach/locate/detach with zero clicks
     auto_check_updates: bool = True  # check GitHub Releases (via the website) for a newer exe on startup
@@ -194,7 +197,7 @@ class Settings:
 
     def __post_init__(self):
         # Runtime-only cache of loaded profile progress lists
-        self._profile_progress: dict[str, list[str]] = {}
+        self._profile_progress: dict[str, dict] = {}
 
     @classmethod
     def load(cls) -> "Settings":
@@ -213,31 +216,36 @@ class Settings:
         except OSError:
             pass
 
-    # --- poi done set helpers -------------------------------------------
-    def get_poi_done(self, profile: str | None = None) -> list[str]:
-        if not profile:
-            return self.poi_done
-            
+    # --- profile data helpers -------------------------------------------
+    def _ensure_profile_loaded(self, profile: str) -> None:
         if profile not in self._profile_progress:
             path = config_dir() / f"progress_{profile}.json"
             if path.exists():
                 try:
                     self._profile_progress[profile] = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:
-                    self._profile_progress[profile] = []
+                    self._profile_progress[profile] = {}
             else:
-                # Migrate existing progress from global list on first load
-                self._profile_progress[profile] = list(self.poi_done)
-                self.save_profile_progress(profile, self._profile_progress[profile])
-                
-        return self._profile_progress[profile]
+                self._profile_progress[profile] = {}
 
-    def save_profile_progress(self, profile: str, done_list: list[str]) -> None:
+    def save_profile_data(self, profile: str) -> None:
         try:
             path = config_dir() / f"progress_{profile}.json"
-            path.write_text(json.dumps(done_list, indent=1), encoding="utf-8")
+            data = self._profile_progress.get(profile, {})
+            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
         except OSError:
             pass
+
+    def save_profile_progress(self, profile: str, done_list: list[str]) -> None:
+        self._ensure_profile_loaded(profile)
+        self._profile_progress[profile]["poi_done"] = done_list
+        self.save_profile_data(profile)
+
+    def get_poi_done(self, profile: str | None = None) -> list[str]:
+        if not profile:
+            return self.poi_done
+        self._ensure_profile_loaded(profile)
+        return self._profile_progress[profile].setdefault("poi_done", [])
 
     def is_done(self, poi_id: str, profile: str | None = None) -> bool:
         return poi_id in self.get_poi_done(profile)
@@ -252,7 +260,40 @@ class Settings:
             done = True
             
         if profile:
-            self.save_profile_progress(profile, done_list)
+            self._profile_progress[profile]["poi_done"] = done_list
+            self.save_profile_data(profile)
         else:
             self.save()
         return done
+
+    def get_entity_hidden_units(self, profile: str | None = None) -> list[str]:
+        if not profile:
+            return self.entity_hidden_units
+        self._ensure_profile_loaded(profile)
+        return self._profile_progress[profile].setdefault("entity_hidden_units", [])
+
+    def toggle_unit_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
+        hidden_list = self.get_entity_hidden_units(profile)
+        cur = set(hidden_list)
+        (cur.add if hidden else cur.discard)(uid)
+        new_list = sorted(cur)
+        
+        if profile:
+            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            self.save_profile_data(profile)
+        else:
+            self.entity_hidden_units = new_list
+            self.save()
+
+    def set_all_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
+        new_list = sorted(uids) if hidden else []
+        if profile:
+            self._ensure_profile_loaded(profile)
+            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            self.save_profile_data(profile)
+        else:
+            self.entity_hidden_units = new_list
+            self.save()
+
+
+

@@ -15,7 +15,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from PySide6 import QtCore, QtGui, QtWidgets
-
 from . import theme
 from .overlay_base import OverlayWindow
 from .components import SectionHeader, IconTile
@@ -40,6 +39,7 @@ class RowSpec:
     highlight: bool = False
     cb: object = None
     marker: str = ""      # map-marker icon name instead of a game-sheet icon
+    ui_icon: str = ""     # UI SVG icon name instead of a game-sheet icon
 
 
 class _EntityRow(QtWidgets.QFrame):
@@ -48,114 +48,72 @@ class _EntityRow(QtWidgets.QFrame):
 
     def __init__(self, icon_size: int):
         super().__init__()
-        self._highlight = ""
-        self._cb = None
-        lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(6, 3, 6, 3)
-        lay.setSpacing(9)
-        self.tile = IconTile(icon_size)
-        mid = QtWidgets.QVBoxLayout()
-        mid.setContentsMargins(0, 0, 0, 0)
-        mid.setSpacing(0)
-        self.name = QtWidgets.QLabel()
-        self.sub = QtWidgets.QLabel()
+        self._highlight, self._cb = "", None
+        lay = QtWidgets.QHBoxLayout(self); lay.setContentsMargins(6, 3, 6, 3); lay.setSpacing(9)
+        self.tile = IconTile(icon_size); mid = QtWidgets.QVBoxLayout()
+        mid.setContentsMargins(0, 0, 0, 0); mid.setSpacing(0)
+        self.name, self.sub = QtWidgets.QLabel(), QtWidgets.QLabel()
         self.sub.setObjectName("Mono")
-        mid.addWidget(self.name)
-        mid.addWidget(self.sub)
-        self.value = QtWidgets.QLabel()
-        self.value.setObjectName("Mono")
-        self.value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.value.setMinimumWidth(56)            # reserve room so % never clips
-        self.name.setSizePolicy(QtWidgets.QSizePolicy.Ignored,
-                                QtWidgets.QSizePolicy.Preferred)  # name yields, value wins
-        lay.addWidget(self.tile)
-        lay.addLayout(mid, 1)
-        lay.addWidget(self.value, 0)
+        mid.addWidget(self.name); mid.addWidget(self.sub)
+        self.value = QtWidgets.QLabel(); self.value.setObjectName("Mono")
+        self.value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter); self.value.setMinimumWidth(56)
+        self.name.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        lay.addWidget(self.tile); lay.addLayout(mid, 1); lay.addWidget(self.value, 0)
 
     def apply(self, spec: RowSpec, icon_size: int):
         self.tile.set_size(icon_size)
-        if spec.marker:
-            self.tile.set_marker(spec.marker, spec.accent)
-        else:
-            self.tile.set(spec.sheet, spec.id_, spec.accent)
+        if spec.ui_icon: self.tile.set_ui_icon(spec.ui_icon, spec.accent)
+        elif spec.marker: self.tile.set_marker(spec.marker, spec.accent)
+        else: self.tile.set(spec.sheet, spec.id_, spec.accent)
         weight = "700" if spec.bold else "500"
         self.name.setText(spec.name)
-        self.name.setStyleSheet(
-            f"color:{spec.name_color};font-weight:{weight};background:transparent;")
-        self.sub.setText(spec.sub)
-        self.sub.setVisible(bool(spec.sub))
-        if spec.sub:
-            self.sub.setStyleSheet(f"color:{theme.MUTED};background:transparent;")
-        self.value.setText(spec.value)
-        self.value.setStyleSheet(f"color:{spec.name_color};background:transparent;")
+        self.name.setStyleSheet(f"color:{spec.name_color};font-weight:{weight};background:transparent;")
+        self.sub.setText(spec.sub); self.sub.setVisible(bool(spec.sub))
+        if spec.sub: self.sub.setStyleSheet(f"color:{theme.MUTED};background:transparent;")
+        self.value.setText(spec.value); self.value.setStyleSheet(f"color:{spec.name_color};background:transparent;")
         self._highlight = spec.accent if spec.highlight else ""
-        self.set_callback(spec.cb)
-        self.update()
+        self.set_callback(spec.cb); self.update()
 
     def set_callback(self, cb):
-        if self._cb is not None:
-            self.clicked.disconnect(self._cb)
-            self._cb = None
-        if cb is not None:
-            self._cb = cb
-            self.clicked.connect(cb)
+        if self._cb is not None: self.clicked.disconnect(self._cb); self._cb = None
+        if cb is not None: self._cb = cb; self.clicked.connect(cb)
         self.setCursor(QtCore.Qt.PointingHandCursor if cb else QtCore.Qt.ArrowCursor)
 
     def paintEvent(self, e):
         if self._highlight:
-            p = QtGui.QPainter(self)
-            p.setRenderHint(QtGui.QPainter.Antialiasing, False)
-            c = QtGui.QColor(self._highlight)
-            bg = QtGui.QColor(c); bg.setAlpha(30)
-            p.fillRect(self.rect(), bg)
-            p.fillRect(0, 0, 2, self.height(), c)     # accent left bar
-            p.end()
+            p = QtGui.QPainter(self); p.setRenderHint(QtGui.QPainter.Antialiasing, False)
+            c = QtGui.QColor(self._highlight); bg = QtGui.QColor(c); bg.setAlpha(30)
+            p.fillRect(self.rect(), bg); p.fillRect(0, 0, 2, self.height(), c); p.end()
         super().paintEvent(e)
 
     def mousePressEvent(self, e):
-        if e.button() == QtCore.Qt.LeftButton:
-            self.clicked.emit()
+        if e.button() == QtCore.Qt.LeftButton: self.clicked.emit()
         super().mousePressEvent(e)
 
 
 class _Section(QtWidgets.QWidget):
     def __init__(self, title, color):
         super().__init__()
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(0, 5, 0, 5)
-        lay.setSpacing(2)
-        self.header = SectionHeader(title, color, colored_label=True)
-        lay.addWidget(self.header)
-        self.rows = QtWidgets.QVBoxLayout()
-        self.rows.setSpacing(1)
-        lay.addLayout(self.rows)
+        lay = QtWidgets.QVBoxLayout(self); lay.setContentsMargins(0, 5, 0, 5); lay.setSpacing(2)
+        self.header = SectionHeader(title, color, colored_label=True); lay.addWidget(self.header)
+        self.rows = QtWidgets.QVBoxLayout(); self.rows.setSpacing(1); lay.addLayout(self.rows)
         self._pool: list[_EntityRow] = []
 
     def fill(self, specs: list[RowSpec], icon_size):
         while len(self._pool) < len(specs):
-            r = _EntityRow(icon_size)
-            self._pool.append(r)
-            self.rows.addWidget(r)
+            r = _EntityRow(icon_size); self._pool.append(r); self.rows.addWidget(r)
         for i, spec in enumerate(specs):
-            r = self._pool[i]
-            r.apply(spec, icon_size)
-            r.show()
-        for j in range(len(specs), len(self._pool)):
-            self._pool[j].hide()
+            r = self._pool[i]; r.apply(spec, icon_size); r.show()
+        for j in range(len(specs), len(self._pool)): self._pool[j].hide()
 
 
 def _scroll_body():
     scroll = QtWidgets.QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+    scroll.setWidgetResizable(True); scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
     scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-    scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-    scroll.verticalScrollBar().setStyleSheet("margin:0;")
-    body = QtWidgets.QWidget()
-    lay = QtWidgets.QVBoxLayout(body)
-    lay.setContentsMargins(0, 0, 13, 0)   # clear the scrollbar gutter
-    lay.setSpacing(0)
-    scroll.setWidget(body)
+    scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded); scroll.verticalScrollBar().setStyleSheet("margin:0;")
+    body = QtWidgets.QWidget(); lay = QtWidgets.QVBoxLayout(body)
+    lay.setContentsMargins(0, 0, 13, 0); lay.setSpacing(0); scroll.setWidget(body)
     return scroll, lay
 
 
@@ -165,37 +123,20 @@ def _scroll_body():
 class DropTableOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("DROP TABLE", settings, geo_key="droptable", parent=parent)
-        self.model = model
-        self.s = settings
-        self._collapsed = set()  # all rarities expanded by default
-        self._near = None        # the loot source (enemy or chest) being shown
-        self._name = ""
-        scroll, self._body = _scroll_body()
-        self.box = _Section("DROPS", self.s.hud_accent or theme.ACCENT)
-        self._body.addWidget(self.box)
-        self._body.addStretch(1)
-        self.content.addWidget(scroll, 1)
-        # Wider than the entity HUD: drop rows carry long item names AND a long
-        # right-side value ("Σ 0.001% · 1 · ★1"), plus the header shows the full
-        # target name + "Nm · Ln" tag - at 320 the right side clipped.
-        self._base_w, self._base_h = 392, 480
-        self.setMinimumWidth(360)
-        self.resize(392, 480)
+        self._page_key, self.model, self.s = "entity", model, settings
+        self._collapsed, self._near, self._name = set(), None, ""
+        scroll, self._body = _scroll_body(); self.box = _Section("DROPS", self.s.hud_accent or theme.ACCENT)
+        self._body.addWidget(self.box); self._body.addStretch(1); self.content.addWidget(scroll, 1)
+        self._base_w, self._base_h = 392, 480; self.setMinimumWidth(360); self.resize(392, 480)
 
     def set_target(self, near, name: str):
-        """`near` is a model.Nearest (enemy or chest) or None; `name` is the
-        readable target label."""
-        self._near = near
-        self._name = name or "?"
-        self._render()
+        self._near, self._name = near, name or "?"; self._render()
 
     def _retint(self, accent: str) -> None:
-        if accent:
-            self.box.header.set_color(accent)
+        if accent: self.box.header.set_color(accent)
 
     def _toggle(self, rarity):
-        self._collapsed.symmetric_difference_update({rarity})
-        self._render()
+        self._collapsed.symmetric_difference_update({rarity}); self._render()
 
     def _active_class(self):
         pc = self.s.player_class
@@ -206,51 +147,32 @@ class DropTableOverlay(OverlayWindow):
         self.titlebar.title.setText(f"DROP TABLE · {self._name}")
         self.box.header.set_text(self._name)
         if near is None:
-            self.box.header.set_tag("NO TABLE")
-            self.box.fill([], self.s.icon_size)
-            return
+            self.box.header.set_tag("NO TABLE"); self.box.fill([], self.s.icon_size); return
         self.box.header.set_tag(f"{near.dist:.0f}m · L{near.level}")
-        active = self._active_class()
-        drops = self.model.drop_table_effective(near)
+        active, drops = self._active_class(), self.model.drop_table_effective(near)
         groups = defaultdict(list)
-        for item, prob, rar, _typ in drops:
-            groups[rar or "Common"].append((item, prob))
-
-        def rel(it):
-            return classes.is_for_class(it, active)
-
-        specs: list[RowSpec] = []
-        first_item = True
+        for item, prob, rar, _typ in drops: groups[rar or "Common"].append((item, prob))
+        rel = lambda it: classes.is_for_class(it, active)
+        specs: list[RowSpec] = []; first_item = True
         for rarity in sorted(groups, key=lambda r: _RARITY_ORDER.get(r, 9)):
             items = groups[rarity]
-            total = sum(p for _, p in items)
-            n_cls = sum(1 for it, _ in items if rel(it))
-            col = theme.rarity_color(rarity)
-            collapsed = rarity in self._collapsed
-            caret = "▸" if collapsed else "▾"
-            tag = f"  ·  ★{n_cls}" if n_cls else ""
-            specs.append(RowSpec(
-                None, None, col, f"{caret} {rarity.upper()}", col,
-                value=f"Σ {fmt_pct(total)} · {len(items)}{tag}", bold=True,
-                cb=(lambda r=rarity: self._toggle(r))))
-            if collapsed:
-                continue
+            total, n_cls = sum(p for _, p in items), sum(1 for it, _ in items if rel(it))
+            col = theme.rarity_color(rarity); collapsed = rarity in self._collapsed
+            caret, tag = ("▸" if collapsed else "▾"), (f"  ·  ★{n_cls}" if n_cls else "")
+            specs.append(RowSpec(None, None, col, f"{caret} {rarity.upper()}", col,
+                                 value=f"Σ {fmt_pct(total)} · {len(items)}{tag}", bold=True,
+                                 cb=(lambda r=rarity: self._toggle(r))))
+            if collapsed: continue
             ordered = sorted(items, key=lambda t: (not rel(t[0]), -t[1]))
-            if self.s.class_only and active:
-                ordered = [t for t in ordered if rel(t[0])]
+            if self.s.class_only and active: ordered = [t for t in ordered if rel(t[0])]
             for item, prob in ordered:
                 if tokens.is_token(item):
-                    specs.append(RowSpec("item", item, col,
-                                         f"🎲 {names.item_name(item)}", theme.MUTED,
+                    specs.append(RowSpec("item", item, col, f"🎲 {names.item_name(item)}", theme.MUTED,
                                          sub="PROCEDURAL", value=fmt_pct(prob)))
-                    first_item = False
-                    continue
-                star = rel(item)
-                specs.append(RowSpec(
-                    "item", item, col,
-                    f"{'★ ' if star else ''}{names.item_name(item)}", col,
-                    sub=(rarity.upper() if first_item else ""),
-                    value=fmt_pct(prob), bold=star, highlight=first_item))
+                else:
+                    star = rel(item)
+                    specs.append(RowSpec("item", item, col, f"{'★ ' if star else ''}{names.item_name(item)}", col,
+                                         sub=(rarity.upper() if first_item else ""), value=fmt_pct(prob), bold=star, highlight=first_item))
                 first_item = False
         self.box.fill(specs, round(self.s.icon_size * self._scale))
 
@@ -259,13 +181,13 @@ class DropTableOverlay(OverlayWindow):
 #  Entity HUD - nearby enemies (selectable) + chests
 # ---------------------------------------------------------------------------
 class EntityOverlay(OverlayWindow):
-    request_config = QtCore.Signal()
-
     def __init__(self, model, settings, parent=None):
         super().__init__("Entity", settings, geo_key="entity", parent=parent)
+        self._page_key = "entity"
         self.model = model
         self.s = settings
         self._enemies: list = []          # [(entity, dist)]
+        self._group_members: list = []    # [(entity, dist)]
         self._comps: list = []            # [(entity, dist)] wild companions
         self._orbs: list = []             # [(Orb, dist)] uncollected secret orbs
         self._chests: list = []           # [ChestRow]
@@ -291,23 +213,19 @@ class EntityOverlay(OverlayWindow):
         scroll, self._body = _scroll_body()
         self.content.addWidget(scroll, 1)
         self.enemy_box = _Section("ENEMIES", theme.DANGER)
+        self.group_box = _Section("GROUP MEMBERS", theme.MUTED)
         self.comp_box = _Section("COMPANIONS", theme.GOOD)
         self.orb_box = _Section("SECRET ORBS", theme.KIND_COLOR["orb"])
         self.chest_box = _Section("CHESTS", theme.CHEST)
-        for b in (self.enemy_box, self.comp_box, self.orb_box, self.chest_box):
+        for b in (self.enemy_box, self.group_box, self.comp_box, self.orb_box, self.chest_box):
             self._body.addWidget(b)
         self._body.addStretch(1)
 
-        gear = QtWidgets.QPushButton(); gear.setObjectName("Icon")
-        gear.setIcon(icons.ui_qicon("settings", theme.MUTED, 16))
-        gear.setToolTip("Open the config panel")
-        gear.clicked.connect(self.request_config.emit)
         layb = QtWidgets.QPushButton(); layb.setObjectName("Icon")
         layb.setIcon(icons.ui_qicon("layout", theme.MUTED, 16))
         layb.setToolTip("Reset overlay to top-left")
         layb.clicked.connect(self._reset_pos)
-        for b in (gear, layb):
-            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 1, b)
+        self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 3, layb)
 
         self.enable_resize_grip()
         self._base_w, self._base_h = 320, 440
@@ -346,6 +264,8 @@ class EntityOverlay(OverlayWindow):
         companions, orbs, chests (matching the HUD layout)."""
         t = [("enemy", getattr(e, "addr", None)) for e, _ in self._enemies
              if getattr(e, "addr", None) is not None]
+        t += [("hero", getattr(e, "addr", None)) for e, _ in self._group_members
+              if getattr(e, "addr", None) is not None]
         t += [("comp", getattr(e, "addr", None)) for e, _ in self._comps
               if getattr(e, "addr", None) is not None]
         t += [("orb", o.orb_id) for o, _ in self._orbs]
@@ -358,7 +278,7 @@ class EntityOverlay(OverlayWindow):
         if self._sel is None:
             return None, ""
         kind, key = self._sel
-        if kind in ("comp", "orb"):
+        if kind in ("comp", "orb", "hero"):
             return None, ""
         if kind == "enemy":
             for e, d in self._enemies:
@@ -391,6 +311,11 @@ class EntityOverlay(OverlayWindow):
                       if getattr(e, "addr", None) == key), None)
             if e is not None and self._tracker is not None:
                 self._tracker.track("unit", e.unit_id)
+        elif kind == "hero":
+            e = next((e for e, _ in self._group_members
+                      if getattr(e, "addr", None) == key), None)
+            if e is not None and self._tracker is not None:
+                self._tracker.track("hero", e.unit_id)
         elif kind == "orb" and self._tracker is not None:
             self._tracker.track("orb", key)  # collectibles -> compass needle
         self._refresh()
@@ -464,10 +389,10 @@ class EntityOverlay(OverlayWindow):
         return self._tracker is not None and key is not None \
             and self._tracker.is_tracked(kind, key)
 
-    def _is_tracked_instance(self, unit_id: str | None, addr) -> bool:
+    def _is_tracked_instance(self, kind: str, unit_id: str | None, addr) -> bool:
         """Only the live instance the needle is locked on shows TRACKING -
         not every unit of the tracked type."""
-        if not self._is_tracked("unit", unit_id):
+        if not self._is_tracked(kind, unit_id):
             return False
         locked = self._tracker.locked_addr
         return locked is None or locked == addr
@@ -512,8 +437,7 @@ class EntityOverlay(OverlayWindow):
                 if ozone != player_zone:
                     continue
             d = o.dist(*xyz)
-            if d <= 500.0 or player_zone:
-                cands.append((o, d))
+            cands.append((o, d))
         return sorted(cands, key=lambda t: t[1])[:self.s.orb_count]
 
     def _tick(self):
@@ -539,11 +463,14 @@ class EntityOverlay(OverlayWindow):
 
         # 1) gather every section's list (selection cycles across all of them)
         self._enemies = self.model.nearest_enemies(
-            xyz, self.s.enemy_count, 500.0, self.s.enemies_only,
+            xyz, self.s.enemy_count, 500.0,
             hide_types=set(self.s.entity_hidden_types),
-            hide_units=set(self.s.entity_hidden_units),
+            hide_units=set(self.s.get_entity_hidden_units(profile)),
             player_zone=player_zone) \
             if self.s.show_enemies else []
+        self._group_members = self.model.nearest_group_members(
+            xyz, self.s.enemy_count, 500.0, player_zone=player_zone) \
+            if getattr(self.s, "show_group_members", False) else []
         self._comps = self.model.nearest_companions(xyz, self.s.companion_count, player_zone=player_zone) \
             if self.s.show_companions else []
         self._orbs = self._ranked_orbs(xyz, profile, player_zone=player_zone) if self.s.show_orbs else []
@@ -575,7 +502,7 @@ class EntityOverlay(OverlayWindow):
                 self.s.save()
 
         raw_chests = self.model.nearest_chests_merged(
-            xyz, self.s.chest_count, 500.0, player_zone=player_zone) if self.s.show_chests else []
+            xyz, self.s.chest_count, 0.0, player_zone=player_zone) if self.s.show_chests else []
         self._chests = [c for c in raw_chests if c.chest_id not in done_list]
 
         # Force show the currently tracked chest/pos in the chests list if it's not already there
@@ -632,19 +559,23 @@ class EntityOverlay(OverlayWindow):
                             if self._tracker is not None:
                                 self._tracker.track("orb", next_coll[1])
                         elif next_coll[0] == "chest":
-                            self._sel = next_coll
                             c = next((ch for ch in self._chests if ch.chest_id == next_coll[1]), None)
-                            if c and self._tracker is not None:
-                                cx, cy, cz = 0.0, 0.0, 0.0
-                                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                                if sc:
-                                    cx, cy, cz = sc.x, sc.y, sc.z
-                                else:
-                                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
-                                    if lc:
-                                        cx, cy, cz = lc.x, lc.y, lc.z
-                                label = names.humanize(c.loot_table) if c.loot_table else names.humanize(c.chest_id)
-                                self._tracker.track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
+                            if c and c.dist <= 300.0:
+                                self._sel = next_coll
+                                if self._tracker is not None:
+                                    cx, cy, cz = 0.0, 0.0, 0.0
+                                    sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
+                                    if sc:
+                                        cx, cy, cz = sc.x, sc.y, sc.z
+                                    else:
+                                        lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
+                                        if lc:
+                                            cx, cy, cz = lc.x, lc.y, lc.z
+                                    label = names.humanize(c.loot_table) if c.loot_table else names.humanize(c.chest_id)
+                                    self._tracker.track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
+                            else:
+                                if self._tracker is not None:
+                                    self._tracker.clear()
                     else:
                         # Last item in the group is gone — always clear the compass
                         if self._tracker is not None:
@@ -658,6 +589,11 @@ class EntityOverlay(OverlayWindow):
                                           if getattr(e, "addr", None) == next_same[1]), None)
                             if e_obj and self._tracker is not None:
                                 self._tracker.track("unit", e_obj.unit_id)
+                        elif old_sel[0] == "hero":
+                            e_obj = next((e for e, _ in self._group_members
+                                          if getattr(e, "addr", None) == next_same[1]), None)
+                            if e_obj and self._tracker is not None:
+                                self._tracker.track("hero", e_obj.unit_id)
                         else:
                             e_obj = next((e for e, _ in self._enemies
                                           if getattr(e, "addr", None) == next_same[1]), None)
@@ -677,7 +613,7 @@ class EntityOverlay(OverlayWindow):
             for e, d in self._enemies:
                 key = ("enemy", getattr(e, "addr", None))
                 sel = key == self._sel
-                tracked = self._is_tracked_instance(e.unit_id, getattr(e, "addr", None))
+                tracked = self._is_tracked_instance("unit", e.unit_id, getattr(e, "addr", None))
                 col = self.s.hud_accent if sel else theme.KIND_COLOR.get(e.kind, theme.TEXT)
                 specs.append(RowSpec(
                     "unit", e.unit_id, col, names.unit_name(e.unit_id) or "?", col,
@@ -697,6 +633,45 @@ class EntityOverlay(OverlayWindow):
         else:
             self.enemy_box.hide()
 
+        # 3.5) render group members
+        if getattr(self.s, "show_group_members", False):
+            self.group_box.show()
+            specs = []
+            for e, d in self._group_members:
+                key = ("hero", getattr(e, "addr", None))
+                sel = key == self._sel
+                tracked = self._is_tracked_instance("hero", e.unit_id, getattr(e, "addr", None))
+                cls_name = e.cls or ""
+                hero_class = "warrior"
+                if cls_name.startswith("ent.hero."):
+                    hero_class = cls_name.replace("ent.hero.", "").lower()
+                elif e.unit_id:
+                    hero_class = e.unit_id.lower()
+                col_hex = {
+                    "warrior": "#f1a02b",
+                    "rogue": "#4ade80",
+                    "mage": "#38bdf8",
+                    "priest": "#eac331",
+                }.get(hero_class, theme.TEXT)
+                col = self.s.hud_accent if sel else col_hex
+                specs.append(RowSpec(
+                    None, None, col, self.model.hero_display_name(e), col,
+                    sub="◈ TRACKING" if tracked else "",
+                    value=f"{d:.0f}m", bold=sel, highlight=sel or tracked,
+                    ui_icon="player",
+                    cb=(lambda k=key, uid=e.unit_id:
+                        (self._select(*k), self._track("hero", uid)))))
+            self.group_box.fill(specs, isz)
+            if not getattr(self.model, "units_ok", True):
+                tag = "READ FAILED · RETRYING"
+            elif not self._group_members:
+                tag = "0 · NONE LOADED"
+            else:
+                tag = f"{len(self._group_members)} · ↑↓ SELECT"
+            self.group_box.header.set_tag(tag)
+        else:
+            self.group_box.hide()
+
         # 4) render wild companions (critters) - their own section, never
         # enemies, never distance-capped. Ones missing from the account
         # collection get flagged.
@@ -708,7 +683,7 @@ class EntityOverlay(OverlayWindow):
                 missing = self._owned is not None and e.unit_id not in self._owned
                 n_new += missing
                 addr = getattr(e, "addr", None)
-                tracked = self._is_tracked_instance(e.unit_id, addr)
+                tracked = self._is_tracked_instance("unit", e.unit_id, addr)
                 sel = ("comp", addr) == self._sel
                 col = theme.GOLD if missing else theme.GOOD
                 sub_bits = [b for b in ("★ NOT COLLECTED" if missing else "",

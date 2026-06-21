@@ -169,11 +169,29 @@ def outlined(sheet: str | None, id_: str | None, size: int, accent: str,
 
 @lru_cache(maxsize=64)
 def asset_icon(sheet_name: str, size: int):
-    """A bundled flat PNG from assets/map_icons/<name>.png, scaled. None if missing."""
+    """A bundled SVG or PNG map icon from assets/map_icons/<name>.(svg|png), scaled. None if missing."""
     QtGui, QtCore = _qt()
-    path = paths.assets_dir() / "map_icons" / f"{sheet_name}.png"
-    if path.exists():
-        pm = QtGui.QPixmap(str(path))
+    
+    # Check for SVG first
+    svg_path = paths.assets_dir() / "map_icons" / f"{sheet_name}.svg"
+    if svg_path.exists():
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            pm = QtGui.QPixmap(size, size)
+            pm.fill(QtGui.QColor(0, 0, 0, 0))
+            r = QSvgRenderer(str(svg_path))
+            p = QtGui.QPainter(pm)
+            p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            r.render(p, QtCore.QRectF(0, 0, size, size))
+            p.end()
+            return pm
+        except Exception:
+            pass
+
+    # Fallback to PNG
+    png_path = paths.assets_dir() / "map_icons" / f"{sheet_name}.png"
+    if png_path.exists():
+        pm = QtGui.QPixmap(str(png_path))
         if not pm.isNull():
             return pm.scaled(size, size, QtCore.Qt.KeepAspectRatio,
                              QtCore.Qt.SmoothTransformation)
@@ -262,3 +280,25 @@ def brand_qicon(name: str, size: int = 18):
     """`brand_icon` wrapped as a QIcon (for QPushButton.setIcon)."""
     QtGui, _ = _qt()
     return QtGui.QIcon(brand_icon(name, size))
+
+
+@lru_cache(maxsize=1024)
+def tile_ui(name: str, size: int, accent: str):
+    """A theme-tinted UI SVG icon (assets/icons_ui) on the standard accent-tinted
+    square tile."""
+    QtGui, QtCore = _qt()
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtGui.QColor(0, 0, 0, 0))
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing)
+    bg = QtGui.QColor(accent); bg.setAlpha(46)        # ~18%
+    bd = QtGui.QColor(accent); bd.setAlpha(140)       # ~55%
+    p.setBrush(bg)
+    p.setPen(QtGui.QPen(bd, 1))
+    p.drawRect(QtCore.QRectF(0.5, 0.5, size - 1, size - 1))
+    g = ui_icon(name, accent, size - 4)
+    if g is not None:
+        p.drawPixmap((size - g.width()) // 2, (size - g.height()) // 2, g)
+    p.end()
+    return pm
+

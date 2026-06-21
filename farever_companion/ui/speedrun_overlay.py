@@ -34,6 +34,7 @@ class SpeedrunOverlay(OverlayWindow):
 
     def __init__(self, model, settings, parent=None):
         super().__init__("SPEEDRUN", settings, geo_key="speedrun", parent=parent)
+        self._page_key = "speedrun"
         self.model = model
         self.s = settings
         self.timer = SpeedrunTimer()             # the FULL-dungeon run
@@ -68,7 +69,7 @@ class SpeedrunOverlay(OverlayWindow):
         rst.setIcon(icons.ui_qicon("refresh-cw", theme.MUTED, 14))
         rst.setToolTip("Reset timer")
         rst.clicked.connect(self.reset)
-        self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 1, rst)
+        self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 3, rst)
 
         self.uploaded.connect(self._on_uploaded)
 

@@ -12,6 +12,7 @@ import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import theme
+from ..data import icons
 
 
 class _TitleBar(QtWidgets.QFrame):
@@ -29,11 +30,20 @@ class _TitleBar(QtWidgets.QFrame):
         self.title.setObjectName("Title")
         lay.addWidget(self.title)
         lay.addStretch(1)
-        self.extra = lay   # callers can insert controls before the close btn
+        self.extra = lay   # callers can insert controls before the navigation btns
+
+        self.cog_btn = QtWidgets.QPushButton()
+        self.cog_btn.setObjectName("Icon")
+        self.cog_btn.setIcon(icons.ui_qicon("settings", theme.MUTED, 16))
+        self.cog_btn.setToolTip("Open the related config page")
+        self.cog_btn.clicked.connect(window._on_cog_clicked)
+        lay.addWidget(self.cog_btn)
+
         min_btn = QtWidgets.QPushButton("🗕")
         min_btn.setObjectName("Icon")
         min_btn.clicked.connect(window.toggle_minimize)
         lay.addWidget(min_btn)
+
         close = QtWidgets.QPushButton("✕")
         close.setObjectName("Icon")
         close.clicked.connect(window.close)
@@ -58,6 +68,7 @@ class _TitleBar(QtWidgets.QFrame):
 
 class OverlayWindow(QtWidgets.QWidget):
     """Subclass and fill `self.content` (a QVBoxLayout)."""
+    request_page = QtCore.Signal(str)
 
     def __init__(self, title: str, settings=None, geo_key: str = "", parent=None):
         super().__init__(parent)
@@ -65,6 +76,7 @@ class OverlayWindow(QtWidgets.QWidget):
         self._geo_key = geo_key or title
         self._locked = False
         self._scale = 1.0
+        self._page_key = "overlays"         # default page to open on cog click
         # Per-overlay accent (the "Highlight color" setting). Overlays re-tint
         # their own QSS to it; the control panel keeps the default cyan.
         self._accent = getattr(settings, "hud_accent", None) if settings else None
@@ -110,6 +122,7 @@ class OverlayWindow(QtWidgets.QWidget):
         if on:
             self._normal_height = self.height()
             self.setFixedHeight(36)
+            self.titlebar.cog_btn.hide()
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -118,6 +131,10 @@ class OverlayWindow(QtWidgets.QWidget):
                 self.resize(self.width(), h)
             else:
                 self.adjustSize()
+            self.titlebar.cog_btn.show()
+
+    def _on_cog_clicked(self) -> None:
+        self.request_page.emit(self._page_key)
 
     # --- click-through (Win32) ------------------------------------------
     def set_click_through(self, on: bool) -> None:

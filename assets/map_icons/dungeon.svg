@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <!-- Base shape of one sword, centered at X=32, Y=32 -->
+    <g id="sword-shape">
+      <!-- Blade -->
+      <polygon points="28,8 32,4 36,8 36,40 28,40"/>
+      <!-- Crossguard -->
+      <path d="M21,40 C21,38 43,38 43,40 L40,43.5 L24,43.5 Z"/>
+      <!-- Grip -->
+      <rect x="29" y="43.5" width="6" height="12" rx="1"/>
+      <!-- Pommel -->
+      <circle cx="32" cy="57" r="3.5"/>
+    </g>
+    
+    <!-- Crossed sword silhouettes for backing outlines -->
+    <g id="crossed-sword-shapes">
+      <use href="#sword-shape" transform="rotate(45 32 32)" />
+      <use href="#sword-shape" transform="rotate(-45 32 32)" />
+    </g>
+  </defs>
+
+  <!-- 1) Thinner, glowing neon purple outline backing (reduced stroke-width from 12 to 8) -->
+  <use href="#crossed-sword-shapes" fill="#732bf5" stroke="#732bf5" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+  
+  <!-- 2) Strong black keyline outline -->
+  <use href="#crossed-sword-shapes" fill="#101014" stroke="#101014" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- 3) The actual colored swords in front -->
+  <g>
+    <!-- Sword 1 (rotated 45) -->
+    <g transform="rotate(45 32 32)">
+      <!-- Blade (White/Silver with outline) -->
+      <polygon points="28,8 32,4 36,8 36,40 28,40" fill="#ffffff" stroke="#101014" stroke-width="1.5" stroke-linejoin="round"/>
+      <!-- Blade Center Ridge -->
+      <line x1="32" y1="5" x2="32" y2="40" stroke="#d2dae2" stroke-width="1"/>
+      
+      <!-- Crossguard (Silver steel with outline) -->
+      <path d="M21,40 C21,38 43,38 43,40 L40,43.5 L24,43.5 Z" fill="#a4b0be" stroke="#101014" stroke-width="1.5" stroke-linejoin="round"/>
+      
+      <!-- Grip (Bright Gold/Brass to stand out against black keyline and map) -->
+      <rect x="29" y="43.5" width="6" height="12" rx="1" fill="#ffa500" stroke="#101014" stroke-width="1.5"/>
+      <!-- Grip wraps details (dark horizontal lines) -->
+      <line x1="29.5" y1="47.5" x2="34.5" y2="47.5" stroke="#5d4037" stroke-width="1"/>
+      <line x1="29.5" y1="51.5" x2="34.5" y2="51.5" stroke="#5d4037" stroke-width="1"/>
+      
+      <!-- Pommel (Silver steel with outline) -->
+      <circle cx="32" cy="57" r="3.5" fill="#a4b0be" stroke="#101014" stroke-width="1.5"/>
+    </g>
+    
+    <!-- Sword 2 (rotated -45) -->
+    <g transform="rotate(-45 32 32)">
+      <!-- Blade (White/Silver with outline) -->
+      <polygon points="28,8 32,4 36,8 36,40 28,40" fill="#ffffff" stroke="#101014" stroke-width="1.5" stroke-linejoin="round"/>
+      <!-- Blade Center Ridge -->
+      <line x1="32" y1="5" x2="32" y2="40" stroke="#d2dae2" stroke-width="1"/>
+      
+      <!-- Crossguard (Silver steel with outline) -->
+      <path d="M21,40 C21,38 43,38 43,40 L40,43.5 L24,43.5 Z" fill="#a4b0be" stroke="#101014" stroke-width="1.5" stroke-linejoin="round"/>
+      
+      <!-- Grip (Bright Gold/Brass to stand out against black keyline and map) -->
+      <rect x="29" y="43.5" width="6" height="12" rx="1" fill="#ffa500" stroke="#101014" stroke-width="1.5"/>
+      <!-- Grip wraps details (dark horizontal lines) -->
+      <line x1="29.5" y1="47.5" x2="34.5" y2="47.5" stroke="#5d4037" stroke-width="1"/>
+      <line x1="29.5" y1="51.5" x2="34.5" y2="51.5" stroke="#5d4037" stroke-width="1"/>
+      
+      <!-- Pommel (Silver steel with outline) -->
+      <circle cx="32" cy="57" r="3.5" fill="#a4b0be" stroke="#101014" stroke-width="1.5"/>
+    </g>
+  </g>
+</svg>

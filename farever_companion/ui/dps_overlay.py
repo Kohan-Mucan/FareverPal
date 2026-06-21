@@ -109,6 +109,7 @@ class _Survival(QtWidgets.QWidget):
 class DpsOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("DPS", settings, geo_key="dps", parent=parent)
+        self._page_key = "combat"
         self.model = model
         self.s = settings
         self.radius = settings.dps_radius
@@ -132,7 +133,7 @@ class DpsOverlay(OverlayWindow):
         exp.clicked.connect(self._export)
         rst.clicked.connect(self._reset)
         for w in (rst, exp, minus, self._range_lbl, plus):
-            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 1, w)
+            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 3, w)
         self._update_range()
 
         row = QtWidgets.QHBoxLayout()

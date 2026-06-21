@@ -26,10 +26,17 @@ class OverlaysPageMixin:
              "Custom aiming reticle drawn over the screen centre."),
             ("speedrun", "timer", "Speedrun",
              "Run timer — start by hotkey, auto-stops on boss kill."),
+            ("compass", "radio", "Compass Needle",
+             "Accent ring on minimap + 3D pointer overlay."),
         ]
         for i, (key, icon, t, d) in enumerate(specs):
             card = C.OverlayCard(icon, t, d)
-            card.toggled.connect(lambda on, k=key: self._request_overlay(k, on))
+            if key == "compass":
+                card.toggled.connect(self._set_show_compass)
+                card.set_checked_silent(self.s.show_compass)
+                self.compass_toggle = card
+            else:
+                card.toggled.connect(lambda on, k=key: self._request_overlay(k, on))
             self._register_card(key, card)
             cards.addWidget(card, i // 3, i % 3)
         v.addLayout(cards)
@@ -48,6 +55,20 @@ class OverlaysPageMixin:
         row.addWidget(self.hide_toggle)
         v.addLayout(row)
 
+        v.addWidget(C.SectionHeader("Mouse Snapping Behavior"))
+        snap_lay = QtWidgets.QHBoxLayout()
+        snap_lay.setSpacing(12)
+        snap_active = self.s.snap_mouse_to_player
+        self.snap_500 = C.LabeledToggle("500ms", snap_active and self.s.mouse_snap_rate == 500)
+        self.snap_500.toggled.connect(lambda on: self._set_snap_rate(500, on))
+        self.snap_250 = C.LabeledToggle("250ms", snap_active and self.s.mouse_snap_rate == 250)
+        self.snap_250.toggled.connect(lambda on: self._set_snap_rate(250, on))
+        self.snap_100 = C.LabeledToggle("100ms", snap_active and self.s.mouse_snap_rate == 100)
+        self.snap_100.toggled.connect(lambda on: self._set_snap_rate(100, on))
+        snap_lay.addWidget(self.snap_500)
+        snap_lay.addWidget(self.snap_250)
+        snap_lay.addWidget(self.snap_100)
+        v.addLayout(snap_lay)
 
         v.addWidget(C.SectionHeader("Appearance"))
         op = C.SliderRow("Overlay opacity", 30, 100, int(self.s.opacity * 100),
@@ -59,6 +80,29 @@ class OverlaysPageMixin:
         v.addWidget(C.Field("Highlight color", hl))
         v.addStretch(1)
         return page
+
+    def _set_lock(self, on):
+        self.overlay_mgr.set_lock(on)
+
+    def _set_snap_rate(self, rate: int, on: bool) -> None:
+        if on:
+            self._set("snap_mouse_to_player", True)
+            self._set("mouse_snap_rate", rate)
+            self.overlay_mgr.log.emit(f"Mouse snapping ENABLED at {rate}ms rate.")
+        else:
+            if self.s.mouse_snap_rate == rate:
+                self._set("snap_mouse_to_player", False)
+                self.overlay_mgr.log.emit("Mouse snapping disabled.")
+        
+        self.overlay_mgr.update_combat_timer_rate()
+        
+        # Sync toggles
+        active_rate = self.s.mouse_snap_rate if self.s.snap_mouse_to_player else None
+        for r, t in ((500, self.snap_500), (250, self.snap_250), (100, self.snap_100)):
+            if t is not None:
+                t.blockSignals(True)
+                t.setChecked(active_rate == r)
+                t.blockSignals(False)
 
     def _set_auto_hide_menus(self, on: bool) -> None:
         self._set("auto_hide_menus", on)
@@ -75,6 +119,24 @@ class OverlaysPageMixin:
     def _set_combat_click_through(self, on: bool) -> None:
         self._set("combat_click_through", on)
         self.overlay_mgr.set_combat_click_through(on)
+
+    def _set_show_compass(self, on: bool) -> None:
+        self._set("show_compass", on)
+        tracker = self.overlay_mgr.tracker
+        if on:
+            if tracker.model is not None and tracker.s.track_kind and tracker.s.track_id:
+                tracker._start()
+        else:
+            tracker._timer.stop()
+            if tracker._needle is not None:
+                tracker._needle.hide()
+        
+        # Synchronize toggles on both pages if loaded
+        for t in (getattr(self, "compass_toggle", None), getattr(self, "entity_compass_toggle", None)):
+            if t is not None and t.isChecked() != on:
+                t.blockSignals(True)
+                t.setChecked(on)
+                t.blockSignals(False)
 
 
     def _set_entity_scale(self, v):

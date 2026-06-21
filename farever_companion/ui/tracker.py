@@ -169,10 +169,12 @@ class TrackController(QtCore.QObject):
             except ValueError:
                 return None
             return (x, y, z, label or "Waypoint")
-        if kind == "unit":
+        if kind in ("unit", "hero"):
             label = names.unit_name(key) or key
             xyz = self.model.player_xyz()
-            cands = [e for e in self.model.units() if e.unit_id == key]
+            cands = [e for e in self.model.units()
+                     if e.unit_id == key
+                     and (kind != "hero" or e.addr != self.model.player_addr)]
             if not cands:
                 self._lock_addr = None
                 return ("searching", label)

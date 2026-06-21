@@ -23,7 +23,7 @@ class EntityPageMixin:
             ("show_enemies", "Enemies"), ("show_chests", "Chests"),
             ("show_companions", "Wild companions"), ("show_gatherables", "Gatherables"),
             ("show_orbs", "Secret orbs"), ("show_drops", "Closest drops"),
-            ("enemies_only", "Enemies only"), ("class_only", "Class-relevant only"),
+            ("show_group_members", "Group Members"), ("class_only", "Class-relevant only"),
             ("show_compass", "Compass needle"), ("show_drop_window", "Show drop window"),
             ("auto_select_next_collectible", "Auto select next orb/chest"),
             ("limit_by_zone", "Limit by zone"),
@@ -35,6 +35,7 @@ class EntityPageMixin:
                                               self._enemy_filter_box.setVisible(on)))
             elif attr == "show_compass":
                 t.toggled.connect(self._set_show_compass)
+                self.entity_compass_toggle = t
             else:
                 t.toggled.connect(lambda on, a=attr: self._set(a, on))
             grid.addWidget(t, i // 2, i % 2)
@@ -149,7 +150,8 @@ class EntityPageMixin:
         scroll.setWidget(body)
         bv.addWidget(scroll)
 
-        hidden_units = set(self.s.entity_hidden_units)
+        profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
+        hidden_units = set(self.s.get_entity_hidden_units(profile))
         self._unit_chips: list[tuple[str, str, C.FilterChip]] = []   # (uid, name, chip)
         rows = sorted(((names.unit_name(u) or names.humanize(u), u)
                        for u in units.codex_unit_ids()), key=lambda t: t[0].lower())
@@ -180,21 +182,20 @@ class EntityPageMixin:
             shown += 1
 
     def _update_unit_tag(self) -> None:
-        n = len(set(self.s.entity_hidden_units))
+        profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
+        n = len(set(self.s.get_entity_hidden_units(profile)))
         total = len(self._unit_chips)
         self._unit_header.set_tag(f"{n} HIDDEN" if n else f"ALL {total} SHOWN")
 
     def _set_unit_hidden(self, uid: str, hidden: bool) -> None:
-        cur = set(self.s.entity_hidden_units)
-        (cur.add if hidden else cur.discard)(uid)
-        self.s.entity_hidden_units = sorted(cur)
-        self.s.save()
+        profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
+        self.s.toggle_unit_hidden(uid, hidden, profile)
         self._update_unit_tag()
 
     def _set_all_units_hidden(self, hidden: bool) -> None:
-        self.s.entity_hidden_units = sorted(u for u, _n, _c in self._unit_chips) \
-            if hidden else []
-        self.s.save()
+        profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
+        uids = [u for u, _n, _c in self._unit_chips]
+        self.s.set_all_units_hidden(uids, hidden, profile)
         for _uid, _name, chip in self._unit_chips:
             chip.blockSignals(True)
             chip.setChecked(not hidden)
@@ -208,13 +209,14 @@ class EntityPageMixin:
         self.s.entity_hidden_types = sorted(cur)
         self.s.save()
 
-    def _set_show_compass(self, on: bool) -> None:
-        self._set("show_compass", on)
-        tracker = self.overlay_mgr.tracker
-        if on:
-            if tracker.model is not None and tracker.s.track_kind and tracker.s.track_id:
-                tracker._start()
-        else:
-            tracker._timer.stop()
-            if tracker._needle is not None:
-                tracker._needle.hide()
+
+    def _refresh_entity_page(self) -> None:
+        profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
+        hidden_units = set(self.s.get_entity_hidden_units(profile))
+        for uid, uname, chip in self._unit_chips:
+            chip.blockSignals(True)
+            chip.setChecked(uid not in hidden_units)
+            chip.blockSignals(False)
+            chip.restyle()
+        self._update_unit_tag()
+

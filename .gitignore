@@ -54,6 +54,8 @@ _tmp*.py
 notes/
 *PLAN.md
 docs/*_INTERNALS.md
+Run_Scripts.bat
+
 
 # --- local tooling / editor config ---
 CLAUDE.md
@@ -62,4 +64,5 @@ CLAUDE.md
 .cursor/
 .cursorrules
 .aider*
+.antigravityrules
 .github/copilot-instructions.md

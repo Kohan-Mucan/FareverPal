@@ -21,6 +21,7 @@ from ..geo import nav, orbs as geo_orbs
 
 POLL_MS = 300     # POI rescan (heavy)
 FAST_MS = 33      # position/heading repaint (cheap) -> smooth pan + rotation
+USE_HERO_SVGS = False  # Set to True to use player SVGs instead of dots for group members
 
 # World -> map-image pixel transform (W1 / Siagarta). Derived from the community
 # web map (IceCaveBear/farever-map map.js): coords = [0.89*(4096-y)-1595,
@@ -138,6 +139,16 @@ class _Canvas(QtWidgets.QWidget):
             if s.minimap_enemies:
                 for e in self.model.enemies():
                     pois.append((e.x, e.y, e.z, "enemy", e.unit_id or "?", f"e{e.addr}"))
+            if getattr(s, "show_group_members", False):
+                for e in self.model.units():
+                    if e.is_hero and e.addr != self.model.player_addr:
+                        cls_name = e.cls or ""
+                        h_class = "warrior"
+                        if cls_name.startswith("ent.hero."):
+                            h_class = cls_name.replace("ent.hero.", "").lower()
+                        elif e.unit_id:
+                            h_class = e.unit_id.lower()
+                        pois.append((e.x, e.y, e.z, f"hero_{h_class}", e.unit_id or "?", f"hero{e.addr}"))
             if getattr(s, "minimap_companions", True):
                 for e, d in self.model.nearest_companions(xyz, s.companion_count):
                     pois.append((e.x, e.y, e.z, "companion", e.unit_id or "?", f"comp{e.addr}"))
@@ -289,6 +300,11 @@ class _Canvas(QtWidgets.QWidget):
         profile = self.model.player_profile()
         edge_counts = {"chest": 0, "orb": 0}
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
+            orig_kind = kind
+            hero_class = None
+            if kind.startswith("hero_"):
+                hero_class = kind.split("_", 1)[1]
+                kind = "hero"
             dx, dy = self._rel(wx, wy, scale, phi)
             dx_c = dx + self._pan_x
             dy_c = dy - self._pan_y
@@ -328,29 +344,46 @@ class _Canvas(QtWidgets.QWidget):
                     edge_counts[kind] += 1
 
             sx, sy = cx + dx_c, cy - dy_c
-            pm = self._poi_pixmap(kind, label, self.s.minimap_icon_size, done) \
-                if self.s.minimap_icons else None
+            sz = self.s.minimap_icon_size
+            if kind == "dungeon":
+                sz = int(sz * 1.25)
+            pm = self._poi_pixmap(orig_kind, label, sz, done) \
+                if (self.s.minimap_icons or (USE_HERO_SVGS and orig_kind.startswith("hero_"))) else None
             if self._is_waypoint(kind, label, poi_id, wx, wy, track_pos):
                 # the compass waypoint: accent ring so the target is obvious
                 ring = QtGui.QColor(self.s.hud_accent)
                 p.setPen(QtGui.QPen(ring, 2))
                 p.setBrush(QtCore.Qt.NoBrush)
-                r_hl = (self.s.minimap_icon_size / 2 + 3) if pm is not None else 6
+                r_hl = (sz / 2 + 3) if pm is not None else 6
                 p.drawEllipse(QtCore.QPointF(sx, sy), r_hl, r_hl)
             if pm is not None:
                 if done:
-                    p.setOpacity(0.45)
+                    p.setOpacity(0.60)
                 z = pm.width()
                 p.drawPixmap(int(sx - z / 2), int(sy - z / 2), pm)
                 if done:
                     p.setOpacity(1.0)
             else:
-                col = QtGui.QColor(theme.KIND_COLOR.get(kind, theme.TEXT))
+                if kind == "hero" and hero_class:
+                    col_hex = {
+                        "warrior": "#f1a02b",
+                        "rogue": "#4ade80",
+                        "mage": "#38bdf8",
+                        "priest": "#eac331",
+                    }.get(hero_class, theme.TEXT)
+                    col = QtGui.QColor(col_hex)
+                else:
+                    col = QtGui.QColor(theme.KIND_COLOR.get(kind, theme.TEXT))
                 if done:
-                    col.setAlpha(115)
-                p.setPen(QtCore.Qt.NoPen)
-                p.setBrush(col)
-                p.drawEllipse(QtCore.QPointF(sx, sy), 3 if edge else 4, 3 if edge else 4)
+                    col.setAlpha(160)
+                if kind == "hero":
+                    p.setPen(QtGui.QPen(QtGui.QColor(theme.BG), 1))
+                    p.setBrush(col)
+                    p.drawEllipse(QtCore.QPointF(sx, sy), 5 if edge else 6, 5 if edge else 6)
+                else:
+                    p.setPen(QtCore.Qt.NoPen)
+                    p.setBrush(col)
+                    p.drawEllipse(QtCore.QPointF(sx, sy), 3 if edge else 4, 3 if edge else 4)
         # compass + player (drawn unclipped so edge letters aren't cut)
         p.setClipping(False)
         self._draw_compass(p, cx, cy, min(w, h) / 2 - 4, phi)
@@ -359,7 +392,7 @@ class _Canvas(QtWidgets.QWidget):
         # north-up frame: world heading's y-component inverts, so -heading
         fwd = (phi - self._heading) if self._heading is not None else (math.pi / 2)
 
-        arrow_pm = icons.asset_icon("arrow", 24)
+        arrow_pm = icons.asset_icon("arrow", 30)
         if arrow_pm is not None and not arrow_pm.isNull():
             p.save()
             p.translate(cx + self._pan_x, cy + self._pan_y)
@@ -411,6 +444,15 @@ class _Canvas(QtWidgets.QWidget):
         outline); chests/crates, gatherables and obelisks use the bundled flat
         marker icons (assets/map_icons). Falls back to a tinted UI
         glyph, then to a plain dot."""
+        if USE_HERO_SVGS and kind.startswith("hero_"):
+            hero_class = kind.split("_", 1)[1]
+            col_hex = {
+                "warrior": "#f1a02b",
+                "rogue": "#4ade80",
+                "mage": "#38bdf8",
+                "priest": "#eac331",
+            }.get(hero_class, theme.TEXT)
+            return icons.ui_icon("player", col_hex, size)
         if kind in ("enemy", "companion") and label and icons.has_icon("unit", label):
             outline_col = theme.GOOD if kind == "companion" else theme.DANGER
             return icons.outlined("unit", label, size, outline_col)

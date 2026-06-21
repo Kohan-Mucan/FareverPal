@@ -53,9 +53,6 @@ for _rel, dst in (
     (os.path.join("data", "sheets"), "data/sheets"),
     (os.path.join("htdocs", "assets", "icons"), "htdocs/assets/icons"),
     (os.path.join("htdocs", "assets", "data"), "htdocs/assets/data"),
-    (os.path.join("notes", "chest_loot_index.json"), "notes"),
-    (os.path.join("notes", "chest_positions.json"), "notes"),
-    (os.path.join("notes", "orb_positions.json"), "notes"),
 ):
     src = os.path.join(SPECPATH, _rel)
     if os.path.exists(src):

@@ -323,6 +323,10 @@ class IconTile(QtWidgets.QLabel):
         """A map-marker icon (assets/map_icons) instead of a game-sheet icon."""
         self.setPixmap(icons.tile_marker(name, self._size, accent))
 
+    def set_ui_icon(self, name: str, accent: str = theme.ACCENT) -> None:
+        """A UI SVG icon (assets/icons_ui) instead of a game-sheet icon."""
+        self.setPixmap(icons.tile_ui(name, self._size, accent))
+
     def set_size(self, size: int) -> None:
         self._size = size
         self.setFixedSize(size, size)

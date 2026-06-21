@@ -60,6 +60,7 @@ class _FeedRow(QtWidgets.QWidget):
 class SkillOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("Skills", settings, geo_key="skills", parent=parent)
+        self._page_key = "combat"
         self.model = model
         self.s = settings
         self._kind = "damage"
@@ -81,7 +82,7 @@ class SkillOverlay(OverlayWindow):
         rst.setToolTip("Reset session")
         rst.clicked.connect(self._reset)
         for w in (recal, rst, exp):
-            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 1, w)
+            self.titlebar.extra.insertWidget(self.titlebar.extra.count() - 3, w)
 
         self._header = SectionHeader("SKILL BREAKDOWN")
         self.content.addWidget(self._header)

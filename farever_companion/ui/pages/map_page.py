@@ -134,15 +134,18 @@ class MapPageMixin:
         shape = C.SegmentedControl(["Circle", "Square"], self.s.minimap_shape)
         shape.currentChanged.connect(self._set_minimap_shape)
         v.addWidget(shape)
-        rot = C.LabeledToggle("Rotate with player heading", self.s.minimap_rotate)
+        toggles_lay = QtWidgets.QHBoxLayout()
+        toggles_lay.setSpacing(12)
+        rot = C.LabeledToggle("Rotate map", self.s.minimap_rotate)
         rot.toggled.connect(self._set_minimap_rotate)
-        v.addWidget(rot)
-        tex = C.LabeledToggle("World map texture", self.s.minimap_texture)
+        toggles_lay.addWidget(rot)
+        tex = C.LabeledToggle("Map texture", self.s.minimap_texture)
         tex.toggled.connect(self._set_minimap_texture)
-        v.addWidget(tex)
-        ico = C.LabeledToggle("POI icons (else dots)", self.s.minimap_icons)
+        toggles_lay.addWidget(tex)
+        ico = C.LabeledToggle("POI icons", self.s.minimap_icons)
         ico.toggled.connect(lambda on: (self._set("minimap_icons", on), self._touch_minimap()))
-        v.addWidget(ico)
+        toggles_lay.addWidget(ico)
+        v.addLayout(toggles_lay)
 
         zoom = C.SliderRow("Zoom", 2, 60, int(self.s.minimap_zoom), str)
         zoom.valueChanged.connect(self._set_minimap_zoom)
@@ -163,33 +166,29 @@ class MapPageMixin:
         layer_items = [
                 ("minimap_enemies", "Enemies"),
                 ("minimap_companions", "Companions"),
-                ("minimap_chests", "Chests / loot"),
+                ("minimap_chests", "Chests"),
                 ("minimap_gatherables", "Gatherables"),
-                ("minimap_obelisks", "Obelisks"),
+                ("minimap_obelisks", "Obelisks / Respawn"),
                 ("minimap_orbs", "Secret orbs"),
                 ("minimap_dungeons", "Dungeons")]
         for i, (attr, label) in enumerate(layer_items):
             t = C.LabeledToggle(label, getattr(self.s, attr))
             t.toggled.connect(lambda on, a=attr: self._set_minimap_layer(a, on))
-            grid.addWidget(t, i // 2, i % 2)
+            grid.addWidget(t, i // 3, i % 3)
         # "Hide collected" sits in the next grid cell so it matches the others
         hide_coll = C.LabeledToggle("Hide collected", self.s.minimap_hide_collected)
         hide_coll.toggled.connect(self._set_minimap_hide_collected)
         self._hide_collected_toggle = hide_coll
         n = len(layer_items)
-        grid.addWidget(hide_coll, n // 2, n % 2)
+        grid.addWidget(hide_coll, n // 3, n % 3)
         v.addLayout(grid)
 
         note = QtWidgets.QLabel(
-            "Right-click a marker to mark it done (persists). The compass needle"
-            " is set from the Entity overlay (click an enemy or secret orb row).")
+            "Right-click a marker to toggle done/undone (persists).        Hold right-click & drag to pan the minimap. "
+            "      Chests and orbs in close range are automatically synced and marked done or undone.")
         note.setWordWrap(True)
         note.setObjectName("Muted")
         v.addWidget(note)
-        self._orb_progress = QtWidgets.QLabel()
-        self._orb_progress.setObjectName("Muted")
-        self._refresh_orb_progress()
-        v.addWidget(self._orb_progress)
         v.addStretch(1)
         return page
 
@@ -244,13 +243,4 @@ class MapPageMixin:
             elif hasattr(ov, "canvas"):
                 ov.canvas.refresh()
 
-    def _refresh_orb_progress(self):
-        profile = self.model.player_profile() if self.model else None
-        prog = geo_orbs.region_progress(self.s.get_poi_done(profile))
-        if not prog:
-            self._orb_progress.setText("")
-            return
-        parts = [f"{geo_orbs.REGION_NAMES.get(r, r)} {d}/{t}"
-                 for r, (d, t) in prog.items()]
-        self._orb_progress.setText(
-            "Orbs collected (auto-synced near orbs): " + " · ".join(parts))
+

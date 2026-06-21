@@ -32,7 +32,7 @@ _OVERLAY_CLASSES = {
 
 class OverlayManager(QtCore.QObject):
     log = QtCore.Signal(str)            # status-log line for the panel
-    request_config = QtCore.Signal()    # an overlay asked to raise the control panel
+    request_page = QtCore.Signal(str)   # an overlay asked to raise a specific control panel page
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -53,8 +53,14 @@ class OverlayManager(QtCore.QObject):
         self.collection_owned: set | None = None
         self._combat_lock_active = False
         self._combat_timer = QtCore.QTimer(self)
-        self._combat_timer.setInterval(500)
+        self._combat_timer.setInterval(getattr(self.s, "mouse_snap_rate", 500))
         self._combat_timer.timeout.connect(self._combat_tick)
+
+    def update_combat_timer_rate(self) -> None:
+        rate = getattr(self.s, "mouse_snap_rate", 500)
+        self._combat_timer.setInterval(rate)
+        if self._combat_timer.isActive():
+            self._combat_timer.start(rate)
 
     def set_model(self, model) -> None:
         self.model = model
@@ -67,7 +73,7 @@ class OverlayManager(QtCore.QObject):
         else:
             self._orb_sync = orb_sync.FxSync()
             self._orb_timer.start(1000)
-            self._combat_timer.start(500)
+            self._combat_timer.start(getattr(self.s, "mouse_snap_rate", 500))
 
     def _orb_tick(self) -> None:
         """Mark loaded world orbs with no glow fx as collected (debounced);
@@ -103,9 +109,9 @@ class OverlayManager(QtCore.QObject):
         self.cards.setdefault(key, []).append(card)
 
     def set_cards_enabled(self, on: bool) -> None:
-        """Cards that need a live process (entity/dps/skills/map) are gated until
+        """Cards that need a live process (entity/dps/skills/map/compass) are gated until
         attach+locate succeeds. Crosshair stays available (cosmetic)."""
-        for key in ("entity", "dps", "skills", "map"):
+        for key in ("entity", "dps", "skills", "map", "compass"):
             for card in self.cards.get(key, []):
                 card.setEnabled(on)
 
@@ -125,8 +131,11 @@ class OverlayManager(QtCore.QObject):
         if key == "crosshair":
             return CrosshairOverlay(self.s)
         ov = _OVERLAY_CLASSES[key](self.model, self.s)
-        if hasattr(ov, "request_config"):
-            ov.request_config.connect(self.request_config)
+        if hasattr(ov, "request_page"):
+            ov.request_page.connect(self.request_page)
+        elif hasattr(ov, "request_config"):
+            # backwards compatibility for older overlays
+            ov.request_config.connect(lambda: self.request_page.emit("overlays"))
         if hasattr(ov, "set_collection_owned"):
             ov.set_collection_owned(self.collection_owned)
         if hasattr(ov, "set_tracker"):

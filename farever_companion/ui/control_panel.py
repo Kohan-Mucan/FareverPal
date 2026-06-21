@@ -70,7 +70,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         # code and minimap setters keep their existing access.
         self.overlay_mgr = OverlayManager(settings, self)
         self.overlay_mgr.log.connect(self.log)
-        self.overlay_mgr.request_config.connect(self._raise_self)
+        self.overlay_mgr.request_page.connect(self._select_nav)
+        self.overlay_mgr.request_page.connect(self._raise_self)
         self._nav_items: dict[str, C.NavItem] = {}
         # friends + presence
         self._friends: list = []
@@ -170,6 +171,13 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     def _on_model_changed(self, model):
         self.overlay_mgr.set_model(model)
+        # Refresh the active page if it supports profile-based data
+        idx = self.stack.currentIndex()
+        order = [k for k, _, _ in NAV]
+        if 0 <= idx < len(order):
+            key = order[idx]
+            if key == "entity" and hasattr(self, "_refresh_entity_page"):
+                self._refresh_entity_page()
 
     def _on_detaching(self):
         # The controller is about to stop the model's threads; close overlays
@@ -359,6 +367,9 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         # Freshen the account's collection when opening the tracker.
         if key == "collection" and self.s.account_token:
             self._col_pull()
+        # Refresh the active page content for profile-specific settings
+        if key == "entity" and hasattr(self, "_refresh_entity_page"):
+            self._refresh_entity_page()
 
     # ====================================================================
     #  Pages
@@ -464,6 +475,10 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     def _set_lock(self, on):
         self.overlay_mgr.set_lock(on)
+
+    def _set_snap_mouse(self, on: bool) -> None:
+        self._set("snap_mouse_to_player", on)
+        self.log("Mouse snapping ENABLED." if on else "Mouse snapping disabled.")
 
     # ====================================================================
     #  Process + overlays

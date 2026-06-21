@@ -74,6 +74,9 @@ def _ent(unit_id, owner_cls=None, x=0.0):
 def _model_with(units_list):
     m = LiveModel.__new__(LiveModel)       # headless: no proc, stubbed units()
     m.units = lambda: units_list
+    class StubLocator:
+        def live_address(self) -> int | None: return None
+    m.locator = StubLocator()
     return m
 
 
