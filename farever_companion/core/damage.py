@@ -14,7 +14,7 @@ import sys
 import time
 
 from .hl import Hl, is_ptr, _HOBJ
-from .constants import TO_NAME
+from ..constants import TO_NAME
 from .proc import Proc, ProcError
 from ..combat.dps import DamageEvent
 

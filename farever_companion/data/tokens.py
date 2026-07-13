@@ -54,29 +54,33 @@ def _boss_table_items() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def _pools() -> dict[str, list[tuple[str, float, str, str]]]:
-    """token -> [(item_id, share, rarity, type)] from items.json via_token,
+    """token -> [(item_id, share, rarity, type)] from loot tables,
     boss-exclusive weapons filtered out. Estimate only."""
-    by_id = {it["id"]: it for it in cdb.wiki("items")}
+    by_id = {it["id"]: it for it in cdb.display_data("items")}
     boss_items = _boss_table_items()
-    acc: dict[str, dict[str, float]] = {}
-    for it in cdb.wiki("items"):
-        if it["id"] in boss_items:
+    
+    # Reconstruct the pool by scanning which items are in which loot tables
+    # especially those mentioned as tokens.
+    rev_map = loot.reverse_loot_map()
+    
+    acc: dict[str, set[str]] = {}
+    for iid, tables in rev_map.items():
+        if iid in boss_items:
             continue
-        for vt in (it.get("drops") or {}).get("via_token") or []:
-            tok = vt.get("token")
-            if tok not in EXPANDABLE:
-                continue
-            share = float(vt.get("pool_share") or 0.0)
-            d = acc.setdefault(tok, {})
-            d[it["id"]] = max(d.get(it["id"], 0.0), share)
+        for tid in tables:
+            if tid in EXPANDABLE:
+                acc.setdefault(tid, set()).add(iid)
+
     out: dict[str, list[tuple[str, float, str, str]]] = {}
-    for tok, shares in acc.items():
-        total = sum(shares.values()) or 1.0
+    for tok, items in acc.items():
+        # Without pool_share from the display data, we assume equal weights
+        n = len(items)
+        share = 1.0 / n if n > 0 else 1.0
         rows = []
-        for iid, sh in shares.items():
+        for iid in items:
             m = by_id.get(iid, {})
-            rows.append((iid, sh / total, m.get("rarity") or "Common", m.get("type") or ""))
-        rows.sort(key=lambda r: r[1], reverse=True)
+            rows.append((iid, share, m.get("rarity") or "Common", m.get("type") or ""))
+        rows.sort(key=lambda r: r[0]) # Sort by ID if shares are equal
         out[tok] = rows
     return out
 

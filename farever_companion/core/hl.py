@@ -23,7 +23,7 @@ from __future__ import annotations
 import struct
 
 from .proc import Proc, ProcError
-from .constants import (
+from ..constants import (
     HOBJ as _HOBJ, HSTRUCT as _HSTRUCT, USER_MIN as _USER_MIN,
     USER_MAX as _USER_MAX, TO_NAME, TO_SUPER, TO_FIELDS, TO_RUNTIME,
     FIELD_STRIDE, RT_NFIELDS, RT_SIZE, RT_FI_CANDIDATES, HL_WSIZE,
@@ -99,7 +99,17 @@ class Hl:
         if not is_ptr(type_ptr):
             return None
         try:
-            if self.i32(type_ptr) not in (_HOBJ, _HSTRUCT):
+            kind = self.i32(type_ptr)
+            if kind == 15:  # HNULL unwrapping
+                inner_tp = self.ptr(type_ptr + 8)
+                if inner_tp:
+                    inner_kind = self.i32(inner_tp)
+                    if inner_kind in (_HOBJ, _HSTRUCT):
+                        type_ptr = inner_tp
+                        kind = inner_kind
+                    else:
+                        kind = _HSTRUCT
+            if kind not in (_HOBJ, _HSTRUCT):
                 return None
             obj_ptr = self.u64(type_ptr + 8)
             if not is_ptr(obj_ptr):
@@ -122,7 +132,17 @@ class Hl:
         while tp and tp not in seen and len(names) < limit:
             seen.add(tp)
             try:
-                if self.i32(tp) not in (_HOBJ, _HSTRUCT):
+                kind = self.i32(tp)
+                if kind == 15:  # HNULL unwrapping
+                    inner_tp = self.ptr(tp + 8)
+                    if inner_tp:
+                        inner_kind = self.i32(inner_tp)
+                        if inner_kind in (_HOBJ, _HSTRUCT):
+                            tp = inner_tp
+                            kind = inner_kind
+                        else:
+                            kind = _HSTRUCT
+                if kind not in (_HOBJ, _HSTRUCT):
                     break
                 obj_ptr = self.u64(tp + 8)
                 names.append(self._read_utf16(self.u64(obj_ptr + TO_NAME)) or "?")
@@ -148,7 +168,17 @@ class Hl:
         while tp and tp not in seen and len(names) < 16:
             seen.add(tp)
             try:
-                if self.i32(tp) not in (_HOBJ, _HSTRUCT):
+                kind = self.i32(tp)
+                if kind == 15:  # HNULL unwrapping
+                    inner_tp = self.ptr(tp + 8)
+                    if inner_tp:
+                        inner_kind = self.i32(inner_tp)
+                        if inner_kind in (_HOBJ, _HSTRUCT):
+                            tp = inner_tp
+                            kind = inner_kind
+                        else:
+                            kind = _HSTRUCT
+                if kind not in (_HOBJ, _HSTRUCT):
                     break
                 obj_ptr = self.u64(tp + 8)
                 names.append(self._read_utf16(self.u64(obj_ptr + TO_NAME)) or "?")
@@ -167,7 +197,17 @@ class Hl:
         if not is_ptr(type_ptr):
             return []
         try:
-            if self.i32(type_ptr) not in (_HOBJ, _HSTRUCT):
+            kind = self.i32(type_ptr)
+            if kind == 15:  # HNULL unwrapping
+                inner_tp = self.ptr(type_ptr + 8)
+                if inner_tp:
+                    inner_kind = self.i32(inner_tp)
+                    if inner_kind in (_HOBJ, _HSTRUCT):
+                        type_ptr = inner_tp
+                        kind = inner_kind
+                    else:
+                        kind = _HSTRUCT
+            if kind not in (_HOBJ, _HSTRUCT):
                 return []
             obj_ptr = self.u64(type_ptr + 8)
             n = self.i32(obj_ptr)
@@ -210,7 +250,17 @@ class Hl:
         try:
             while is_ptr(tp) and tp not in seen and len(levels) < 32:
                 seen.add(tp)
-                if self.i32(tp) not in (_HOBJ, _HSTRUCT):
+                kind = self.i32(tp)
+                if kind == 15:  # HNULL unwrapping
+                    inner_tp = self.ptr(tp + 8)
+                    if inner_tp:
+                        inner_kind = self.i32(inner_tp)
+                        if inner_kind in (_HOBJ, _HSTRUCT):
+                            tp = inner_tp
+                            kind = inner_kind
+                        else:
+                            kind = _HSTRUCT
+                if kind not in (_HOBJ, _HSTRUCT):
                     break
                 obj_ptr = self.u64(tp + 8)
                 levels.append(self.field_names(tp))
@@ -224,7 +274,14 @@ class Hl:
             return None
         # Read the byte offset from the concrete type's runtime layout table.
         try:
-            obj_ptr = self.u64(type_ptr + 8)
+            # Re-resolve the concrete type in case the original was HNULL-wrapped.
+            concrete_tp = type_ptr
+            kind = self.i32(concrete_tp)
+            if kind == 15:
+                inner_tp = self.ptr(concrete_tp + 8)
+                if inner_tp and self.i32(inner_tp) in (_HOBJ, _HSTRUCT):
+                    concrete_tp = inner_tp
+            obj_ptr = self.u64(concrete_tp + 8)
             rt = self.u64(obj_ptr + TO_RUNTIME)
             if not is_ptr(rt):
                 return None
@@ -244,6 +301,7 @@ class Hl:
         if off <= 0 or (0 < size < (1 << 20) and off + HL_WSIZE > size):
             return None
         return off
+
 
     def _fields_indexes(self, rt: int, nfields: int) -> list[int] | None:
         """The hl_runtime_obj field-offset array (int[nfields]). Its slot moved

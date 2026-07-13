@@ -23,7 +23,7 @@ from __future__ import annotations
 import struct
 
 from .hl import Hl, is_ptr, utf16z as _utf16z
-from .constants import TO_NAME, TO_SUPER, TO_GLOBALVAL
+from ..constants import TO_NAME, TO_SUPER, TO_GLOBALVAL
 from .proc import Proc, ProcError
 
 # Anchor class names.

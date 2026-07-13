@@ -14,21 +14,17 @@ import math
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import theme
-from .overlay_base import OverlayWindow
-from ..data import icons
-from ..geo import nav, orbs as geo_orbs
+from .. import theme
+from ..overlay_base import OverlayWindow
+from ... import constants as C
+from ...data import icons, names
+from ...geo import nav, orbs as geo_orbs, zones as geo_zones, gatherables as geo_gatherables, pois as geo_pois
 
 POLL_MS = 300     # POI rescan (heavy)
 FAST_MS = 33      # position/heading repaint (cheap) -> smooth pan + rotation
 USE_HERO_SVGS = False  # Set to True to use player SVGs instead of dots for group members
 
-# World -> map-image pixel transform (W1 / Siagarta). Derived from the community
-# web map (IceCaveBear/farever-map map.js): coords = [0.89*(4096-y)-1595,
-# 0.89*(x+1724)] over a 3584x5120 image. Collapses to: px = S*x + OX, py = S*y + OY.
-MAP_SCALE = 0.89
-MAP_OFF_X = 0.89 * 1724                       # 1534.36
-MAP_OFF_Y = 5120 - (0.89 * 4096 - 1595)       # 3069.56
+# --- map-image pixel transform ---------------------------------------------
 # camera-yaw -> rotation calibration lives in geo/nav.py (CAM_YAW_SIGN /
 # CAM_YAW_OFFSET), shared with the compass needle.
 _MAP_PM = None
@@ -36,16 +32,34 @@ _MAP_TRIED = False
 
 
 def _map_pixmap():
-    """The bundled W1 map image (lazy, cached). None if missing."""
+    """Detect which map asset to use. Prefer 'map.webp', then 'map.png'."""
     global _MAP_PM, _MAP_TRIED
     if not _MAP_TRIED:
         _MAP_TRIED = True
         try:
-            from .. import paths
-            p = paths.assets_dir() / "map" / "W1.png"
-            if p.exists():
+            from ... import paths
+            QtGui.QImageReader.setAllocationLimit(1024)
+            p_dir = paths.assets_dir() / "map"
+
+            # 1. Look for various naming patterns
+            candidates = []
+            patterns = [
+                "map.webp", "map.png"
+            ]
+            for pat in patterns:
+                candidates.extend(list(p_dir.glob(pat)))
+
+            p = None
+            if candidates:
+                # Prefer the highest resolution available (largest file size)
+                # This also prioritizes specific names if they are higher resolution
+                candidates.sort(key=lambda x: x.stat().st_size, reverse=True)
+                p = candidates[0]
+
+            if p and p.exists():
                 pm = QtGui.QPixmap(str(p))
-                _MAP_PM = pm if not pm.isNull() else None
+                if not pm.isNull():
+                    _MAP_PM = pm
         except Exception:
             _MAP_PM = None
     return _MAP_PM
@@ -75,7 +89,7 @@ class _Canvas(QtWidgets.QWidget):
         xyz = self.model.player_xyz()
         if xyz is None:
             return False
-        
+
         # Reset pan if player moved from the position where panning started/occurred
         if (self._pan_x != 0.0 or self._pan_y != 0.0) and self._last_player_pos is not None:
             dx = xyz[0] - self._last_player_pos[0]
@@ -104,44 +118,49 @@ class _Canvas(QtWidgets.QWidget):
             self._pois = []
             self.update()
             return
-        xyz = (self._px, self._py, 0.0)
+        xyz = (self._px, self._py, self._pz)
         pois = []
         s = self.s
+        limit_by_range = getattr(s, "minimap_limit_by_zone", False)
+        player_zone = geo_zones.resolve_zone(self._px, self._py, self._pz) if limit_by_range else None
+        max_dist = 400.0 if limit_by_range else 0.0
+        
         # static + live chests / crates / world-activity loot drops
         hide_coll = getattr(s, "minimap_hide_collected", False)
         profile = self.model.player_profile()
         if s.minimap_chests:
             try:
-                for r in self.model.nearest_chests_merged(xyz, n=60):
+                for r in self.model.nearest_chests_merged(xyz, n=100, max_dist=max_dist, player_zone=player_zone, use_2d=True):
                     c = next((c for c in self.model.chests if c.chest_id == r.chest_id), None)
                     if c:
                         if hide_coll and r.chest_id and s.is_done(r.chest_id, profile):
                             continue
                         is_recipe = "recipe" in r.chest_id.lower() or (r.loot_table and "recipe" in r.loot_table.lower())
                         kind = "recipe" if is_recipe else "chest"
-                        pois.append((c.x, c.y, c.z, kind,
-                                     r.loot_table or r.chest_id, r.chest_id))
+                        label = names.chest_label(r.chest_id, r.loot_table)
+                        pois.append((c.x, c.y, c.z, kind, label, r.chest_id))
                 # live-only chests (world-activity loot drops) have no static
                 # position row; plot them from the live element directly
                 static_ids = {c.chest_id for c in self.model.chests}
-                for e in self.model.live_chests():
+                for e in self.model.live_chests(player_zone=player_zone, max_dist=max_dist, use_2d=True):
                     if (e.elem_id or "") not in static_ids:
                         if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
                             continue
                         is_recipe = "recipe" in (e.elem_id or "").lower()
                         kind = "recipe" if is_recipe else "chest"
-                        pois.append((e.x, e.y, e.z, kind, e.elem_id or "loot",
+                        label = names.chest_label(e.elem_id)
+                        pois.append((e.x, e.y, e.z, kind, label,
                                      e.elem_id or f"ch{e.addr}"))
             except Exception:
                 pass
         # live entities (each layer independently toggleable)
         try:
             if s.minimap_enemies:
-                for e in self.model.enemies():
+                for e, d in self.model.nearest_enemies(xyz, n=100, max_dist=max_dist, player_zone=player_zone, use_2d=True):
                     pois.append((e.x, e.y, e.z, "enemy", e.unit_id or "?", f"e{e.addr}"))
             if getattr(s, "show_group_members", False):
-                for e in self.model.units():
-                    if e.is_hero and e.addr != self.model.player_addr:
+                for e, d in self.model.nearest_group_members(xyz, n=20, max_dist=max_dist, player_zone=player_zone, use_2d=True):
+                    if e.addr != self.model.player_addr:
                         cls_name = e.cls or ""
                         h_class = "warrior"
                         if cls_name.startswith("ent.hero."):
@@ -150,25 +169,89 @@ class _Canvas(QtWidgets.QWidget):
                             h_class = e.unit_id.lower()
                         pois.append((e.x, e.y, e.z, f"hero_{h_class}", e.unit_id or "?", f"hero{e.addr}"))
             if getattr(s, "minimap_companions", True):
-                for e, d in self.model.nearest_companions(xyz, s.companion_count):
+                # Companion range: False = 200m, Number = that range, True = max_dist (fallback)
+                c_debug = getattr(s, "show_companions_debug", False)
+                if isinstance(c_debug, (int, float)) and not isinstance(c_debug, bool):
+                    c_dist = float(c_debug)
+                else:
+                    c_dist = 200.0 if c_debug is False else max_dist
+                for e, d in self.model.nearest_companions(xyz, n=100, max_dist=c_dist, player_zone=player_zone, use_2d=True):
                     pois.append((e.x, e.y, e.z, "companion", e.unit_id or "?", f"comp{e.addr}"))
             if s.minimap_gatherables:
-                for g in self.model.gatherables():
-                    pois.append((g.x, g.y, g.z, "gatherable", g.elem_id or "?",
-                                 g.elem_id or ""))
+                # 1. Live memory elements first (accurate current state)
+                for g in self.model.gatherables(player_zone=player_zone, max_dist=max_dist, use_2d=True):
+                    label = g.elem_id or "?"
+                    name_l = label.lower()
+                    is_ore = "ore" in name_l or "tungstene" in name_l or "tin" in name_l or "copper" in name_l
+                    kind = "ore" if is_ore else "flower"
+                    
+                    # Check if this gatherable type is enabled in settings
+                    setting_attr = geo_gatherables.get_setting_attr(label)
+                    if setting_attr and not getattr(s, setting_attr, True):
+                        continue
+                    
+                    pois.append((g.x, g.y, g.z, kind, label, f"gl{g.addr}"))
+
+                # 2. Static nodes from JSON (long-range potential spawns)
+                for g in geo_gatherables.load_nodes():
+                    if player_zone and geo_zones.resolve_zone(g.x, g.y, g.z) != player_zone:
+                        continue
+                    if not player_zone and max_dist > 0 and math.hypot(g.x - self._px, g.y - self._py) > max_dist:
+                        continue
+                    
+                    # Avoid duplicates with live memory nodes
+                    if any(math.hypot(g.x - px, g.y - py) < 2.0 for px, py, pz, pk, pl, pi in pois if pk in ("ore", "flower")):
+                        continue
+
+                    label = g.name
+                    name_l = g.name.lower()
+                    is_ore = "ore" in name_l or "tungstene" in name_l or "tin" in name_l or "copper" in name_l
+                    kind = "ore" if is_ore else "flower"
+                    
+                    # Check if this gatherable type is enabled in settings
+                    setting_attr = geo_gatherables.get_setting_attr(label)
+                    if setting_attr and not getattr(s, setting_attr, True):
+                        continue
+                    
+                    pois.append((g.x, g.y, g.z, kind, label, f"g{g.x}{g.y}"))
             if s.minimap_obelisks:
-                for o in self.model.obelisks():
+                # 1. Live memory elements (status-aware)
+                for o in self.model.obelisks(player_zone=player_zone, max_dist=max_dist, use_2d=True):
+                    eid_l = (o.elem_id or "").lower()
+                    state_l = (o.state or "").lower()
+                    if any(x in eid_l for x in ("checkpoint", "start_", "finish_")):
+                        if state_l in ("disabled", "disable", "activated"):
+                            continue
+                    elif state_l in ("disabled", "disable", "desactivated"):
+                        continue
                     pois.append((o.x, o.y, o.z, o.kind, o.elem_id or o.kind,
                                  o.elem_id or f"ob{o.addr}"))
+
+                # 2. Static POIs (obelisks and respawn points)
+                for p in geo_pois.load_pois():
+                    if p.sub_kind not in ("obelisk", "respawn"):
+                        continue
+                    if player_zone and geo_zones.get_area_id(p.zone) != player_zone:
+                        continue
+                    if not player_zone and max_dist > 0 and p.dist2d(self._px, self._py) > max_dist:
+                        continue
+                    # Avoid duplicates with live memory obelisks/checkpoints
+                    if any(math.hypot(p.x - px, p.y - py) < 5.0 for px, py, pz, pk, pl, pi in pois if pk in ("obelisk", "respawn", "chest_orb")):
+                        continue
+                    pois.append((p.x, p.y, p.z, p.sub_kind, p.name or p.sub_kind, p.id))
             if s.minimap_orbs:
                 # static world orbs (Collector achievements) + live dungeon
                 # orbs; collected ones (auto-synced or right-clicked) draw
-                # greyed via the done state (or hidden if hide_collected is on)
+                # greyed via the done state (or hide if hide_collected is on)
                 for ob in geo_orbs.load_orbs():
+                    if player_zone and geo_zones.get_area_id(ob.zone) != player_zone:
+                        continue
+                    if not player_zone and max_dist > 0 and ob.dist2d(self._px, self._py) > max_dist:
+                        continue
                     if hide_coll and s.is_done(ob.orb_id, profile):
                         continue
                     pois.append((ob.x, ob.y, ob.z, "orb", ob.orb_id, ob.orb_id))
-                for e in self.model.live_orbs():
+                for e in self.model.live_orbs(player_zone=player_zone, max_dist=max_dist, use_2d=True):
                     eid = e.elem_id or f"orb{e.addr}"
                     if hide_coll and e.elem_id and s.is_done(e.elem_id, profile):
                         continue
@@ -188,9 +271,24 @@ class _Canvas(QtWidgets.QWidget):
                         continue
                     pois.append((e.x, e.y, e.z, "chest_orb", e.elem_id, e.elem_id))
             if s.minimap_dungeons:
+                # 1. Live memory teleporters
                 for t in self.model.teleporters():
                     pois.append((t.x, t.y, t.z, "dungeon", t.elem_id or "teleport",
                                  t.elem_id or f"tp{t.addr}"))
+
+                # 2. Static dungeon entrances
+                for p in geo_pois.load_pois():
+                    if p.sub_kind != "dungeon":
+                        continue
+                    if player_zone and geo_zones.get_area_id(p.zone) != player_zone:
+                        continue
+                    if not player_zone and max_dist > 0 and p.dist2d(self._px, self._py) > max_dist:
+                        continue
+                    # Avoid duplicates with live memory dungeons
+                    if any(math.hypot(p.x - px, p.y - py) < 5.0 for px, py, pz, pk, pl, pi in pois if pk == "dungeon"):
+                        continue
+                    label = p.name or p.target_activity or "Dungeon"
+                    pois.append((p.x, p.y, p.z, "dungeon", label, p.id))
         except Exception:
             pass
 
@@ -204,7 +302,7 @@ class _Canvas(QtWidgets.QWidget):
                         pois.append((o.x, o.y, o.z, "orb", o.orb_id, o.orb_id))
             elif tk == "unit" and tid:
                 if not any(p[4] == tid for p in pois):
-                    from ..data import units as udata
+                    from ...data import units as udata
                     for e in self.model.units():
                         if e.unit_id == tid:
                             kind = "companion" if udata.is_companion(e.unit_id) else "enemy"
@@ -220,8 +318,8 @@ class _Canvas(QtWidgets.QWidget):
         except Exception:
             pass
 
-        # Sort all POIs by 2D distance to player so the closest are processed first
-        pois.sort(key=lambda p: math.hypot(p[0] - self._px, p[1] - self._py))
+        # Sort all POIs by 2D distance to player so the closest are drawn LAST (on top)
+        pois.sort(key=lambda p: math.hypot(p[0] - self._px, p[1] - self._py), reverse=True)
 
         self._pois = pois
         self.update()
@@ -288,9 +386,9 @@ class _Canvas(QtWidgets.QWidget):
         if self.s.minimap_texture:
             self._draw_map(p, cx + self._pan_x, cy + self._pan_y, scale, phi)
         # rings (outline only - NoBrush, else they'd fill over the map texture)
-        p.setPen(QtGui.QColor(theme.BORDER))
+        p.setPen(QtGui.QPen(QtGui.QColor(theme.BORDER), 1))
         p.setBrush(QtCore.Qt.NoBrush)
-        for f in (0.5, 1.0):
+        for f in (1.0,):
             if square:
                 p.drawRect(QtCore.QRectF(cx - rad_x * f, cy - rad_y * f, rad_x * 2 * f, rad_y * 2 * f))
             else:
@@ -347,11 +445,27 @@ class _Canvas(QtWidgets.QWidget):
             sz = self.s.minimap_icon_size
             if kind == "dungeon":
                 sz = int(sz * 1.25)
+            elif kind == "obelisk":
+                sz += 2
+            elif kind in ("flower", "ore"):
+                sz = max(1, sz - 2)
+                # Auto-scale based on resource size suffix or type
+                label_l = label.lower()
+                if "_large" in label_l or "_big" in label_l or "tungstene" in label_l:
+                    sz = int(sz * 1.3)
+                elif "_small" in label_l:
+                    sz = int(sz * 0.85)
             pm = self._poi_pixmap(orig_kind, label, sz, done) \
                 if (self.s.minimap_icons or (USE_HERO_SVGS and orig_kind.startswith("hero_"))) else None
             if self._is_waypoint(kind, label, poi_id, wx, wy, track_pos):
                 # the compass waypoint: accent ring so the target is obvious
-                ring = QtGui.QColor(self.s.hud_accent)
+                if kind == "enemy":
+                    ring = QtGui.QColor(theme.DANGER)
+                elif kind == "companion":
+                    is_spark = "spark" in (names.unit_name(label) or "").lower()
+                    ring = QtGui.QColor(theme.GOLD if is_spark else theme.GOOD)
+                else:
+                    ring = QtGui.QColor(self.s.hud_accent)
                 p.setPen(QtGui.QPen(ring, 2))
                 p.setBrush(QtCore.Qt.NoBrush)
                 r_hl = (sz / 2 + 3) if pm is not None else 6
@@ -392,7 +506,10 @@ class _Canvas(QtWidgets.QWidget):
         # north-up frame: world heading's y-component inverts, so -heading
         fwd = (phi - self._heading) if self._heading is not None else (math.pi / 2)
 
-        arrow_pm = icons.asset_icon("arrow", 30)
+        # Player arrow size (x1.3 multiplier)
+        arrow_sz = int(self.s.minimap_icon_size * 1.3)
+        arrow_pm = icons.asset_icon("arrow", arrow_sz)
+
         if arrow_pm is not None and not arrow_pm.isNull():
             p.save()
             p.translate(cx + self._pan_x, cy + self._pan_y)
@@ -416,10 +533,10 @@ class _Canvas(QtWidgets.QWidget):
         pm = _map_pixmap()
         if pm is None:
             return
-        s, A = scale, MAP_SCALE
+        s, A = scale, C.MAP_SCALE
         cosf, sinf = math.cos(phi), math.sin(phi)
-        u0 = -MAP_OFF_X / A - self._px      # world x at image px 0
-        w0 = MAP_OFF_Y / A + self._py       # paired with the north-up Y row below
+        u0 = -C.X_OFFSET - self._px      # world x at image px 0
+        w0 = C.Y_OFFSET + self._py       # paired with the north-up Y row below
         t = QtGui.QTransform(
             s * cosf / A, -s * sinf / A,    # m11, m12  (coeffs of image x)
             s * sinf / A, s * cosf / A,     # m21, m22  (coeffs of image y; Y unflipped)
@@ -429,15 +546,53 @@ class _Canvas(QtWidgets.QWidget):
         p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
         p.setTransform(t, True)
         p.drawPixmap(0, 0, pm)
+
+        # Apply Fog of War boundary if defined
+        if C.MAP_BOUNDS:
+            try:
+                from ... import paths
+                fog_p = None
+                for name in ("fog.webp", "fog.png"):
+                    if (paths.assets_dir() / "map" / name).exists():
+                        fog_p = paths.assets_dir() / "map" / name
+                        break
+
+                if fog_p:
+                    fog_pm = QtGui.QPixmap(str(fog_p))
+                    if not fog_pm.isNull():
+                        # We are inside the transformed space 't'.
+                        # The coordinate system here is raw image pixels (0..width, 0..height).
+                        # We must convert MAP_BOUNDS (world) to these raw image pixels.
+                        w_x1, w_y1, w_x2, w_y2 = C.MAP_BOUNDS
+
+                        # World -> Image pixels (0..dim)
+                        pix_x1 = (w_x1 + C.X_OFFSET) * C.MAP_SCALE
+                        pix_y1 = (w_y1 + C.Y_OFFSET) * C.MAP_SCALE
+                        pix_x2 = (w_x2 + C.X_OFFSET) * C.MAP_SCALE
+                        pix_y2 = (w_y2 + C.Y_OFFSET) * C.MAP_SCALE
+
+                        brush = QtGui.QBrush(fog_pm)
+                        path = QtGui.QPainterPath()
+                        # Outer: the whole image
+                        path.addRect(QtCore.QRectF(0, 0, pm.width(), pm.height()))
+                        # Inner: the playable hole (ensure it's a valid rect)
+                        hole = QtCore.QRectF(pix_x1, pix_y1, pix_x2 - pix_x1, pix_y2 - pix_y1)
+                        path.addRect(hole)
+
+                        path.setFillRule(QtCore.Qt.OddEvenFill)
+                        p.setBrush(brush)
+                        p.setPen(QtCore.Qt.NoPen)
+                        p.drawPath(path)
+            except Exception:
+                pass
+
         p.restore()
-        # subtle veil so POIs/markers read clearly over the art
-        veil = QtGui.QColor(theme.BG); veil.setAlpha(70)
-        p.fillRect(self.rect(), veil)
+        # No veil: keep the map art crisp
 
     # bundled flat marker icons (assets/map_icons) per layer
-    _MARKER = {"chest": "chest", "gatherable": "gatherable", "obelisk": "obelisk",
-               "orb": "orb", "activity": "activity", "dungeon": "dungeon", "respawn": "RespawnPoint",
-               "recipe": "Recipe", "chest_orb": "GoldOrb"}
+    _MARKER = {"chest": "chest", "flower": "flower", "ore": "ore", "obelisk": "obelisk",
+               "orb": "orb", "activity": "activity", "dungeon": "dungeon", "respawn": "respawnpoint",
+               "recipe": "recipe", "chest_orb": "goldorb"}
 
     def _poi_pixmap(self, kind, label, size, done=False):
         """A POI marker pixmap: enemies show the real per-unit game icon (organic
@@ -453,17 +608,32 @@ class _Canvas(QtWidgets.QWidget):
                 "priest": "#eac331",
             }.get(hero_class, theme.TEXT)
             return icons.ui_icon("player", col_hex, size)
-        if kind in ("enemy", "companion") and label and icons.has_icon("unit", label):
+        if kind in ("enemy", "companion") and label and icons.has_icon("Units", label):
             outline_col = theme.GOOD if kind == "companion" else theme.DANGER
-            return icons.outlined("unit", label, size, outline_col)
+            if kind == "companion" and "spark" in (names.unit_name(label) or "").lower():
+                outline_col = theme.GOLD
+            return icons.outlined("Units", label, size, outline_col)
+
+        # Specific icons for ores/flowers based on their name
+        if kind in ("flower", "ore") and label:
+            label_l = label.lower()
+            # 1. Try full name (e.g. copperore_large)
+            pm = icons.marker(label_l, size)
+            if pm: return pm
+            # 2. Try base name with shared mapping from gatherables.py
+            icon_name = geo_gatherables.get_icon_name(label)
+            if icon_name != label_l:
+                pm = icons.marker(icon_name, size)
+                if pm: return pm
+
         name = self._MARKER.get(kind)
         if name:
-            if done and name in ("chest", "orb", "Recipe", "ChestOrb", "GoldOrb"):
+            if done and name in ("chest", "orb", "recipe"):
                 name = name + "2"
             pm = icons.marker(name, size)
             if pm is not None:
                 return pm
-        glyph = {"chest": "box", "obelisk": "radio", "gatherable": "dice-5",
+        glyph = {"chest": "box", "obelisk": "radio", "flower": "dice-5", "ore": "dice-5",
                  "enemy": "swords", "orb": "broadcast", "activity": "box",
                  "dungeon": "map", "companion": "heart", "pos": "map-pin",
                  "recipe": "box", "chest_orb": "broadcast"}.get(kind)
@@ -472,17 +642,44 @@ class _Canvas(QtWidgets.QWidget):
         return None
 
     def _draw_compass(self, p, cx, cy, rad, phi):
-        r = rad - 11
-        f = p.font(); f.setPointSize(8); f.setBold(True); p.setFont(f)
-        for label, ang, col in (("N", math.pi / 2, theme.DANGER),
-                                ("E", 0.0, theme.MUTED),
-                                ("S", -math.pi / 2, theme.MUTED),
-                                ("W", math.pi, theme.MUTED)):
-            a = ang + phi
+        # Scale font and box size with the minimap radius
+        base_fsize = max(7, int(rad / 12) - 3)
+        bsize = base_fsize * 3  # Enough room for growth
+        r = rad - (base_fsize / 2 + 1)
+
+        f = p.font(); f.setBold(True)
+        # label, world_angle (for highlight), draw_angle (for position), color
+        cardinals = [
+            ("N", -math.pi / 2, math.pi / 2, theme.TEXT),
+            ("E", 0.0, 0.0, theme.TEXT),
+            ("S", math.pi / 2, -math.pi / 2, theme.TEXT),
+            ("W", math.pi, math.pi, theme.TEXT),
+        ]
+
+        for label, world_ang, draw_ang, col in cardinals:
+            # Highlight the letter if the character is facing that way
+            is_facing = False
+            if self._heading is not None:
+                # Calculate angular distance between player world heading and cardinal direction
+                diff = abs((self._heading - world_ang + math.pi) % (math.pi * 2) - math.pi)
+                if diff < math.radians(50):  # 50 degree window allows lighting up both for NE/NW/etc
+                    is_facing = True
+
+            final_col = QtGui.QColor(self.s.hud_accent) if is_facing else QtGui.QColor(col)
+            f.setPointSize(base_fsize + 2 if is_facing else base_fsize)
+            p.setFont(f)
+
+            a = draw_ang + phi
             lx = cx + math.cos(a) * r
             ly = cy - math.sin(a) * r
-            p.setPen(QtGui.QColor(col))
-            p.drawText(QtCore.QRectF(lx - 8, ly - 8, 16, 16),
+
+            # Draw a subtle dark shadow first for high contrast over map art
+            p.setPen(QtGui.QColor(0, 0, 0, 160))
+            p.drawText(QtCore.QRectF(lx - bsize / 2 + 1, ly - bsize / 2 + 1, bsize, bsize),
+                       QtCore.Qt.AlignCenter, label)
+
+            p.setPen(final_col)
+            p.drawText(QtCore.QRectF(lx - bsize / 2, ly - bsize / 2, bsize, bsize),
                        QtCore.Qt.AlignCenter, label)
 
     def _track_pos(self):
@@ -503,6 +700,16 @@ class _Canvas(QtWidgets.QWidget):
             return kind == "orb" and poi_id == tid
         if tk == "unit":
             return kind in ("enemy", "companion") and label == tid
+        if tk == "gather":
+            if kind not in ("ore", "flower", "gather"):
+                return False
+            # Check if this node matches the tracked coordinates
+            try:
+                coords = tid.split("|", 1)[0].split(",")
+                tx, ty = float(coords[0]), float(coords[1])
+                return abs(wx - tx) < 0.5 and abs(wy - ty) < 0.5
+            except (ValueError, IndexError):
+                return False
         if tk == "pos" and track_pos is not None:
             return (abs(wx - track_pos[0]) < 0.5 and abs(wy - track_pos[1]) < 0.5) or poi_id == "tracked_pos"
         return False
@@ -510,7 +717,7 @@ class _Canvas(QtWidgets.QWidget):
     # overlapping markers: the click prefers the kind the player most likely
     # aims at (orbs are small primary targets and lose a raw nearest-test)
     _CLICK_PRIORITY = {"orb": 0, "enemy": 1, "chest": 2, "activity": 2,
-                       "dungeon": 3, "obelisk": 4, "gatherable": 5}
+                       "dungeon": 3, "obelisk": 4, "flower": 5, "ore": 5}
 
     def _poi_at(self, pos):
         """The POI under a click, hit-testing the *drawn* position - same edge
@@ -571,7 +778,11 @@ class _Canvas(QtWidgets.QWidget):
             poi = self._poi_at(e.position())
             if poi is not None and tr is not None:
                 wx, wy, wz, kind, label, poi_id = poi
-                
+
+                # Block tracking/clicking for certain static reference markers
+                if kind in ("obelisk", "respawn", "dungeon"):
+                    return
+
                 # Highlight and select the clicked item in the EntityOverlay if it is open
                 if tr.parent() is not None:
                     entity_ov = getattr(tr.parent(), "overlays", {}).get("entity")
@@ -586,18 +797,22 @@ class _Canvas(QtWidgets.QWidget):
                         old_tracker = entity_ov._tracker
                         entity_ov._tracker = None
                         try:
-                            entity_ov.select_by_key(kind, clean_key, open_drops=False)
+                            # Map minimap internal types back to entity HUD group types
+                            ekind = "gather" if kind in ("ore", "flower") else kind
+                            entity_ov.select_by_key(ekind, clean_key, open_drops=False)
                         finally:
                             entity_ov._tracker = old_tracker
-                
+
                 if kind == "orb" and poi_id and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)
                 elif kind in ("enemy", "companion") and label and label != "?":
                     tr.toggle("unit", label)
+                elif kind in ("ore", "flower"):
+                    tr.toggle("gather", f"{wx:.1f},{wy:.1f},{wz:.1f}|{label or kind}")
                 else:
-                    # incl. live dungeon orbs (not in the static index):
-                    # any other marker becomes a fixed-position waypoint
-                    tr.toggle("pos", f"{wx:.1f},{wy:.1f},{wz:.1f}|{label or kind}")
+                    # Specific kinds for chests or generic pos for anything else
+                    tk = "chest" if kind in ("chest", "recipe", "activity") else "pos"
+                    tr.toggle(tk, f"{wx:.1f},{wy:.1f},{wz:.1f}|{label or kind}")
                 return
             # drag the window from the map body (the only grip in bare mode)
             self._drag = e.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
@@ -609,8 +824,45 @@ class _Canvas(QtWidgets.QWidget):
             delta = e.position() - self._right_drag_start
             if delta.manhattanLength() > 3:
                 self._right_click_panned = True
-                self._pan_x = self._pan_start_x + delta.x()
-                self._pan_y = self._pan_start_y + delta.y()
+
+                # Current intended pan in screen pixels
+                raw_pan_x = self._pan_start_x + delta.x()
+                raw_pan_y = self._pan_start_y + delta.y()
+
+                if C.MAP_BOUNDS:
+                    # Calculate the world position the center of the minimap is looking at.
+                    # Pan shifts the "camera target" away from the player's position.
+                    scale = self._scale()
+                    phi = self._phi()
+                    c, s = math.cos(phi), math.sin(phi)
+
+                    # Screen pan -> unrotated screen delta (rx, ry)
+                    # Note: sy = cy - dy_c in paintEvent, so we flip pan_y sign
+                    rx, ry = -raw_pan_x, raw_pan_y
+                    dx = rx * c + ry * s
+                    dy = -rx * s + ry * c
+
+                    # Unrotated screen delta -> world delta
+                    tx = self._px + dx / scale
+                    ty = self._py - dy / scale
+
+                    # Clamp the "view center" to the playable fog-free bounds
+                    x1, y1, x2, y2 = C.MAP_BOUNDS
+                    tx = max(x1, min(x2, tx))
+                    ty = max(y1, min(y2, ty))
+
+                    # Convert clamped world position back to screen pan pixels
+                    dx = (tx - self._px) * scale
+                    dy = (self._py - ty) * scale
+                    rx = dx * c - dy * s
+                    ry = dx * s + dy * c
+
+                    self._pan_x = -rx
+                    self._pan_y = ry
+                else:
+                    self._pan_x = raw_pan_x
+                    self._pan_y = raw_pan_y
+
                 self.update()
 
     def mouseReleaseEvent(self, e):
@@ -675,10 +927,7 @@ class MinimapOverlay(OverlayWindow):
         self.s = settings
         self._tracker = None
         self._sync_fn = None   # callable(bool) set by overlay_manager to sync map-page toggle
-        self._bare_sync_fn = None # callable(bool) set by overlay_manager to sync boardless toggle
-
-        # Allow double clicking on the title bar to toggle bare mode
-        self.titlebar.mouseDoubleClickEvent = lambda e: self.set_bare(not self.s.minimap_bare) if e.button() == QtCore.Qt.LeftButton else None
+        self._zoom_sync_fn = None # callable(int) set by overlay_manager to sync map-page zoom slider
 
         zin = QtWidgets.QPushButton("+"); zin.setObjectName("Icon")
         zout = QtWidgets.QPushButton("−"); zout.setObjectName("Icon")
@@ -719,28 +968,15 @@ class MinimapOverlay(OverlayWindow):
         self.canvas.refresh()   # initial POIs immediately
 
     def set_bare(self, on: bool) -> None:
-        """Chromeless: hide the titlebar, hint, and card panel, just the map.
-        Drag the map body to move it (when unlocked)."""
-        self.s.minimap_bare = on
-        self.s.save()
-        self.titlebar.setVisible(not on)
+        super().set_bare(on)
         self._hint.setVisible(not on)
-        if on:
-            self._frame.setStyleSheet("background:transparent;border:0;")
-            self.content.setContentsMargins(0, 0, 0, 0)
-        else:
-            self._frame.setStyleSheet("")     # revert to the QSS #Card look
-            self.content.setContentsMargins(8, 6, 8, 8)
-        
-        # Sync the checkbox in the main UI
-        if self._bare_sync_fn is not None:
-            self._bare_sync_fn(on)
-
         self.canvas.update()
 
     def _zoom(self, f):
         self.s.minimap_zoom = max(2.0, min(60.0, self.s.minimap_zoom * f))
         self.s.save()
+        if self._zoom_sync_fn is not None:
+            self._zoom_sync_fn(int(self.s.minimap_zoom))
         self.canvas.update()
 
     def _toggle_hide_collected(self):

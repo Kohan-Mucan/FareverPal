@@ -13,7 +13,7 @@ from fakemem import FakeProc, HeapBuilder
 pytest.importorskip("farever_companion.core.scene")
 from farever_companion.core.hl import Hl
 from farever_companion.core.scene import Scene
-from farever_companion.core.constants import (
+from farever_companion.constants import (
     OFF_GAMELAYER, OFF_CONFIG_DIFFICULTY, OFF_CONFIG_MAPID, OFF_BOX_VALUE,
 )
 

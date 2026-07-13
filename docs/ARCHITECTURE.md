@@ -143,7 +143,7 @@ status strip, settings sync). It delegates every other concern:
   cards, plus global opacity/lock. The panel exposes `self.proc` / `self.model` /
   `self.overlays` as properties onto these two, so the page builders are unchanged.
 - Each page is a mixin in its own file: `ui/pages/{overlays,entity,combat,loot,
-  crosshair,map_page,log}.py`, plus `ui/account.py`, `ui/friends_page.py`,
+  map_page,log}.py`, plus `ui/account.py`, `ui/friends_page.py`,
   `ui/speedrun_page.py`. `ControlPanel` composes them. One generic
   `ui/workers.py:CallWorker` runs any off-thread API call. `tests/test_ui_layering.py`
   enforces a per-file line budget (so the panel can't reabsorb a concern) and that

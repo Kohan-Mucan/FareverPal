@@ -4,10 +4,10 @@ import webbrowser
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import theme
-from . import components as C
-from .workers import CallWorker
-from ..api import presence_and_friends
+from .. import theme
+from .. import components as C
+from ..workers import CallWorker
+from ...api import presence_and_friends
 
 class FriendsPageMixin:
     def _page_friends(self):
@@ -96,6 +96,7 @@ class FriendsPageMixin:
         lay = QtWidgets.QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
+        lay.setAlignment(QtCore.Qt.AlignVCenter)
         dot = QtWidgets.QFrame()
         dot.setFixedSize(8, 8)
         dot.setStyleSheet(f"background:{color};border:0;")
@@ -132,6 +133,7 @@ class FriendsPageMixin:
         lay = QtWidgets.QHBoxLayout(frame)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(12)
+        lay.setAlignment(QtCore.Qt.AlignVCenter)
         av = QtWidgets.QLabel()
         av.setFixedSize(34, 34)
         av.setPixmap(self._initial_tile(f.get("username", ""), 34))

@@ -17,6 +17,7 @@ from .chest_resolver import ChestResolver, ChestRow
 from .damage_source import DamageSourceManager
 from . import attributes
 from ..combat.dps import DpsMeter
+from ..constants import OFF_HERO_OWNERPLAYER
 from ..data import loot, units as udata, rarity as rarity_mod, encounters as encdata
 
 XYZ = tuple[float, float, float]
@@ -171,8 +172,12 @@ class LiveModel:
         return [e for e in self.units() if e.is_enemy]
 
     @staticmethod
-    def _ranked(pool: list[Entity], xyz: XYZ, n: int, max_dist: float):
-        ranked = sorted(((e, e.dist(*xyz)) for e in pool), key=lambda t: t[1])
+    def _ranked(pool: list[Entity], xyz: XYZ, n: int, max_dist: float, use_2d: bool = False):
+        if use_2d:
+            ranked = sorted(((e, e.dist2d(xyz[0], xyz[1])) for e in pool), key=lambda t: t[1])
+        else:
+            ranked = sorted(((e, e.dist(*xyz)) for e in pool), key=lambda t: t[1])
+            
         if max_dist > 0:
             ranked = [(e, d) for e, d in ranked if d <= max_dist]
         return ranked[:n]
@@ -181,13 +186,39 @@ class LiveModel:
                         enemies_only: bool = False,
                         hide_types: set[str] | None = None,
                         hide_units: set[str] | None = None,
-                        player_zone: str | None = None):
+                        player_zone: str | None = None,
+                        use_2d: bool = False):
         # wild companions (critters) are ent.Foe but not enemies - they get
         # their own list (nearest_companions)
-        pool = [e for e in self.units()
-                if (e.is_enemy or (enemies_only and e.is_hero))
-                and not udata.is_companion(e.unit_id)
-                and e.addr != self.player_addr]
+        pool = []
+        p_addr = self.player_addr
+        p_player_addr = self.hl.ptr(p_addr + OFF_HERO_OWNERPLAYER) if p_addr else None
+
+        for e in self.units():
+            # If it's owned by the player, it's not an enemy
+            if p_addr and (e.owner_addr == p_addr or (p_player_addr and e.owner_addr == p_player_addr)):
+                continue
+            if e.is_player_owned:
+                continue
+                
+            if not (e.is_enemy or (enemies_only and e.is_hero)):
+                continue
+            if udata.is_companion(e.unit_id):
+                continue
+            if e.addr == p_addr:
+                continue
+            
+            # Filter out internal engine objects (Spawners, Patrol paths, triggers)
+            uid_l = (e.unit_id or "").lower()
+            found_internal = False
+            for s in ("patrol", "spawn", "trigger", "marker", "point", "target", "area"):
+                if s in uid_l:
+                    found_internal = True
+                    break
+            if found_internal:
+                continue
+                
+            pool.append(e)
         if hide_types:
             pool = [e for e in pool if udata.unit_type(e.unit_id) not in hide_types]
         if hide_units:
@@ -195,20 +226,36 @@ class LiveModel:
         if player_zone:
             from ..geo import zones as geo_zones
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
-        return self._ranked(pool, xyz, n, max_dist)
+        return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
-    def nearest_companions(self, xyz: XYZ, n: int, player_zone: str | None = None):
+    def nearest_companions(self, xyz: XYZ, n: int, max_dist: float = 0.0,
+                           hide_units: set[str] | None = None,
+                           player_zone: str | None = None,
+                           use_2d: bool = False):
         """Wild catchable companions (critters) near the player. Player-owned
         ones (equipped pets, own or other players') are excluded. Deliberately
-        ignores the max-distance cap: critters are sparse and collectors want
-        them visible from anywhere in the loaded scene."""
-        pool = [e for e in self.units()
-                if e.is_foe and udata.is_companion(e.unit_id)
-                and not e.is_player_owned]
+        ignores the max-distance cap by default (if max_dist=0): critters are
+        sparse and collectors want them visible from anywhere in the loaded scene.
+        Includes only active spawned entities."""
+        pool = []
+        p_addr = self.player_addr
+        p_player_addr = self.hl.ptr(p_addr + OFF_HERO_OWNERPLAYER) if p_addr else None
+
+        for e in self.units():
+            if e.is_foe and udata.is_companion(e.unit_id):
+                # Exclude pets owned by the player or other players
+                if p_addr and (e.owner_addr == p_addr or (p_player_addr and e.owner_addr == p_player_addr)):
+                    continue
+                if e.is_player_owned:
+                    continue
+                if hide_units and e.unit_id in hide_units:
+                    continue
+                pool.append(e)
+
         if player_zone:
             from ..geo import zones as geo_zones
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
-        return self._ranked(pool, xyz, n, 0.0)
+        return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
     def player_name(self, hero_addr: int) -> str | None:
         try:
@@ -284,25 +331,33 @@ class LiveModel:
         return hero.unit_id or "Hero"
 
     def nearest_group_members(self, xyz: XYZ, n: int, max_dist: float = 0.0,
-                              player_zone: str | None = None):
+                              player_zone: str | None = None,
+                              use_2d: bool = False):
         pool = [e for e in self.units()
                 if e.is_hero and e.addr != self.player_addr]
         if player_zone:
             from ..geo import zones as geo_zones
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
-        return self._ranked(pool, xyz, n, max_dist)
+        return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
-    def live_chests(self, player_zone: str | None = None) -> list[Element]:
+    def live_chests(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         try:
             import math
             from dataclasses import replace
             from ..geo import zones as geo_zones
+            pxyz = self.player_xyz()
             out = []
             for e in self.scene.elements(self.player_addr):
                 if e.is_chest and e.elem_id and not (
                     "activity" in e.elem_id.lower() or
+                    "checkpoint" in e.elem_id.lower() or
                     e.elem_id.startswith("BossChest")
                 ):
+                    if max_dist > 0 and pxyz:
+                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                        if dist > max_dist:
+                            continue
+                    
                     if player_zone:
                         ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
                         if ezone != player_zone:
@@ -323,28 +378,61 @@ class LiveModel:
         except ProcError:
             return []
 
-    def gatherables(self) -> list[Element]:
+    def gatherables(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         try:
-            return [e for e in self.scene.elements(self.player_addr) if e.is_gatherable]
+            from ..geo import zones as geo_zones
+            pxyz = self.player_xyz()
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if e.is_gatherable:
+                    if max_dist > 0 and pxyz:
+                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                        if dist > max_dist:
+                            continue
+                    if player_zone:
+                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
+                        if ezone != player_zone:
+                            continue
+                    out.append(e)
+            return out
         except ProcError:
             return []
 
-    def obelisks(self) -> list[Element]:
+    def obelisks(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         try:
-            return [e for e in self.scene.elements(self.player_addr) if e.is_obelisk]
+            from ..geo import zones as geo_zones
+            pxyz = self.player_xyz()
+            out = []
+            for e in self.scene.elements(self.player_addr):
+                if e.is_obelisk:
+                    if max_dist > 0 and pxyz:
+                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                        if dist > max_dist:
+                            continue
+                    if player_zone:
+                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
+                        if ezone != player_zone:
+                            continue
+                    out.append(e)
+            return out
         except ProcError:
             return []
 
-    def live_orbs(self, player_zone: str | None = None) -> list[Element]:
+    def live_orbs(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         """Dungeon secret orbs (InstanceOrb) in the loaded scene."""
         try:
             from ..geo import zones as geo_zones
+            pxyz = self.player_xyz()
             out = []
             for e in self.scene.elements(self.player_addr):
                 if e.is_orb and e.elem_id and (
                     "redorb" in e.elem_id.lower() or
                     "secretorb" in e.elem_id.lower()
                 ):
+                    if max_dist > 0 and pxyz:
+                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                        if dist > max_dist:
+                            continue
                     if player_zone:
                         ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
                         if ezone != player_zone:
@@ -377,7 +465,9 @@ class LiveModel:
                     out.append(e)
                 elif e.is_orb and e.elem_id and not (
                     "redorb" in e.elem_id.lower() or
-                    "secretorb" in e.elem_id.lower()
+                    "secretorb" in e.elem_id.lower() or
+                    "chestorb" in e.elem_id.lower() or
+                    "timercollectrun" in e.elem_id.lower()
                 ):
                     out.append(e)
             return out
@@ -395,22 +485,14 @@ class LiveModel:
 
     def world_orb_fx(self) -> list[tuple[str, bool]]:
         """(orb_id, glow-fx present) for loaded world secret orbs. The fx
-        pointer is the reliable collected signal (collected = no fx); offset
-        resolved by name per element type and cached."""
+        pointer is the reliable collected signal (collected = no fx)."""
+        from ..constants import OFF_ELEM_FX
         out = []
         try:
             for e in self.scene.elements(self.player_addr):
                 if not (e.elem_id and e.elem_id.startswith("RedOrb_World")):
                     continue
-                tp = self.hl.ptr(e.addr)
-                if tp is None:
-                    continue
-                if tp not in self._FX_OFF_CACHE:
-                    self._FX_OFF_CACHE[tp] = self.hl.field_offset(tp, "currentFx")
-                off = self._FX_OFF_CACHE[tp]
-                if off is None:
-                    continue
-                out.append((e.elem_id, bool(self.hl.u64(e.addr + off))))
+                out.append((e.elem_id, bool(self.hl.u64(e.addr + OFF_ELEM_FX))))
         except ProcError:
             return []
         return out
@@ -462,7 +544,7 @@ class LiveModel:
                 states.append((uid, False, None))
         return (members, kill_id, states, engage_any)
 
-    HARD_LEVEL = 20     # Hard mode scales every dungeon to this level
+    HARD_LEVEL = 25     # Hard mode scales every dungeon to this level (cap)
 
     def boss_level(self) -> int | None:
         bid = self.dungeon_boss
@@ -520,9 +602,11 @@ class LiveModel:
                                                 default_table)
 
     def nearest_chests_merged(self, xyz: XYZ, n: int, max_dist: float = 0.0,
-                              player_zone: str | None = None) -> list[ChestRow]:
+                              player_zone: str | None = None,
+                              use_2d: bool = False) -> list[ChestRow]:
         return self.chests_resolver.nearest_chests_merged(
-            xyz, n, self.dungeon_boss, self.live_chests(player_zone), max_dist, player_zone)
+            xyz, n, self.dungeon_boss, self.live_chests(player_zone, max_dist, use_2d=use_2d),
+            max_dist, player_zone, use_2d=use_2d)
 
     def player_profile(self) -> str | None:
         """The character profile string, cached so load boundaries don't cause a None fallback."""
@@ -541,31 +625,6 @@ class LiveModel:
             return self.locator.player_class()
         except Exception:
             return None
-
-    def closest_loot(self, xyz: XYZ, default_level: int) -> Nearest | None:
-        cands: list[tuple[float, Nearest]] = []
-        for e, d in self.nearest_enemies(xyz, 6, 0.0, enemies_only=True):
-            if not e.unit_id:
-                continue
-            tbl = udata.loot_table_for_unit(e.unit_id)
-            if not tbl:
-                continue
-            info = udata.unit_info(e.unit_id)
-            lvl = (info.get("lvl") if info else None) or default_level
-            cands.append((d, Nearest("enemy", e.unit_id, d, tbl, lvl,
-                                     note=(info.get("type") if info else "") or "")))
-            break
-        for cr in self.nearest_chests_merged(xyz, n=15):
-            tbl = cr.loot_table
-            if not tbl:
-                continue
-            cands.append((cr.dist * self.CHEST_DIST_BIAS,
-                          Nearest("chest", cr.chest_id, cr.dist, tbl,
-                                  cr.level or default_level, note=cr.state or "")))
-            break
-        if not cands:
-            return None
-        return min(cands, key=lambda t: t[0])[1]
 
     def enemy_drop_source(self, entity, dist: float, default_level: int) -> Nearest | None:
         uid = getattr(entity, "unit_id", None)

@@ -1,9 +1,7 @@
-"""Collection-tracker catalog (headless).
+"""Collection-tracker catalog.
 
-Loads htdocs/assets/data/collection_catalog.json — the same generated file the
-website serves — and provides the category list, item rows, and progress math.
-Ownership itself lives on the account (synced via api.collection_list/set);
-this module is pure data so it stays unit-testable without Qt or network.
+Loads the collection catalog (extracted from game files) and provides the
+category list, item rows, and progress math.
 """
 from __future__ import annotations
 
@@ -11,17 +9,23 @@ import json
 from functools import lru_cache
 
 from .. import paths
+from . import raw_data
 
 
 @lru_cache(maxsize=1)
 def catalog() -> dict:
     """{version, categories:[{key,label,icon_sheet}], items:[...]}; {} if absent."""
-    path = paths.wiki_data_dir() / "collection_catalog.json"
+    data = raw_data.DATA.get("info_collection_catalog")
+    if data:
+        return data
+
+    # Fallback to JSON
+    path = paths.display_data_dir() / "collection_catalog.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("items") else {}
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) and data.get("items") else {}
 
 
 def categories() -> list[dict]:
@@ -43,11 +47,7 @@ def icon_sheet(category: str) -> str:
 
 
 def summary(owned: set[str]) -> dict:
-    """Per-category progress {key: (collected, total)} + '_overall'.
-
-    Totals count obtainable items only, mirroring the server's math, so both
-    UIs always show the same numbers.
-    """
+    """Per-category progress {key: (collected, total)} + '_overall'."""
     out: dict[str, tuple[int, int]] = {}
     coll_all = total_all = 0
     for c in categories():
@@ -62,8 +62,7 @@ def summary(owned: set[str]) -> dict:
 
 def matches(row: dict, query: str = "", subtype: str = "", rarity: str = "",
             state: str = "", owned: set[str] | None = None) -> bool:
-    """One item row against the page's filters. `state` in ('', 'missing',
-    'collected'); `query` is case-insensitive over name/subtype/source."""
+    """One item row against the page's filters."""
     if subtype and row.get("subtype") != subtype:
         return False
     if rarity and row.get("rarity") != rarity:

@@ -147,7 +147,7 @@ class NeedleOverlay(QtWidgets.QWidget):
             p.setPen(pen)
             p.drawEllipse(QtCore.QPointF(px, py), R_IN, R_IN * sq)
         elif self._angle is not None:
-            self._draw_needle(p, px, py, self._angle, color, sq)
+            self._draw_needle(p, px, py, self._angle, color, sq, self._dz, self._dist)
 
         # distance + label at a FIXED y (independent of tilt, no jitter)
         ty = py + 45
@@ -281,7 +281,7 @@ class NeedleOverlay(QtWidgets.QWidget):
         return head, tail
 
     @classmethod
-    def _draw_needle(cls, p, px, py, angle, color, sq):
+    def _draw_needle(cls, p, px, py, angle, color, sq, dz=0.0, dist=0.0):
         """Ground-plane needle: rotate in the plane, squash vertically by the
         camera tilt, and draw an extruded dark side under the top face so it
         reads as a flat 3D arrow lying on the floor. The side gets thicker the
@@ -291,6 +291,21 @@ class NeedleOverlay(QtWidgets.QWidget):
         keyline = QtGui.QColor(11, 14, 20, 210)
         side = QtGui.QColor(color).darker(220)
         extrude = 2 + 8 * (1.0 - sq)
+
+        slope = dz / dist if dist > 0 else 0.0
+        slope = max(-1.0, min(1.0, slope))
+        # Tilt factor based on camera pitch representation (sq)
+        tilt_factor = math.sqrt(max(0.0, 1.0 - sq * sq)) / max(0.1, sq)
+
+        tilted_head = QtGui.QPolygonF()
+        for pt in head:
+            y_tilted = pt.y() * (1.0 + slope * tilt_factor)
+            tilted_head.append(QtCore.QPointF(pt.x(), y_tilted))
+
+        tilted_tail = QtGui.QPolygonF()
+        for pt in tail:
+            y_tilted = pt.y() * (1.0 + slope * tilt_factor)
+            tilted_tail.append(QtCore.QPointF(pt.x(), y_tilted))
 
         def pass_(dy, fill_head, outline):
             p.save()
@@ -302,7 +317,7 @@ class NeedleOverlay(QtWidgets.QWidget):
             pen.setCosmetic(True)
             p.setPen(pen)
             p.setBrush(fill_head)
-            p.drawPolygon(head)
+            p.drawPolygon(tilted_head)
             p.restore()
 
         # extruded side (slightly lower), then the lit top face

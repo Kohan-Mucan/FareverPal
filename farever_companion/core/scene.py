@@ -19,11 +19,13 @@ from dataclasses import dataclass
 
 from .hl import Hl, is_ptr
 from .proc import Proc
-from .constants import (   # offsets live in one place; re-exported for callers
+from ..constants import (   # offsets live in one place; re-exported for callers
     OFF_GAMELAYER, OFF_UNITS_ARR, OFF_ELEMS_ARR, OFF_OWNER, OFF_POS,
     OFF_UNITID, OFF_ELEMID, OFF_ELEMSTATE, UNIT_BLOCK,
-    OFF_CONFIG_DIFFICULTY, OFF_CONFIG_MAPID, OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
-    OFF_MAIN_ACTIVITY,
+    OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
+    OFF_MAIN_ACTIVITY, OFF_UATTR, OFF_LEVEL_UNIT, OFF_HEALTH,
+    OFF_HERO_OWNERPLAYER, OFF_RIFT_BOOL, OFF_WORLD_MAPID,
+    OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES
 )
 
 _ELEM_KINDS = {
@@ -38,7 +40,7 @@ _ELEM_KINDS = {
     "ent.interactible.InstanceOrb": "orb",
     "ent.interactible.Teleporter": "dungeon",   # dungeon entrances / teleports
 }
-PLAYER_OWNER_CLASSES = {"ent.Hero"}
+PLAYER_OWNER_CLASSES = {"ent.Hero", "ent.hero.Warrior", "ent.hero.Rogue", "ent.hero.Mage", "ent.hero.Priest"}
 
 
 @dataclass
@@ -46,16 +48,24 @@ class Entity:
     addr: int
     cls: str | None          # leaf class, e.g. "ent.Foe", "ent.foe.Boss"
     unit_id: str | None
-    owner_cls: str | None
     x: float
     y: float
     z: float
+    level: int = 0
+    hp: float = 0.0
+    owner_addr: int = 0
+    owner_cls: str | None = None
     is_foe: bool = False     # descends from ent.Foe (super-chain)
     is_hero: bool = False    # descends from ent.Hero
 
     @property
     def is_player_owned(self) -> bool:
-        return self.owner_cls in PLAYER_OWNER_CLASSES
+        if not self.owner_cls:
+            return False
+        if self.owner_cls == "st.Player":
+            return True
+        # Match any Hero class or generic ent.Hero
+        return self.owner_cls == "ent.Hero" or self.owner_cls.startswith("ent.hero.")
 
     @property
     def is_enemy(self) -> bool:
@@ -72,6 +82,9 @@ class Entity:
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))
 
+    def dist2d(self, x: float, y: float) -> float:
+        return math.hypot(self.x - x, self.y - y)
+
 
 @dataclass
 class Element:
@@ -85,34 +98,80 @@ class Element:
 
     @property
     def kind(self) -> str:
-        return _ELEM_KINDS.get(self.cls or "", (self.cls or "")
+        k = _ELEM_KINDS.get(self.cls or "", (self.cls or "")
                                .replace("ent.interactible.", "").replace("ent.", ""))
+        if self.elem_id:
+            eid_l = self.elem_id.lower()
+            if self.is_chest:
+                return "chest"
+            if self.is_orb:
+                return "orb"
+            if self.is_obelisk:
+                if "checkpoint" in eid_l or "finish_" in eid_l or "start_" in eid_l:
+                    if self.state and self.state.lower() == "completed":
+                        return "chest_orb"
+                if "respawn" in eid_l:
+                    return "respawn"
+                return "obelisk"
+            if self.is_gatherable:
+                return "gatherable"
+            if self.is_teleporter:
+                return "dungeon"
+        return k
 
     @property
     def is_gatherable(self) -> bool:
-        return self.cls == "ent.interactible.Gatherable"
+        if self.cls == "ent.interactible.Gatherable":
+            return True
+        if self.cls == "ent.Element" and self.elem_id:
+            eid_l = self.elem_id.lower()
+            return "gather" in eid_l or "ore" in eid_l or "flower" in eid_l
+        return False
 
     @property
     def is_chest(self) -> bool:
-        return self.cls == "ent.interactible.Chest"
+        if self.cls == "ent.interactible.Chest":
+            return True
+        if self.cls == "ent.Element" and self.elem_id:
+            eid_l = self.elem_id.lower()
+            return ("chest" in eid_l or "crate" in eid_l) and "orb" not in eid_l and "checkpoint" not in eid_l
+        return False
 
     @property
     def is_obelisk(self) -> bool:
-        return self.cls in ("ent.interactible.Obelisk", "ent.interactible.RespawnPoint")
+        if self.cls in ("ent.interactible.Obelisk", "ent.interactible.RespawnPoint"):
+            return True
+        if self.cls == "ent.Element" and self.elem_id:
+            eid_l = self.elem_id.lower()
+            return "obelisk" in eid_l or "respawn" in eid_l or "checkpoint" in eid_l or "start_" in eid_l or "finish_" in eid_l
+        return False
 
     @property
     def is_orb(self) -> bool:
-        return self.cls == "ent.interactible.InstanceOrb"
+        if self.cls == "ent.interactible.InstanceOrb":
+            return True
+        if self.cls == "ent.Element" and self.elem_id:
+            eid_l = self.elem_id.lower()
+            return ("orb" in eid_l or "secretorb" in eid_l or "timercollectrun" in eid_l) and "instanceorb" not in eid_l
+        return False
 
     @property
     def is_teleporter(self) -> bool:
         if not self.cls:
             return False
         cls_lower = self.cls.lower()
-        return "teleporter" in cls_lower or "portal" in cls_lower or "dungeon" in cls_lower
+        if "teleporter" in cls_lower or "portal" in cls_lower or "dungeon" in cls_lower:
+            return True
+        if self.cls == "ent.Element" and self.elem_id:
+            eid_l = self.elem_id.lower()
+            return "teleporter" in eid_l or "portal" in eid_l or "dungeon" in eid_l or "instanceorb" in eid_l
+        return False
 
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))
+
+    def dist2d(self, x: float, y: float) -> float:
+        return math.hypot(self.x - x, self.y - y)
 
 
 class Scene:
@@ -131,19 +190,27 @@ class Scene:
 
     def difficulty(self, pbase: int | None) -> int | None:
         """Instance difficulty from GameLayer.config: 0=Normal, 1=Hard, None
-        outside an instance. Independent of enemy levels. The config pointer's
-        offset on GameLayer drifts between builds, so it's discovered by signature
-        (mapId contains 'POI') and cached; see core/constants."""
+        outside an instance. Independent of enemy levels."""
         gl = self.gamelayer(pbase)
         if gl is None:
             return None
+            
+        # 1. Try candidates from constants.py
+        for off in OFF_CONFIG_CANDIDATES:
+            try:
+                cfg = self.hl.ptr(gl + off)
+                if cfg and self._is_config_struct(cfg):
+                    self._cfg_off = off
+                    return self._difficulty_at(cfg)
+            except: pass
+
         if self._cfg_off is not None:
-            d = self._difficulty_at(self.hl.ptr(gl + self._cfg_off))
-            if d is not None:
-                return d
+            cfg = self.hl.ptr(gl + self._cfg_off)
+            if cfg and self._is_config_struct(cfg):
+                return self._difficulty_at(cfg)
             self._cfg_off = None
-        # uncached (outside an instance, or just entered): throttle the GameLayer
-        # sweep so a 20 Hz caller can't hammer it. Cached reads above stay O(1).
+            
+        # 2. Fallback: Scan GameLayer for the config struct
         now = time.monotonic()
         if now - self._cfg_scan_at < self.CONFIG_RESCAN_TTL:
             return None
@@ -151,52 +218,219 @@ class Scene:
         blk = self.proc.try_read(gl, CONFIG_SCAN_BYTES)
         if blk is None:
             return None
-        for off in range(0, len(blk) - 7, 8):
-            p = struct.unpack_from("<Q", blk, off)[0]
-            if not is_ptr(p):
-                continue
-            d = self._difficulty_at(p)
-            if d is not None:
-                self._cfg_off = off
-                return d
+        
+        # Using a while loop to bypass environment linter issues with 'range'
+        i = 0
+        while i < (len(blk) - 7):
+            p = struct.unpack_from("<Q", blk, i)[0]
+            if is_ptr(p) and self._is_config_struct(p):
+                self._cfg_off = i
+                return self._difficulty_at(p)
+            i += 8
+        return None
+
+    def _is_config_struct(self, cfg: int) -> bool:
+        """Validates that cfg points to a st.Config-like struct."""
+        # Try mapId candidates from constants.py
+        for off in OFF_CONFIG_MAPID_CANDIDATES:
+            try:
+                mp = self.hl.ptr(cfg + off)
+                if is_ptr(mp) and self.hl.class_of(mp) == "String":
+                    s = self.hl.hl_string(mp)
+                    if s and ("POI" in s or "World" in s or "Dungeon" in s or "Z1" in s):
+                        return True
+            except:
+                pass
+        return False
+
+    def _difficulty_at(self, cfg: int | None) -> int | None:
+        """Read difficulty from a candidate config struct."""
+        if not cfg:
+            return None
+            
+        # Try difficulty candidates from constants.py
+        for off in OFF_CONFIG_DIFF_CANDIDATES:
+            # 1. Try as boxed Null<Int>
+            box = self.hl.ptr(cfg + off)
+            if is_ptr(box):
+                try:
+                    raw = self.proc.try_read(box + OFF_BOX_VALUE, 4)
+                    if raw:
+                        v = struct.unpack("<i", raw)[0]
+                        if v in (0, 1): return v
+                except: pass
+            
+            # 2. Try as raw i32
+            try:
+                raw = self.proc.try_read(cfg + off, 4)
+                if raw:
+                    v = struct.unpack("<i", raw)[0]
+                    if v in (0, 1): return v
+            except: pass
+            
+        return None
+
+    def map_id(self, pbase: int | None) -> str | None:
+        """The internal map/zone ID (e.g. 'POI_Forest_Z1' or 'World_Z1')."""
+        gl = self.gamelayer(pbase)
+        if not gl: return None
+        
+        # 1. Try Config.mapId
+        self.difficulty(pbase)
+        if self._cfg_off:
+            cfg = self.hl.ptr(gl + self._cfg_off)
+            if cfg:
+                # Use the first valid mapId candidate
+                for off in OFF_CONFIG_MAPID_CANDIDATES:
+                    mid_ptr = self.hl.ptr(cfg + off)
+                    if mid_ptr:
+                        s = self.hl.hl_string(mid_ptr)
+                        if s and len(s) > 1:
+                            return s
+
+        # 2. Try MainActivity.activityId (Common in dungeons)
+        act = self.hl.ptr(gl + OFF_MAIN_ACTIVITY)
+        if act:
+            tp_act = self.hl.ptr(act)
+            if tp_act:
+                # Try many common field names for IDs in activity objects
+                for fn in ("activityId", "mapId", "id", "name", "type"):
+                    off = self.hl.field_offset(tp_act, fn)
+                    if off:
+                        sptr = self.hl.ptr(act + off)
+                        if is_ptr(sptr) and self.hl.class_of(sptr) == "String":
+                            s = self.hl.hl_string(sptr)
+                            if s and len(s) > 1: return s
+
+        # 3. Try World object (Common in open world)
+        world = self.hl.ptr(gl + OFF_WORLD_MAPID)
+        if world:
+            tp_world = self.hl.ptr(world)
+            if tp_world:
+                for fn in ("mapId", "id", "name", "zoneId"):
+                    off = self.hl.field_offset(tp_world, fn)
+                    if off:
+                        sptr = self.hl.ptr(world + off)
+                        if is_ptr(sptr) and self.hl.class_of(sptr) == "String":
+                            s = self.hl.hl_string(sptr)
+                            if s and len(s) > 1: return s
+        
+        # 4. Try scanning Config for ANY string that looks like a Map ID
+        if self._cfg_off:
+            cfg = self.hl.ptr(gl + self._cfg_off)
+            if cfg:
+                # Scan first 0x40 bytes for a String pointer
+                for scan_off in range(0, 0x40, 8):
+                    sptr = self.hl.ptr(cfg + scan_off)
+                    if is_ptr(sptr) and self.hl.class_of(sptr) == "String":
+                        s = self.hl.hl_string(sptr)
+                        if s and ("POI" in s or "World" in s or "Z1" in s or "Z2" in s or "Dungeon" in s):
+                            return s
+        return None
+
+    def activity_id(self, pbase: int | None) -> str | None:
+        """The current activity ID (e.g. 'Dungeon_Wolf_Hard')."""
+        gl = self.gamelayer(pbase)
+        if not gl: return None
+        
+        # 1. Try Config object
+        self.difficulty(pbase)
+        if self._cfg_off:
+            cfg = self.hl.ptr(gl + self._cfg_off)
+            if cfg:
+                # activityID is the first field (offset 0) or offset 0x08 in the config struct
+                for off in (0, 8, 16):
+                    sptr = self.hl.ptr(cfg + off)
+                    if is_ptr(sptr) and self.hl.class_of(sptr) == "String":
+                        s = self.hl.hl_string(sptr)
+                        if s and len(s) > 1 and "shard" not in s.lower(): return s
+        
+        # 2. Try MainActivity directly
+        act = self.hl.ptr(gl + OFF_MAIN_ACTIVITY)
+        if act:
+            tp_act = self.hl.ptr(act)
+            if tp_act:
+                for fn in ("activityId", "id", "name", "activity_id", "type"):
+                    off = self.hl.field_offset(tp_act, fn)
+                    if off:
+                        sptr = self.hl.ptr(act + off)
+                        if is_ptr(sptr) and self.hl.class_of(sptr) == "String":
+                            s = self.hl.hl_string(sptr)
+                            if s and len(s) > 1: return s
+        return None
+
+    def shard_id(self, pbase: int | None) -> str | int | None:
+        """The current world shard/instance ID or name."""
+        gl = self.gamelayer(pbase)
+        if not gl: return None
+        
+        # 1. Try GameLayer.serverName (Found in your debug dump)
+        tp_gl = self.hl.ptr(gl)
+        if tp_gl:
+            off_sn = self.hl.field_offset(tp_gl, "serverName")
+            if off_sn:
+                sptr = self.hl.ptr(gl + off_sn)
+                if sptr:
+                    return self.hl.hl_string(sptr)
+
+        # 2. Try Config.shardId / lobbyId
+        self.difficulty(pbase)
+        if self._cfg_off:
+            cfg = self.hl.ptr(gl + self._cfg_off)
+            if cfg:
+                tp_cfg = self.hl.ptr(cfg)
+                if tp_cfg:
+                    for fn in ("shardId", "lobbyId", "instanceId", "channel"):
+                        off_cfg = self.hl.field_offset(tp_cfg, fn)
+                        if off_cfg:
+                            # Try as string first, then int
+                            val = self.hl.ptr(cfg + off_cfg)
+                            if val and self.hl.class_of(val) == "String":
+                                return self.hl.hl_string(val)
+                            return self.hl.i32(cfg + off_cfg)
         return None
 
     def in_dungeon(self, pbase: int | None) -> bool:
-        """True when the player is inside a dungeon instance.
-
-        Reads GameLayer.mainActivity (fixed offset 0xd8) and checks whether its
-        class descends from st.activity.Dungeon.  This is the same signal the
-        game itself uses: the field is set when the layer is a dungeon instance
-        and cleared (or a different type) in the open world / town zones.  Far
-        more reliable than the old POI-mapId scan which missed dungeons whose
-        mapId doesn't contain 'POI'.
-        """
+        """True when the player is inside a dungeon instance."""
         gl = self.gamelayer(pbase)
         if gl is None:
             return False
+            
+        # 1. Primary: Activity class check (fastest)
         act = self.hl.ptr(gl + OFF_MAIN_ACTIVITY)
-        if act is None:
-            return False
-        cls = self.hl.class_of(act)
-        return cls == "st.activity.Dungeon"
+        if act and self.hl.is_a(act, "st.activity.Dungeon"):
+            return True
+            
+        # 2. Robust Fallback: Map ID check via Config (covers drift in Activity offsets)
+        mid = self.map_id(pbase)
+        if mid and ("POI_" in mid or "Dungeon_" in mid):
+            return True
+            
+        return False
 
-    def _difficulty_at(self, cfg: int | None) -> int | None:
-        """Read difficulty from a candidate config struct, validating it's the
-        real one (mapId is a 'POI' String, difficulty box holds 0/1)."""
-        if not cfg:
-            return None
-        mp = self.hl.ptr(cfg + OFF_CONFIG_MAPID)
-        s = self.hl.hl_string(mp) if mp else None
-        if not s or "POI" not in s:
-            return None
-        box = self.hl.ptr(cfg + OFF_CONFIG_DIFFICULTY)
-        if not box:
-            return None
-        raw = self.proc.try_read(box + OFF_BOX_VALUE, 4)
-        if raw is None:
-            return None
-        v = struct.unpack("<i", raw)[0]
-        return v if v in (0, 1) else None
+    def is_rift(self, pbase: int | None) -> bool:
+        """True when the current layer is a Rift."""
+        gl = self.gamelayer(pbase)
+        if gl is None:
+            return False
+        # Try known offset for isRift boolean
+        raw = self.proc.try_read(gl + OFF_RIFT_BOOL, 1)
+        if raw and struct.unpack("<?", raw)[0]:
+            return True
+        # Fallback: check activity name
+        aid = self.activity_id(pbase)
+        return aid is not None and "Rift" in aid
+
+    def _clean_id(self, raw_id: str | None) -> str | None:
+        """Handle path-like IDs returned by some engine versions
+        (e.g. 'Units/Enemies/Wolf/Wolf_Z1W.prefab' -> 'Wolf_Z1W')."""
+        if not raw_id:
+            return raw_id
+        if "/" in raw_id or "\\" in raw_id:
+            # Take the last part of the path and strip the extension
+            import os
+            return os.path.splitext(os.path.basename(raw_id))[0]
+        return raw_id
 
     def units(self, pbase: int | None) -> list[Entity]:
         gl = self.gamelayer(pbase)
@@ -206,21 +440,84 @@ class Scene:
         if not ptrs:
             return []
         blocks = self.proc.read_many(ptrs, UNIT_BLOCK)
+        
+        # Collect attribute pointers for batch reading HP
+        attr_ptrs = []
+        for blk in blocks:
+            if blk and len(blk) >= OFF_UATTR + 8:
+                ap = struct.unpack_from("<Q", blk, OFF_UATTR)[0]
+                attr_ptrs.append(ap if is_ptr(ap) else 0)
+            else:
+                attr_ptrs.append(0)
+        
         out: list[Entity] = []
-        for ptr, blk in zip(ptrs, blocks):
+        for ptr, blk, attr_ptr in zip(ptrs, blocks, attr_ptrs):
             if blk is None or len(blk) < UNIT_BLOCK:
                 continue
             type_ptr = struct.unpack_from("<Q", blk, 0)[0]
             owner_ptr = struct.unpack_from("<Q", blk, OFF_OWNER)[0]
+            # Try Hero-to-Player owner at 0x498 (OFF_HERO_OWNERPLAYER)
+            hero_owner_ptr = 0
+            if len(blk) >= OFF_HERO_OWNERPLAYER + 8:
+                hero_owner_ptr = struct.unpack_from("<Q", blk, OFF_HERO_OWNERPLAYER)[0]
+            
             x, y, z = struct.unpack_from("<ddd", blk, OFF_POS)
             uid_ptr = struct.unpack_from("<Q", blk, OFF_UNITID)[0]
+            lvl = struct.unpack_from("<i", blk, OFF_LEVEL_UNIT)[0]
+            
+            # Read HP if we have an attribute pointer
+            hp = 0.0
+            if attr_ptr:
+                hp_raw = self.proc.try_read(attr_ptr + OFF_HEALTH, 8)
+                if hp_raw:
+                    hp = struct.unpack("<d", hp_raw)[0]
+
             anc = self.hl.ancestors(type_ptr)
+            
+            unit_id = self.hl.hl_string(uid_ptr) if is_ptr(uid_ptr) else None
+            unit_id = self._clean_id(unit_id)
+            
+            # Determine the owner: prefer st.Player (o2 on Hero), then any Hero class (o1 on Foe/Pet)
+            o1 = struct.unpack_from("<Q", blk, OFF_OWNER)[0]
+            o2 = struct.unpack_from("<Q", blk, OFF_HERO_OWNERPLAYER)[0] if len(blk) > OFF_HERO_OWNERPLAYER else 0
+            
+            final_owner_ptr = 0
+            final_owner_cls = None
+            
+            # 1. Try to find a st.Player directly (highest authority)
+            for cand in (o2, o1):
+                if is_ptr(cand):
+                    cls = self.hl.class_of(cand)
+                    if cls == "st.Player":
+                        final_owner_ptr, final_owner_cls = cand, cls
+                        break
+            
+            # 2. If no Player found, look for an ent.Hero subclass (typical for pets)
+            if not final_owner_ptr:
+                for cand in (o2, o1):
+                    if is_ptr(cand):
+                        cls = self.hl.class_of(cand)
+                        if cls == "ent.Hero" or (cls and cls.startswith("ent.hero.")):
+                            final_owner_ptr, final_owner_cls = cand, cls
+                            break
+
+            # 3. Last resort: any valid pointer (for engine-owned objects)
+            if not final_owner_ptr:
+                for cand in (o1, o2): # Prefer o1 (GameObject.owner) for non-hero units
+                    if is_ptr(cand):
+                        final_owner_ptr = cand
+                        final_owner_cls = self.hl.class_of(cand)
+                        break
+
             out.append(Entity(
                 addr=ptr,
                 cls=self.hl.type_name(type_ptr),
-                unit_id=self.hl.hl_string(uid_ptr) if is_ptr(uid_ptr) else None,
-                owner_cls=self.hl.class_of(owner_ptr) if is_ptr(owner_ptr) else None,
+                unit_id=unit_id,
+                owner_addr=final_owner_ptr,
+                owner_cls=final_owner_cls,
                 x=x, y=y, z=z,
+                level=lvl,
+                hp=hp,
                 is_foe="ent.Foe" in anc,
                 is_hero="ent.Hero" in anc,
             ))
@@ -243,10 +540,14 @@ class Scene:
             x, y, z = struct.unpack_from("<ddd", blk, OFF_POS)
             eid_ptr = struct.unpack_from("<Q", blk, OFF_ELEMID)[0]
             state_ptr = struct.unpack_from("<Q", blk, OFF_ELEMSTATE)[0]
+            
+            elem_id = self.hl.hl_string(eid_ptr) if is_ptr(eid_ptr) else None
+            elem_id = self._clean_id(elem_id)
+            
             out.append(Element(
                 addr=ptr,
                 cls=self.hl.type_name(type_ptr),
-                elem_id=self.hl.hl_string(eid_ptr) if is_ptr(eid_ptr) else None,
+                elem_id=elem_id,
                 state=self.hl.hl_string(state_ptr) if is_ptr(state_ptr) else None,
                 x=x, y=y, z=z,
             ))

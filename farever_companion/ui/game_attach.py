@@ -27,12 +27,24 @@ class _LocateWorker(QtCore.QThread):
     def __init__(self, model: LiveModel):
         super().__init__()
         self.model = model
+        self._stop_requested = False
 
     def run(self):
         try:
-            self.done.emit(self.model.locate_player())
+            # Check periodically if we should stop
+            addr = self.model.locate_player()
+            if not self._stop_requested:
+                self.done.emit(addr)
         except Exception as e:
-            self.done.emit(e)
+            if not self._stop_requested:
+                self.done.emit(e)
+
+    def stop(self):
+        """Request the thread to stop and wait for it to finish."""
+        self._stop_requested = True
+        # For threads with custom run(), quit() has no effect - wait for natural completion
+        if self.isRunning():
+            self.wait(30000)  # Generous timeout for long scans (30 seconds)
 
 
 class GameAttachmentController(QtCore.QObject):
@@ -43,7 +55,7 @@ class GameAttachmentController(QtCore.QObject):
     located_changed = QtCore.Signal(bool) # enable/disable the overlay cards
     model_changed = QtCore.Signal(object) # the live model (or None) -> OverlayManager
     detaching = QtCore.Signal()           # about to release: close overlays FIRST
-    goto_log = QtCore.Signal()            # manual attach failure -> open the Log tab
+    goto_log = QtCore.Signal()           # manual attach failure -> open the Log tab
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
@@ -56,6 +68,7 @@ class GameAttachmentController(QtCore.QObject):
         self._located_shown = False        # has the UI applied the 'located' transition?
         self._located_fail_logged = False
         self._cooldown = 0                 # ticks to skip after an auto-attach failure
+        self._stopped = False              # flag to prevent new work during shutdown
         # locate elapsed-time counter (the busy bar widget lives in the panel)
         self._locate_t0: float | None = None
         self._locate_timer = QtCore.QTimer(self)
@@ -68,12 +81,25 @@ class GameAttachmentController(QtCore.QObject):
 
     def start(self) -> None:
         """Begin watching for the game (call once the panel's UI exists)."""
+        self._stopped = False
         self._attach_timer.start()
         self.refresh_status()
 
     def stop(self) -> None:
+        """Stop timers and wait for any running locate worker to finish cleanly."""
+        self._stopped = True
         self._attach_timer.stop()
         self._locate_timer.stop()
+        # Wait for locate worker to finish before continuing shutdown
+        if self._worker is not None:
+            if self._worker.isRunning():
+                self._worker.stop()
+            # Disconnect signal to prevent potential segfaults during destruction
+            try:
+                self._worker.done.disconnect()
+            except Exception:
+                pass
+            self._worker = None
 
     # --- locate progress feedback ---------------------------------------
     def _start_locate(self) -> None:
@@ -97,6 +123,8 @@ class GameAttachmentController(QtCore.QObject):
 
     # --- attach / locate -------------------------------------------------
     def attach(self, auto: bool = False) -> None:
+        if self._stopped:
+            return
         self._busy = True
         try:
             self.proc = Proc.attach()
@@ -156,7 +184,8 @@ class GameAttachmentController(QtCore.QObject):
         'located' latch so the moment it resolves again the located transition
         (status + overlay-card gating) is re-applied. Without this the status can
         stick on 'waiting for world' after a menu->world round-trip even though
-        the tools (which read player_addr live) are working."""
+        the tools (which read player_addr live) are working.
+        """
         if self._located_shown:
             self._located_shown = False
             self.located_changed.emit(False)
@@ -164,6 +193,8 @@ class GameAttachmentController(QtCore.QObject):
     # --- auto-attach watcher --------------------------------------------
     def _attach_tick(self) -> None:
         """2 s poll: attach/locate/detach with the game, via the manual paths."""
+        if self._stopped:
+            return
         if backend_name() == "none":
             return
         if self._cooldown > 0:
@@ -203,7 +234,7 @@ class GameAttachmentController(QtCore.QObject):
 
     def _relocate(self) -> None:
         """Quietly re-run the locate worker (attached but not yet in-world)."""
-        if self.model is None or self._busy:
+        if self._stopped or self.model is None or self._busy:
             return
         if self._worker is not None and self._worker.isRunning():
             return
@@ -214,7 +245,8 @@ class GameAttachmentController(QtCore.QObject):
 
     def _auto_detach(self) -> None:
         """Detach because the game closed/restarted; the watcher re-attaches
-        automatically when it relaunches."""
+        automatically when it relaunches.
+        """
         self.detach()
         self.log.emit("Game closed — detached. Watching for Farever…")
         self.refresh_status()
@@ -224,7 +256,8 @@ class GameAttachmentController(QtCore.QObject):
 
         Auto-attach is always on (no UI toggle); `auto_attach` survives as a
         hidden settings.json escape hatch, if a user sets it false there, the
-        watcher stops attaching and we just read 'detached'."""
+        watcher stops attaching and we just read 'detached'.
+        """
         if self.proc is not None:
             return
         if self.s.auto_attach and backend_name() != "none":
@@ -236,10 +269,20 @@ class GameAttachmentController(QtCore.QObject):
         """Tear down the live session. Emits `detaching` FIRST so the panel closes
         the overlays before the model's background threads stop (overlays read the
         model). Called by the watcher (game closed), on update install, and on app
-        close, there is no manual detach button."""
+        close, there is no manual detach button.
+        """
         self._busy = False
         self._located_shown = False
         self._stop_locate()
+        # Wait for locate worker to finish before continuing shutdown
+        if self._worker is not None:
+            if self._worker.isRunning():
+                self._worker.stop()
+            try:
+                self._worker.done.disconnect()
+            except Exception:
+                pass
+            self._worker = None
         self.detaching.emit()              # panel closes overlays + clears their model
         if self.model is not None:
             try:

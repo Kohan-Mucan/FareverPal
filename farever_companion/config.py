@@ -1,7 +1,7 @@
 """User settings + persistence.
 
-Stored as JSON under %APPDATA%/FareverCompanion/ so it survives across runs and
-the packaged exe. No core/Qt imports here (pure data) so any layer can read it.
+Stored as JSON inside moddata/ folder next to the app executable (or dist/moddata in dev mode).
+No core/Qt imports here (pure data) so any layer can read it.
 """
 from __future__ import annotations
 
@@ -45,33 +45,42 @@ def _settings_path() -> Path:
 @dataclass
 class Settings:
     # what the overlays show
-    show_enemies: bool = True
+    show_enemies: bool = False
     show_chests: bool = True
-    show_drops: bool = True
+    show_gatherables: bool = True
     show_group_members: bool = False
     PlayerNames: bool = False
-    enemy_count: int = 8
-    chest_count: int = 6
+    enemy_count: int = 6
+    chest_count: int = 5
+    gatherable_count: int = 5
     # wild catchable companions (critters) as their own HUD section
     show_companions: bool = True
-    companion_count: int = 6
-    # unitType ids hidden from the entity HUD's enemy list ([] = show all)
-    entity_hidden_types: list = field(default_factory=list)
-    # individual unit ids hidden from the enemy list ([] = show all)
-    entity_hidden_units: list = field(default_factory=list)
+    companion_count: int = 5
+    show_companions_debug: bool | int = False
+    # individual unit ids hidden from the companion list ([] = show all)
+    companion_hidden_units: list = field(default_factory=list)
+    # individual flower/ore visibility (all true by default)
+    show_lavendula: bool = True
+    show_madrigold: bool = True
+    show_zealotus: bool = True
+    show_ancientthyme: bool = True
+    show_copperore: bool = True
+    show_tinore: bool = True
+    show_tungstene: bool = True
     # nearest uncollected secret orbs as their own HUD section (click = compass)
     show_orbs: bool = True
     orb_count: int = 5
     max_dist: float = 0.0            # 0 = no cap
     limit_by_zone: bool = True
+    entity_hide_collected: bool = True # hide orbs & chests already marked done in the HUD
     icon_size: int = 28
-    opacity: float = 0.92
+    opacity: float = 0.9
     ui_scale: float = 1.0
     click_through: bool = False
     lock_overlays: bool = False      # lock HUD position + make click-through (mouse passes to game)
     show_drop_window: bool = False
     combat_click_through: bool = False
-    auto_hide_menus: bool = False
+    auto_hide_menus: bool = True
     snap_mouse_to_player: bool = False  # snap mouse to center of game window when not in menus
     mouse_snap_rate: int = 500         # interval in ms for mouse snapping/checks (500, 250, 100)
 
@@ -81,9 +90,8 @@ class Settings:
     dps_scale: float = 1.0
     hud_accent: str = "#38bdf8"      # overlay accent/highlight color (per HUD tab)
     # drop prediction
-    level: int = 20
+    level: int = 25
     player_class: str = "Auto"       # Auto | Warrior | Rogue | Mage | Priest | Off
-    class_only: bool = True
     rows_per_rarity: int = 6
     # dps
     dps_radius: int = 30             # bosses are always tracked regardless
@@ -95,39 +103,42 @@ class Settings:
     # ui/skill_table.py), used by the Skill Breakdown panel. Toggle in Combat page.
     dps_columns: list = field(default_factory=lambda: ["pct", "dps", "hits", "crit", "max"])
     # show the survivability strip (incoming DTPS + HP + death recap) when data exists
-    dps_survival: bool = True
+    dps_survival: bool = False
     # show the full cumulative SKILL TOTALS breakdown (icons + dmg per skill) below
     # recent cycles, in Full mode
-    dps_skill_totals: bool = True
+    dps_skill_totals: bool = False
     # personal-best parse per boss unit_id -> {"dps": float, "hps": float}
     dps_best: dict = field(default_factory=dict)
     # live per-skill breakdown via the DamageDisplay cluster scan (see
     # core/damage_source.py). Default OFF until validated live; HP-diff stays the
     # fallback regardless.
     dps_per_skill: bool = False
+    entity_bare: bool = False
+    dps_bare: bool = False
+    skills_bare: bool = False
     # minimap
     minimap_zoom: float = 8.0
     minimap_size: int = 400
     minimap_shape: str = "Square"     # Circle | Square
     minimap_rotate: bool = True       # rotate map with player heading (else north-up)
-    minimap_bare: bool = True         # chromeless: just the map, no titlebar/panel
+    minimap_bare: bool = False         # chromeless: just the map, no titlebar/panel
     minimap_texture: bool = True      # draw the W1 world map under the POIs
     minimap_icons: bool = True        # POIs as real icons (else plain dots)
-    minimap_icon_size: int = 28       # POI icon size on the minimap (px)
+    minimap_icon_size: int = 24       # POI icon size on the minimap (px)
     # minimap layer visibility (independent of the entity overlay's show_* flags)
-    minimap_enemies: bool = True
+    minimap_enemies: bool = False
     minimap_chests: bool = True       # chests, crates & world-activity loot drops
-    minimap_gatherables: bool = True
+    minimap_gatherables: bool = False
     minimap_obelisks: bool = True
     minimap_orbs: bool = True         # secret orbs (Collector achievements)
     minimap_dungeons: bool = True     # dungeon entrances / teleporters
     minimap_companions: bool = True   # wild companions / critters
     minimap_hide_collected: bool = False  # hide orbs & chests already marked done
+    minimap_limit_by_zone: bool = True    # limit to 400m range when ON
     # compass-needle target ("" = none): kind "orb" tracks a static secret orb,
     # kind "unit" locks onto the nearest live instance of that unit id
     track_kind: str = ""
     track_id: str = ""
-    show_gatherables: bool = True
     show_obelisks: bool = True
     show_compass: bool = False
     auto_select_next_collectible: bool = True
@@ -135,17 +146,8 @@ class Settings:
     open_overlay_dps: bool = False
     open_overlay_skills: bool = False
     open_overlay_map: bool = False
-    open_overlay_crosshair: bool = False
     open_overlay_speedrun: bool = False
-    # crosshair overlay
-    crosshair_style: str = "Cross + Dot"   # Cross + Dot | Circle | Cross | Dot | T-Shape
-    crosshair_size: int = 10               # arm length (px)
-    crosshair_gap: int = 4                  # center gap (px)
-    crosshair_thickness: int = 2
-    crosshair_dot: int = 2                  # dot radius (px)
-    crosshair_color: str = "#62ff88"
-    crosshair_outline: bool = True
-    crosshair_opacity: float = 0.9
+    speedrun_bare: bool = False
     # global hotkeys (system-wide; work while the game is focused)
     hotkey_loot_prev: str = "Ctrl+Alt+Z"        # select previous target
     hotkey_loot_next: str = "Ctrl+Alt+X"        # select next target
@@ -161,7 +163,7 @@ class Settings:
     # auto-start the timer on the player's first move, auto-stop on boss kill, AND
     # auto-detect the Normal/Hard difficulty from the live boss level (Hard scales
     # the dungeon to lvl 20, so live boss level > its normal level = Hard).
-    speedrun_auto: bool = True
+    speedrun_auto: bool = False
     # auto-upload finished runs to the web leaderboard (needs login + speedrun_auto;
     # when off, the overlay shows a manual Upload button after a finished run).
     speedrun_auto_upload: bool = False
@@ -192,6 +194,10 @@ class Settings:
     speedrun_corunners: list = field(default_factory=list)
     # window geometry (per window key -> "x,y")
     geometry: dict = field(default_factory=dict)
+    # server diagnostics selected states: region_code -> active (bool)
+    server_pings: dict = field(default_factory=dict)
+    # custom replaced server hosts lists mapping: region_code -> list of [ip, port]
+    server_custom_hosts: dict = field(default_factory=dict)
     # collectibles marked done (set of ids, stored as list)
     poi_done: list = field(default_factory=list)
 
@@ -268,32 +274,47 @@ class Settings:
 
     def get_entity_hidden_units(self, profile: str | None = None) -> list[str]:
         if not profile:
-            return self.entity_hidden_units
+            return []
         self._ensure_profile_loaded(profile)
         return self._profile_progress[profile].setdefault("entity_hidden_units", [])
 
     def toggle_unit_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
+        if not profile:
+            return
         hidden_list = self.get_entity_hidden_units(profile)
         cur = set(hidden_list)
         (cur.add if hidden else cur.discard)(uid)
         new_list = sorted(cur)
         
-        if profile:
-            self._profile_progress[profile]["entity_hidden_units"] = new_list
-            self.save_profile_data(profile)
-        else:
-            self.entity_hidden_units = new_list
-            self.save()
+        self._profile_progress[profile]["entity_hidden_units"] = new_list
+        self.save_profile_data(profile)
+
+    def bulk_toggle_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
+        if not profile:
+            return
+        hidden_list = self.get_entity_hidden_units(profile)
+        cur = set(hidden_list)
+        for uid in uids:
+            (cur.add if hidden else cur.discard)(uid)
+        new_list = sorted(cur)
+        
+        self._profile_progress[profile]["entity_hidden_units"] = new_list
+        self.save_profile_data(profile)
 
     def set_all_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
+        if not profile:
+            return
         new_list = sorted(uids) if hidden else []
-        if profile:
-            self._ensure_profile_loaded(profile)
-            self._profile_progress[profile]["entity_hidden_units"] = new_list
-            self.save_profile_data(profile)
-        else:
-            self.entity_hidden_units = new_list
-            self.save()
+        self._ensure_profile_loaded(profile)
+        self._profile_progress[profile]["entity_hidden_units"] = new_list
+        self.save_profile_data(profile)
 
+    # --- companions ----------------------------------------------------------
+    def get_companion_hidden_units(self, profile: str | None = None) -> list[str]:
+        return self.companion_hidden_units
 
-
+    def toggle_companion_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
+        cur = set(self.companion_hidden_units)
+        (cur.add if hidden else cur.discard)(uid)
+        self.companion_hidden_units = sorted(cur)
+        self.save()

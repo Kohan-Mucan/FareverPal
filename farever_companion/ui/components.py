@@ -28,7 +28,8 @@ class SectionHeader(QtWidgets.QWidget):
     """A 4px accent tick + uppercase mono label, optional right-aligned tag.
 
     The label is colored (`color`, default cyan), control-panel sections are
-    cyan; the colored HUD headers pass DANGER / GOLD / ACCENT."""
+    cyan; the colored HUD headers pass DANGER / GOLD / ACCENT.
+    """
 
     def __init__(self, text: str, color: str | None = None,
                  colored_label: bool = True, tag: str = "", parent=None):
@@ -48,10 +49,10 @@ class SectionHeader(QtWidgets.QWidget):
         self._label.setObjectName("Section")
         self._tag = QtWidgets.QLabel(tag)
         self._tag.setObjectName("Mono")
-        lay.addWidget(self._tick)
-        lay.addWidget(self._label)
+        lay.addWidget(self._tick, 0, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._label, 0, QtCore.Qt.AlignVCenter)
         lay.addStretch(1)
-        lay.addWidget(self._tag)
+        lay.addWidget(self._tag, 0, QtCore.Qt.AlignVCenter)
         self._tag.setVisible(bool(tag))
         self.set_color(color)
 
@@ -242,10 +243,46 @@ class SegmentedControl(QtWidgets.QFrame):
 
 
 # --- slider row (label + value above a full-width slider) ------------------
+class _MarkedSlider(QtWidgets.QSlider):
+    def __init__(self, orientation, default_val=None, parent=None):
+        super().__init__(orientation, parent)
+        self._default_val = default_val
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._default_val is not None:
+            p = QtGui.QPainter(self)
+            # Find the groove rect to align the ticks
+            opt = QtWidgets.QStyleOptionSlider()
+            self.initStyleOption(opt)
+            gr = self.style().subControlRect(QtWidgets.QStyle.CC_Slider, opt, QtWidgets.QStyle.SC_SliderGroove, self)
+            
+            lo, hi = self.minimum(), self.maximum()
+            if hi > lo:
+                hw = 12 # handle width
+                
+                # Draw 10% marks
+                p.setPen(QtGui.QPen(QtGui.QColor(theme.MUTED), 1))
+                curr = lo
+                while curr <= hi:
+                    if curr % 10 == 0 and curr != self._default_val:
+                        frac = (curr - lo) / (hi - lo)
+                        x = gr.left() + (hw / 2) + frac * (gr.width() - hw)
+                        p.drawLine(int(x), gr.top() + 1, int(x), gr.bottom() - 1)
+                    curr += 1
+
+                # Draw Default (90%) mark - thicker and accented
+                frac = (self._default_val - lo) / (hi - lo)
+                x = gr.left() + (hw / 2) + frac * (gr.width() - hw)
+                p.setPen(QtGui.QPen(QtGui.QColor(theme.ACCENT), 2))
+                p.drawLine(int(x), gr.top() - 4, int(x), gr.bottom() + 4)
+            p.end()
+
+
 class SliderRow(QtWidgets.QWidget):
     valueChanged = QtCore.Signal(int)
 
-    def __init__(self, label: str, lo: int, hi: int, value: int, fmt=str, parent=None):
+    def __init__(self, label: str, lo: int, hi: int, value: int, fmt=str, default_val: int = None, parent=None):
         super().__init__(parent)
         self._fmt = fmt
         v = QtWidgets.QVBoxLayout(self)
@@ -263,7 +300,7 @@ class SliderRow(QtWidgets.QWidget):
         top.addWidget(lbl)
         top.addStretch(1)
         top.addWidget(self._val)
-        self._slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._slider = _MarkedSlider(QtCore.Qt.Horizontal, default_val=default_val)
         self._slider.setRange(lo, hi)
         self._slider.setValue(max(lo, min(hi, value)))
         v.addLayout(top)
@@ -277,6 +314,15 @@ class SliderRow(QtWidgets.QWidget):
     def _on(self, v: int) -> None:
         self._render(v)
         self.valueChanged.emit(v)
+
+    def setValue(self, v: int) -> None:
+        self._slider.setValue(v)
+
+    def setValueSilent(self, v: int) -> None:
+        self._slider.blockSignals(True)
+        self._slider.setValue(v)
+        self._slider.blockSignals(False)
+        self._render(v)
 
     def restyle(self) -> None:
         """Re-tint the value readout after the theme accent changes."""
@@ -315,9 +361,15 @@ class IconTile(QtWidgets.QLabel):
         super().__init__(parent)
         self._size = size
         self.setFixedSize(size, size)
+        self.setAlignment(QtCore.Qt.AlignCenter)
 
     def set(self, sheet: str | None, id_: str | None, accent: str = theme.ACCENT) -> None:
         self.setPixmap(icons.tile(sheet, id_, self._size, accent))
+
+    def set_outlined(self, sheet: str | None, id_: str | None, accent: str = theme.ACCENT) -> None:
+        """Set a game icon with an accent border hugging the icon's organic shape.
+        Matches the minimap style."""
+        self.setPixmap(icons.outlined(sheet, id_, self._size, accent))
 
     def set_marker(self, name: str, accent: str = theme.ACCENT) -> None:
         """A map-marker icon (assets/map_icons) instead of a game-sheet icon."""
@@ -347,11 +399,12 @@ class NavItem(QtWidgets.QWidget):
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(16, 0, 12, 0)
         lay.setSpacing(12)
+        lay.setAlignment(QtCore.Qt.AlignVCenter)
         self._icon = QtWidgets.QLabel()
         self._icon.setFixedSize(20, 20)
         self._text = QtWidgets.QLabel(label)
-        lay.addWidget(self._icon)
-        lay.addWidget(self._text)
+        lay.addWidget(self._icon, 0, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._text, 0, QtCore.Qt.AlignVCenter)
         lay.addStretch(1)
         self._apply()
 
@@ -396,33 +449,63 @@ class NavItem(QtWidgets.QWidget):
 # --- overlay card (big toggle) --------------------------------------------
 class OverlayCard(QtWidgets.QFrame):
     toggled = QtCore.Signal(bool)
+    bareToggled = QtCore.Signal(bool)
 
-    def __init__(self, icon_name: str, title: str, desc: str, parent=None):
+    def __init__(self, icon_name: str, title: str, desc: str, bare_checked: bool = False,
+                 has_bare: bool = True, bare_label: str = "Borderless", parent=None):
         super().__init__(parent)
         self.setObjectName("Card")
         self._active = False
         self._icon_name = icon_name
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(6)
-        top = QtWidgets.QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
+
+        main_v = QtWidgets.QVBoxLayout(self)
+        main_v.setContentsMargins(16, 16, 16, 16)
+        main_v.setSpacing(8)
+
+        # Row 1: Icon, Title, and Main Toggle
+        row1 = QtWidgets.QHBoxLayout()
+        row1.setSpacing(12)
+        
         self._icon = QtWidgets.QLabel()
         self._icon.setFixedSize(28, 28)
         self._icon.setPixmap(icons.ui_icon(icon_name, theme.ACCENT, 28))
+        row1.addWidget(self._icon, 0, QtCore.Qt.AlignVCenter)
+
+        title_lbl = QtWidgets.QLabel(title.upper())
+        title_lbl.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:16px;background:transparent;")
+        row1.addWidget(title_lbl, 1, QtCore.Qt.AlignCenter)
+        
         self._toggle = ToggleSwitch()
         self._toggle.toggled.connect(self._on_toggle)
-        top.addWidget(self._icon)
-        top.addStretch(1)
-        top.addWidget(self._toggle, 0, QtCore.Qt.AlignTop)
-        t = QtWidgets.QLabel(title.upper())
-        t.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:16px;background:transparent;")
-        d = QtWidgets.QLabel(desc)
-        d.setWordWrap(True)
-        d.setStyleSheet(f"color:{theme.MUTED};font-size:12px;background:transparent;")
-        lay.addLayout(top)
-        lay.addWidget(t)
-        lay.addWidget(d)
+        row1.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
+        main_v.addLayout(row1)
+        
+        # Row 2 (Optional): Borderless Toggle (right-aligned)
+        self._bare_toggle = None
+        if has_bare:
+            row2 = QtWidgets.QHBoxLayout()
+            row2.addStretch(1)
+            
+            bare_h = QtWidgets.QHBoxLayout()
+            bare_h.setSpacing(8)
+            bare_lbl = QtWidgets.QLabel(bare_label)
+            bare_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:11px;background:transparent;")
+            self._bare_toggle = ToggleSwitch(bare_checked)
+            self._bare_toggle.toggled.connect(self.bareToggled.emit)
+            bare_h.addWidget(bare_lbl)
+            bare_h.addWidget(self._bare_toggle)
+            
+            row2.addLayout(bare_h)
+            main_v.addLayout(row2)
+
+        # Spacer between toggles and description
+        main_v.addSpacing(4)
+
+        # Row 3: Description (full width)
+        desc_lbl = QtWidgets.QLabel(desc)
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:12px;background:transparent;")
+        main_v.addWidget(desc_lbl)
 
     def _on_toggle(self, on: bool) -> None:
         self._active = on
@@ -436,6 +519,14 @@ class OverlayCard(QtWidgets.QFrame):
         self._toggle.set_checked_silent(on)
         self._active = on
         self.update()
+
+    def setBareChecked(self, on: bool) -> None:
+        if self._bare_toggle:
+            self._bare_toggle.setChecked(on)
+
+    def set_bare_checked_silent(self, on: bool) -> None:
+        if self._bare_toggle:
+            self._bare_toggle.set_checked_silent(on)
 
     def isChecked(self) -> bool:
         return self._toggle.isChecked()
@@ -490,7 +581,7 @@ class InfoCard(QtWidgets.QFrame):
         self._value.setStyleSheet(f"color:{theme.TEXT};font-size:13px;background:transparent;")
         col.addWidget(lbl)
         col.addWidget(self._value)
-        lay.addWidget(icon, 0, QtCore.Qt.AlignTop)
+        lay.addWidget(icon, 0, QtCore.Qt.AlignVCenter)
         lay.addLayout(col, 1)
 
     def set_value(self, value: str) -> None:
@@ -551,14 +642,15 @@ class LabeledToggle(QtWidgets.QFrame):
         lbl.setStyleSheet(f"color:{theme.TEXT};background:transparent;")
         self._toggle = ToggleSwitch(checked)
         self._toggle.toggled.connect(self.toggled.emit)
-        lay.addWidget(lbl, 1)
-        lay.addWidget(self._toggle, 0, QtCore.Qt.AlignTop)
+        lay.addWidget(lbl, 1, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
 
     def setChecked(self, on: bool) -> None:
         self._toggle.setChecked(on)
 
     def set_checked_silent(self, on: bool) -> None:
         self._toggle.set_checked_silent(on)
+        self.setChecked(on)
 
     def isChecked(self) -> bool:
         return self._toggle.isChecked()

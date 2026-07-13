@@ -26,9 +26,10 @@ class _TitleBar(QtWidgets.QFrame):
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(10, 3, 6, 3)
         lay.setSpacing(4)
+        lay.setAlignment(QtCore.Qt.AlignVCenter)
         self.title = QtWidgets.QLabel(title)
         self.title.setObjectName("Title")
-        lay.addWidget(self.title)
+        lay.addWidget(self.title, 0, QtCore.Qt.AlignVCenter)
         lay.addStretch(1)
         self.extra = lay   # callers can insert controls before the navigation btns
 
@@ -37,18 +38,22 @@ class _TitleBar(QtWidgets.QFrame):
         self.cog_btn.setIcon(icons.ui_qicon("settings", theme.MUTED, 16))
         self.cog_btn.setToolTip("Open the related config page")
         self.cog_btn.clicked.connect(window._on_cog_clicked)
-        lay.addWidget(self.cog_btn)
+        lay.addWidget(self.cog_btn, 0, QtCore.Qt.AlignVCenter)
 
         min_btn = QtWidgets.QPushButton("🗕")
         min_btn.setObjectName("Icon")
         min_btn.clicked.connect(window.toggle_minimize)
-        lay.addWidget(min_btn)
+        lay.addWidget(min_btn, 0, QtCore.Qt.AlignVCenter)
 
         close = QtWidgets.QPushButton("✕")
         close.setObjectName("Icon")
         close.clicked.connect(window.close)
-        lay.addWidget(close)
+        lay.addWidget(close, 0, QtCore.Qt.AlignVCenter)
         self._drag = None
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == QtCore.Qt.LeftButton and hasattr(self._win, "set_bare"):
+            self._win.set_bare(not getattr(self._win, "_is_bare", False))
 
 
     def mousePressEvent(self, e):
@@ -76,6 +81,7 @@ class OverlayWindow(QtWidgets.QWidget):
         self._geo_key = geo_key or title
         self._locked = False
         self._scale = 1.0
+        self._drag = None
         self._page_key = "overlays"         # default page to open on cog click
         # Per-overlay accent (the "Highlight color" setting). Overlays re-tint
         # their own QSS to it; the control panel keeps the default cyan.
@@ -122,7 +128,6 @@ class OverlayWindow(QtWidgets.QWidget):
         if on:
             self._normal_height = self.height()
             self.setFixedHeight(36)
-            self.titlebar.cog_btn.hide()
         else:
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
@@ -131,7 +136,52 @@ class OverlayWindow(QtWidgets.QWidget):
                 self.resize(self.width(), h)
             else:
                 self.adjustSize()
-            self.titlebar.cog_btn.show()
+
+    def set_bare(self, on: bool) -> None:
+        """Chromeless: hide the titlebar and card panel frame.
+        Drag the body to move it (when unlocked)."""
+        self._is_bare = on
+        self.titlebar.setVisible(not on)
+        if on:
+            # For list-heavy overlays (Entity, DPS), keep a solid background so 
+            # they remain readable. Speedrun/Map stay fully transparent.
+            bg = "transparent"
+            if self._geo_key in ("entity", "dps", "skills", "droptable"):
+                bg = theme.PANEL
+            self._frame.setStyleSheet(f"background:{bg};border:0;")
+            self.content.setContentsMargins(0, 0, 0, 0)
+        else:
+            self._frame.setStyleSheet("")     # revert to the QSS #Card look
+            self.content.setContentsMargins(8, 6, 8, 8)
+
+        # Sync the checkbox in the main UI
+        if hasattr(self, "_bare_sync_fn") and self._bare_sync_fn is not None:
+            self._bare_sync_fn(on)
+        
+        # Persist the setting if possible
+        if self._settings is not None:
+            attr = f"{self._geo_key}_bare"
+            if hasattr(self._settings, attr):
+                setattr(self._settings, attr, on)
+                self._settings.save()
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == QtCore.Qt.LeftButton:
+            self.set_bare(not getattr(self, "_is_bare", False))
+
+    def mousePressEvent(self, e):
+        if self._locked:
+            return
+        if e.button() == QtCore.Qt.LeftButton:
+            self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None and e.buttons() & QtCore.Qt.LeftButton:
+            self.move(e.globalPosition().toPoint() - self._drag)
+
+    def mouseReleaseEvent(self, _e):
+        self._drag = None
+        self.persist_geometry()
 
     def _on_cog_clicked(self) -> None:
         self.request_page.emit(self._page_key)
@@ -240,7 +290,19 @@ class OverlayWindow(QtWidgets.QWidget):
                 return
             except ValueError:
                 pass
-        self.move(60, 60)
+        # Default positioning on new install (no saved geometry)
+        screen = QtWidgets.QApplication.primaryScreen().geometry()
+        if self._geo_key == "minimap":
+            sz = getattr(self._settings, "minimap_size", 400)
+            self.move(screen.width() - sz - 40, 40)
+        elif self._geo_key == "entity":
+            self.move(40, 40)
+        elif self._geo_key == "speedrun":
+            self.move(370, 40)
+        elif self._geo_key == "dps":
+            self.move(40, 490)
+        else:
+            self.move(60, 60)
 
     def closeEvent(self, e):
         self.persist_geometry()

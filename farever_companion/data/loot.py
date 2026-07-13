@@ -109,3 +109,30 @@ def table_ids() -> list[str]:
 
 def table_exists(tid: str | None) -> bool:
     return bool(tid) and tid in _tables()
+
+
+@lru_cache(maxsize=1)
+def reverse_loot_map() -> dict[str, list[str]]:
+    """Map of item_id -> list of loot_table_ids that contain it."""
+    out: dict[str, set[str]] = {}
+    tables = _tables()
+
+    def walk(tid: str, root_tid: str, visited: set[str]):
+        if tid in visited:
+            return
+        visited.add(tid)
+        t = tables.get(tid)
+        if not t:
+            return
+        for e in t.get("loot", []):
+            if "item" in e:
+                iid = e["item"]
+                if iid not in out:
+                    out[iid] = set()
+                out[iid].add(root_tid)
+            elif "lootTable" in e:
+                walk(e["lootTable"], root_tid, visited)
+
+    for tid in tables:
+        walk(tid, tid, set())
+    return {k: sorted(list(v)) for k, v in out.items()}

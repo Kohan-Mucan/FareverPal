@@ -77,6 +77,7 @@ class TrackController(QtCore.QObject):
         self.model = None
         self._needle: NeedleOverlay | None = None
         self._lock_addr: int | None = None    # sticky unit instance (hysteresis)
+        self._hard_lock = False               # True if set via manual HUD click
         self._rect = None                     # game window rect cache
         self._rect_at = 0.0
         self._timer = QtCore.QTimer(self)
@@ -103,17 +104,23 @@ class TrackController(QtCore.QObject):
     def is_tracked(self, kind: str, key: str) -> bool:
         return bool(key) and self.s.track_kind == kind and self.s.track_id == key
 
-    def toggle(self, kind: str, key: str) -> None:
-        if self.is_tracked(kind, key):
+    def toggle(self, kind: str, key: str, addr=None) -> None:
+        if self.is_tracked(kind, key) and (addr is None or self._lock_addr == addr):
             self.clear()
         else:
             self.track(kind, key)
+            # Seed the lock immediately so the HUD badge appears on the clicked
+            # entity right away, not whichever instance is closest on the next tick
+            if addr is not None:
+                self._lock_addr = addr
+                self._hard_lock = True
 
-    def track(self, kind: str, key: str) -> None:
+    def track(self, kind: str, key: str, addr=None) -> None:
         if kind == "orb" and key not in geo_orbs.by_id():
             return
         self.s.track_kind, self.s.track_id = kind, key
-        self._lock_addr = None
+        self._lock_addr = addr
+        self._hard_lock = addr is not None
         self.s.save()
         if self.model is not None:
             self._start()
@@ -122,6 +129,7 @@ class TrackController(QtCore.QObject):
     def clear(self) -> None:
         self.s.track_kind = self.s.track_id = ""
         self._lock_addr = None
+        self._hard_lock = False
         self.s.save()
         self._timer.stop()
         if self._needle is not None:
@@ -161,14 +169,14 @@ class TrackController(QtCore.QObject):
                 return None
             return (o.x, o.y, o.z,
                     f"{geo_orbs.orb_label(key)} · {geo_orbs.orb_region_name(o)}")
-        if kind == "pos":
+        if kind in ("pos", "gather"):
             # fixed waypoint: "x,y,z|label" (any minimap marker)
             try:
                 coords, _, label = key.partition("|")
                 x, y, z = (float(v) for v in coords.split(","))
             except ValueError:
                 return None
-            return (x, y, z, label or "Waypoint")
+            return (x, y, z, label or ("Gatherable" if kind == "gather" else "Waypoint"))
         if kind in ("unit", "hero"):
             label = names.unit_name(key) or key
             xyz = self.model.player_xyz()
@@ -185,11 +193,21 @@ class TrackController(QtCore.QObject):
                 # hysteresis: stay locked on the current instance unless a
                 # clearly closer one appears, so near-ties don't flip the needle
                 cur = next((c for c in cands if c.addr == self._lock_addr), None)
-                if cur is not None and cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
-                    e = cur
+                if cur is not None:
+                    if self._hard_lock:
+                        e = cur
+                    elif cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
+                        e = cur
             self._lock_addr = e.addr
             return (e.x, e.y, e.z, label)
-        return None
+        
+        # All other kinds (chest, enemy, gather, pos) are coordinate-based
+        try:
+            coords, _, label = key.partition("|")
+            x, y, z = (float(v) for v in coords.split(","))
+            return (x, y, z, label or "Waypoint")
+        except ValueError:
+            return None
 
     def _game_rect(self):
         now = time.monotonic()
@@ -265,23 +283,19 @@ class TrackController(QtCore.QObject):
             if dist > ARRIVE and flat > 1e-6:
                 ux, uy = dx / flat, dy / flat
                 nx, ny = -uy, ux
-                w_head = [
-                    (px + ux * N_TIP, py + uy * N_TIP),
-                    (px + ux * N_SHOULDER + nx * N_HALF_W,
-                     py + uy * N_SHOULDER + ny * N_HALF_W),
-                    (px + ux * N_BASE, py + uy * N_BASE),
-                    (px + ux * N_SHOULDER - nx * N_HALF_W,
-                     py + uy * N_SHOULDER - ny * N_HALF_W),
+                slope = dz / dist
+                slope = max(-1.0, min(1.0, slope))
+                head = [
+                    scr(px + ux * N_TIP, py + uy * N_TIP, pz + N_TIP * slope),
+                    scr(px + ux * N_SHOULDER + nx * N_HALF_W, py + uy * N_SHOULDER + ny * N_HALF_W, pz + N_SHOULDER * slope),
+                    scr(px + ux * N_BASE, py + uy * N_BASE, pz + N_BASE * slope),
+                    scr(px + ux * N_SHOULDER - nx * N_HALF_W, py + uy * N_SHOULDER - ny * N_HALF_W, pz + N_SHOULDER * slope),
                 ]
-                w_tail = [
-                    (px - ux * N_BASE + nx * N_TAIL_W,
-                     py - uy * N_BASE + ny * N_TAIL_W),
-                    (px - ux * N_TAIL, py - uy * N_TAIL),
-                    (px - ux * N_BASE - nx * N_TAIL_W,
-                     py - uy * N_BASE - ny * N_TAIL_W),
+                tail = [
+                    scr(px - ux * N_BASE + nx * N_TAIL_W, py - uy * N_BASE + ny * N_TAIL_W, pz - N_BASE * slope),
+                    scr(px - ux * N_TAIL, py - uy * N_TAIL, pz - N_TAIL * slope),
+                    scr(px - ux * N_BASE - nx * N_TAIL_W, py - uy * N_BASE - ny * N_TAIL_W, pz - N_BASE * slope),
                 ]
-                head = [scr(x, y, pz) for x, y in w_head]
-                tail = [scr(x, y, pz) for x, y in w_tail]
                 if any(p is None for p in head) or any(p is None for p in tail):
                     return False
         # window covers the game client area; coords above are window-local

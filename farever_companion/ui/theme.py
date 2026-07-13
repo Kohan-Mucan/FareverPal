@@ -59,7 +59,8 @@ KIND_COLOR = {
     "companion": "#7aa2f7",
     "hero": DIM,
     "chest": CHEST,
-    "gatherable": GOOD,
+    "flower": GOOD,
+    "ore": "#c2c6d0",
     "obelisk": ACCENT,
     "orb": "#3b82f6",        # matches the blue orb marker art
     "chest_orb": GOLD,

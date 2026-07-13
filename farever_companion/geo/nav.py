@@ -8,13 +8,7 @@ from __future__ import annotations
 
 import math
 
-# camera-yaw -> view rotation calibration (sign flips orbit direction, offset
-# aligns "up" with the camera's forward). Shared by the minimap rotation and
-# the compass needle so they can never disagree. Sign validated live
-# 2026-06-07: with +1 the needle visibly rotated WITH a camera spin (2x world
-# rate) instead of staying anchored to the ground; -1 counter-rotates it.
-CAM_YAW_SIGN = -1.0
-CAM_YAW_OFFSET = 0.0
+from ..constants import CAM_YAW_SIGN, CAM_YAW_OFFSET
 
 
 def view_phi(cam_yaw: float | None, heading: float | None) -> float:

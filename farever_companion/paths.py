@@ -1,15 +1,7 @@
 """Central path resolver.
 
-All reusable data lives in the existing workspace, not duplicated into this
-project:
-    - CDB sheets        D:\\Projects\\FareverFandom\\data\\sheets\\*.json
-    - wiki data layer   ...\\htdocs\\assets\\data\\{items,enemies}.json
-    - icons             ...\\htdocs\\assets\\icons\\{item,unit,skill,_shared}\\
-    - chest index       <workspace>\\notes\\chest_loot_index.json (see notes_dir)
-
-In a PyInstaller one-file build these are copied next to the bundle; we check
-the frozen `_MEIPASS` dir first, then fall back to walking up to the repo root.
-Every module imports its data location from here, one place to change.
+Data is pre-extracted from game .pak files and compiled into Python scripts
+inside the project for performance and portability.
 """
 from __future__ import annotations
 
@@ -17,79 +9,105 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-# Marker that identifies the repo root (present in dev; copied into bundles).
-_MARKER = Path("data") / "sheets" / "lootTable.json"
-
-
 @lru_cache(maxsize=1)
 def data_root() -> Path:
-    """Directory that contains `data/sheets/`, `htdocs/assets/`, etc."""
-    # 1) PyInstaller one-file: bundled data sits under sys._MEIPASS.
+    """Directory that contains the consolidated data script."""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        cand = Path(meipass)
-        if (cand / _MARKER).exists():
-            return cand
-    # 2) dev: walk up from this file until the marker is found.
-    for parent in Path(__file__).resolve().parents:
-        if (parent / _MARKER).exists():
-            return parent
-    raise FileNotFoundError(
-        f"could not locate {_MARKER} above {__file__} or in a bundle"
-    )
-
+        return Path(meipass)
+    return project_root() / "farever_companion" / "data"
 
 def sheets_dir() -> Path:
-    return data_root() / "data" / "sheets"
+    """Fallback directory for raw JSON sheets (lootTable, unit, etc)."""
+    # 1. Try the bundled data/sheets folder (from htdocs/data/sheets)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / "data" / "sheets"
+        if cand.exists():
+            return cand
+    
+    # 2. Try the local assets/data folder
+    local = project_root() / "assets" / "data"
+    if local.exists():
+        return local
+        
+    # 3. Fallback to sibling
+    return project_root().parent / "htdocs" / "data" / "sheets"
 
-
-def wiki_data_dir() -> Path:
-    return data_root() / "htdocs" / "assets" / "data"
-
+def display_data_dir() -> Path:
+    """Folder for the consolidated display JSON files (items, enemies, etc)."""
+    return _htdocs_data()
 
 def icons_dir() -> Path:
-    return data_root() / "htdocs" / "assets" / "icons"
+    """Folder containing Items/Units/Skills subfolders with PNGs/WebPs."""
+    # Try the local assets/icons folder
+    local = project_root() / "assets" / "icons"
+    if local.exists():
+        # Health check: do any of our plural folders exist?
+        if (local / "Items").exists() or (local / "Units").exists() or (local / "Skills").exists():
+            return local
+            
+    # Fallback to sibling htdocs
+    return project_root().parent / "htdocs" / "assets" / "icons"
 
+def atlas_dir() -> Path:
+    """Folder containing the atlas sprite-sheets and index."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "assets" / "atlas"
+    return project_root() / "assets" / "atlas"
 
 def notes_dir() -> Path:
-    return data_root() / "notes"
+    return data_root() / "tools"
 
+def _htdocs_data() -> Path:
+    """assets/data/ — where all consolidated game data JSON lives."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "assets" / "data"
+    # Try local first
+    local = project_root() / "assets" / "data"
+    if local.exists():
+        return local
+    # Fallback to sibling
+    return project_root().parent / "htdocs" / "assets" / "data"
 
-def chest_index_path() -> Path:
-    return sheets_dir() / "chest_loot_index.json"
+def chest_locs_path() -> Path:
+    """Scan-generated chest locations (split from map_markers)."""
+    return _htdocs_data() / "chest_locs.json"
 
-
-def chest_positions_path() -> Path:
-    return sheets_dir() / "chest_positions.json"
-
+def poi_locs_path() -> Path:
+    """Scan-generated POI locations — dungeons, bosses (split from map_markers)."""
+    return _htdocs_data() / "poi_locs.json"
 
 def orb_positions_path() -> Path:
-    return sheets_dir() / "orb_positions.json"
+    """Scan-generated orb positions (not yet in map_markers — pending scan)."""
+    return _htdocs_data() / "orb_positions.json"
 
+def critter_locs_path() -> Path:
+    """Scan-generated critter/companion spawner locations."""
+    return _htdocs_data() / "critter_locs.json"
+
+def gatherable_locs_path() -> Path:
+    """Scan-generated static gatherable node locations."""
+    return _htdocs_data() / "gatherable_locs.json"
 
 @lru_cache(maxsize=1)
 def project_root() -> Path:
-    """This project's own root (companion/), for caches and config defaults."""
+    """This project's own root (FareverPal/), for caches and config defaults."""
     for parent in Path(__file__).resolve().parents:
-        if parent.name == "companion" and (parent / "run.py").exists():
+        if (parent / "run.py").exists() and (parent / "farever_companion").exists():
             return parent
     return Path(__file__).resolve().parent.parent
 
-
 def cache_dir() -> Path:
-    d = project_root() / "notes"
+    d = project_root() / "cache"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-
 @lru_cache(maxsize=1)
 def assets_dir() -> Path:
-    """This app's own bundled assets (fonts, UI-chrome SVG icons).
-
-    Unlike the game data, these live inside the project (`companion/assets/`)
-    and are copied next to the bundle by `package.bat`. Frozen build first
-    (`_MEIPASS/assets`), then the dev tree.
-    """
+    """This app's own bundled assets (fonts, UI-chrome SVG icons)."""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         cand = Path(meipass) / "assets"

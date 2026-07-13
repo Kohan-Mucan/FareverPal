@@ -11,7 +11,7 @@ from __future__ import annotations
 import struct
 
 from farever_companion.core.hl import Hl
-from farever_companion.core import constants as C
+from farever_companion import constants as C
 from tests.fakemem import FakeProc
 
 HOBJ = 11

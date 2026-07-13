@@ -40,27 +40,62 @@ datas = [
     ("assets/fonts", "assets/fonts"),
     ("assets/icons_ui", "assets/icons_ui"),
     ("assets/map", "assets/map"),
-    ("assets/map_icons", "assets/map_icons"),
     ("assets/app_icon.png", "assets"),
     ("assets/app_icon.ico", "assets"),
 ]
 
-# --- data: optional sibling/local game-data dirs ---------------------------
-# Added only if they exist, checking both the project root (.) and sibling (..)
-# directory layouts. This ensures a full local build includes the CDB sheets +
-# wiki data + icons, while a bare checkout still builds.
-for _rel, dst in (
-    (os.path.join("data", "sheets"), "data/sheets"),
-    (os.path.join("htdocs", "assets", "icons"), "htdocs/assets/icons"),
-    (os.path.join("htdocs", "assets", "data"), "htdocs/assets/data"),
-):
-    src = os.path.join(SPECPATH, _rel)
+# Core game database (items, units, loot) is baked into raw_data.py
+# by compiler.py to keep the EXE small and fast.
+raw_data_path = os.path.join(SPECPATH, "farever_companion", "data", "raw_data.py")
+has_raw_data = os.path.exists(raw_data_path) and os.path.getsize(raw_data_path) > 1000
+
+# Only bundle essential location/scan data from assets/data.
+data_src = os.path.join(SPECPATH, "assets", "data")
+essential_data = [
+    "poi_locs.json", "chest_locs.json", "critter_locs.json",
+    "orb_positions.json", "gatherable_locs.json", "_version.json"
+]
+for f in essential_data:
+    src = os.path.join(data_src, f)
     if os.path.exists(src):
-        datas.append((src, dst))
-    else:
-        sibling_src = os.path.join(SPECPATH, "..", _rel)
-        if os.path.exists(sibling_src):
-            datas.append((sibling_src, dst))
+        datas.append((src, "assets/data"))
+
+# --- Atlas vs Individual Icons ---------------------------------------------
+# If the Atlas system is present, we bundle it and SKIP the 1800+ individual
+# icons to keep the EXE small (~50MB vs ~100MB).
+atlas_src = os.path.join(SPECPATH, "assets", "atlas")
+using_atlas = os.path.exists(atlas_src) and os.path.exists(os.path.join(atlas_src, "atlas_map.json"))
+
+if using_atlas:
+    datas.append(("assets/atlas", "assets/atlas"))
+else:
+    datas.append(("assets/icons", "assets/icons"))
+    datas.append(("assets/map_icons", "assets/map_icons"))
+
+# --- data: optional sibling/local game-data dirs ---------------------------
+# Added only if they exist and aren't already covered by the repo assets.
+# We skip these in production builds if raw_data.py is in place.
+optional_siblings = []
+
+if not has_raw_data:
+    optional_siblings.extend([
+        (os.path.join("..", "htdocs", "data", "sheets"), "data/sheets"),
+        (os.path.join("..", "htdocs", "assets", "data"), "assets/data"),
+    ])
+
+if not using_atlas:
+    optional_siblings.append((os.path.join("..", "htdocs", "assets", "icons"), "assets/icons"))
+
+for _rel, dst in optional_siblings:
+    src = os.path.normpath(os.path.join(SPECPATH, _rel))
+    if os.path.exists(src):
+        # Avoid bundling large htdocs versions if we have local ones
+        local_src = os.path.join(SPECPATH, dst)
+        if not os.path.exists(local_src):
+            datas.append((src, dst))
+        elif dst == "data/sheets":
+            # Always bundle sheets if found in htdocs, as they might be newer
+            datas.append((src, dst))
 
 # --- excludes: Qt modules the app never uses (trim the bundle) -------------
 # Keep only QtCore, QtGui, QtWidgets, QtSvg and the windows platform plugin
@@ -107,6 +142,21 @@ excludes = [
     "PySide6.QtNetwork",
     "PySide6.QtStateMachine",
     "PySide6.QtScxml",
+    "PySide6.QtXml",
+    "PySide6.QtPrintSupport",
+    "PySide6.QtDBus",
+    "PySide6.QtTest",
+    "PySide6.QtConcurrent",
+    "pymem",
+    "pillow",
+    "PIL",
+    "tkinter",
+    "unittest",
+    "pydoc",
+    "lib2to3",
+    "test",
+    "msilib",
+    "antigravity",
 ]
 
 
@@ -135,7 +185,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,          # windowed

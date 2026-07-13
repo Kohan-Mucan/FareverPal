@@ -28,7 +28,7 @@ CLASSES = tuple(CLASS_APTITUDE)
 @lru_cache(maxsize=1)
 def _item_aptitudes() -> dict[str, frozenset[str]]:
     out: dict[str, frozenset[str]] = {}
-    for it in cdb.wiki("items"):
+    for it in cdb.display_data("items"):
         apts = it.get("aptitudes") or []
         if apts:
             out[it["id"]] = frozenset(apts)

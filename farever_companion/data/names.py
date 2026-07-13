@@ -1,7 +1,7 @@
 """Display-name resolver: internal CDB id -> the game's readable name.
 
-Reuses the wiki data layer (htdocs/assets/data/{items,enemies}.json), the same
-id -> name mapping the web wiki renders, e.g.
+Reuses the display data layer (assets/data/{items,enemies}.json), the same
+id -> name mapping the game renders, e.g.
     DM_Multispin   -> "Twin Pillars of Justice"
     MunsterChuck   -> "Munster Chuck"
     UpgradeRare    -> "Spark Shard"
@@ -17,17 +17,17 @@ from . import cdb, tokens
 
 @lru_cache(maxsize=1)
 def _items() -> dict[str, str]:
-    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.wiki("items")}
+    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.display_data("items")}
 
 
 @lru_cache(maxsize=1)
 def _units() -> dict[str, str]:
-    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.wiki("enemies")}
+    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.display_data("enemies")}
 
 
 @lru_cache(maxsize=1)
 def _skills() -> dict[str, str]:
-    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.wiki("skills")}
+    return {r["id"]: (r.get("name") or r["id"]) for r in cdb.display_data("skills")}
 
 
 def skill_name(skill_id: str | None) -> str | None:
@@ -52,9 +52,49 @@ def item_name(item_id: str | None) -> str | None:
 
 
 def unit_name(unit_id: str | None) -> str | None:
+    """Internal unit id -> the game's readable name.
+    Handles generic fallbacks and makes variants (Spark, Raminiature) distinct."""
     if not unit_id:
         return unit_id
-    return _units().get(unit_id, unit_id)
+    
+    # Handle path-like IDs
+    clean_id = unit_id
+    if "/" in clean_id or "\\" in clean_id:
+        import os
+        clean_id = os.path.splitext(os.path.basename(clean_id))[0]
+    
+    # 1. Try display manifest (enemies.json)
+    name = _units().get(clean_id)
+    
+    # 2. Try raw unit sheet if manifest failed or gave a generic name
+    # We ignore generic plural names ("Companions", "Enemies") to ensure we can 
+    # fall back to humanizing the specific ID (e.g. DemonDog_Beige).
+    if not name or name == clean_id or name in ("Companions", "Enemies", "Critter", "Critters"):
+        from . import units
+        raw_row = units._units_by_id().get(clean_id)
+        if raw_row:
+            raw_name = raw_row.get("name") or (raw_row.get("texts") or {}).get("name")
+            if raw_name and raw_name not in ("Companions", "Enemies", "Critter", "Critters"):
+                name = raw_name
+            else:
+                # Try the unit type's name (e.g. "Mount" or "Boss")
+                utype = raw_row.get("type")
+                if utype:
+                    tname = units.type_name(utype)
+                    if tname and tname != utype:
+                        name = tname
+
+    # 3. If we still have a generic name, or nothing at all, humanize the ID
+    if not name or name == clean_id or name in ("Companions", "Enemies", "Critter", "Critters"):
+        name = humanize(clean_id)
+
+    # 4. Post-processing: Ensure 'Spark' is tagged
+    if name:
+        # Append (Spark) if missing from the name but present in the ID
+        if "spark" in (clean_id or "").lower() and "spark" not in name.lower():
+            name = f"{name} (Spark)"
+
+    return name or clean_id
 
 
 def any_name(some_id: str | None) -> str | None:
@@ -83,11 +123,17 @@ def _zone_region_names() -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         for r in cdb.lines("zone"):
-            m = re.fullmatch(r"Z(\d+)_Region", r.get("id", ""))
+            zid = r.get("id", "")
+            m = re.fullmatch(r"Z(\d+)_Region", zid)
             if m:
-                nm = (r.get("texts") or {}).get("name")
+                # Handle both raw JSON (texts.name) and baked data (flattened name)
+                nm = r.get("name") or (r.get("texts") or {}).get("name")
                 if nm:
                     out[m.group(1)] = nm
+            elif zid == "CrimsonIsland_Region":
+                nm = r.get("name") or (r.get("texts") or {}).get("name")
+                if nm:
+                    out["3"] = nm
     except Exception:
         pass
     return out
@@ -108,4 +154,44 @@ def loot_table_label(tid: str | None) -> str:
     if regions:                              # Z1/Z2/Z3 -> region name
         label = re.sub(r"\bZ ?([0-9]+)\b",
                        lambda m: regions.get(m.group(1), m.group(0)), label)
+    return label
+
+
+def chest_label(chest_id: str | None, loot_table: str | None = None) -> str:
+    """Friendly label for a chest, stripping redundant world/zone prefixes."""
+    # Favor the ID for the label if it's a generic world table, as IDs usually 
+    # contain more specific location info (e.g. 'Camp 1')
+    use_id = not loot_table or loot_table in ("WorldCrate", "WorldChest", "WorldActivity")
+    raw = chest_id if (use_id and chest_id) else (loot_table or chest_id)
+
+    if not raw:
+        return "Chest"
+
+    # 1. Strip technical prefixes using regex to avoid 'len' unresolved reference
+    # Pattern: Z1_World_Greenlands_... -> ...
+    clean_raw = re.sub(r"(?i)^[ZW]\d+_World_[^_]+_", "", raw)
+    # Pattern: W1_Siagarta_... -> ...
+    clean_raw = re.sub(r"(?i)^W\d+_Siagarta_", "", clean_raw)
+
+    # 2. Humanize
+    label = humanize(clean_raw)
+    
+    # 3. Clean up redundant "Chest" words
+    # If the label has "Chest", strip all instances and put one at the start
+    if re.search(r"(?i)\bChest\b", label):
+        label = re.sub(r"(?i)\bChest\b", "", label).strip()
+        label = f"Chest {label}"
+    
+    # 4. Final formatting
+    label = re.sub(r"\s+", " ", label).strip()
+    
+    if not label:
+        return "Chest"
+    
+    # Capitalize properly
+    if label.islower():
+        label = label.title()
+    else:
+        label = label[0].upper() + label[1:]
+
     return label

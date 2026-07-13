@@ -1,10 +1,9 @@
 """Control panel, the main window (Tactical Overlay shell).
 
-A left nav rail + a QStackedWidget body: Overlays, Combat/DPS, Loot, Crosshair,
+A left nav rail + a QStackedWidget body: Overlays, Combat/DPS, Loot,
 Map, Log. Attaches to the game (pure-read player locate on a worker thread),
 configures the overlays, and runs the offline loot predictor. Owns the single
-shared LiveModel so every overlay reads one source of truth. The crosshair is
-cosmetic and needs no attach.
+shared LiveModel so every overlay reads one source of truth.
 """
 from __future__ import annotations
 
@@ -19,16 +18,17 @@ from .overlay_manager import OverlayManager
 from .game_attach import GameAttachmentController
 from .workers import CallWorker
 from .account import AccountMixin
-from .speedrun_page import SpeedrunPageMixin
-from .friends_page import FriendsPageMixin
+from .pages.speedrun_page import SpeedrunPageMixin
+from .pages.friends_page import FriendsPageMixin
 from .pages.overlays import OverlaysPageMixin
 from .pages.entity import EntityPageMixin
+from .pages.codex import CodexPageMixin
 from .pages.combat import CombatPageMixin
 from .pages.loot import LootPageMixin
-from .pages.crosshair import CrosshairPageMixin
 from .pages.map_page import MapPageMixin
 from .pages.log import LogPageMixin
 from .pages.collection import CollectionPageMixin
+from .pages.server_page import ServerPageMixin
 from ..config import Settings
 from ..core.proc import backend_name
 from ..core import updater
@@ -41,22 +41,24 @@ from ..api import FareverAPI
 NAV = [
     ("overlays", "layers", "Overlays"),
     ("entity", "search", "Entity"),
+    ("codex", "layout", "Bestiary"),
     ("combat", "swords", "Combat / DPS"),
     ("speedrun", "timer", "Speedrun"),
     ("loot", "box", "Loot"),
     ("collection", "archive", "Collection"),
-    ("crosshair", "crosshair", "Crosshair"),
     ("map", "map", "Map"),
     ("friends", "users", "Friends"),
+    ("server", "broadcast", "Server Ping"),
     ("log", "terminal", "Log"),
 ]
 CLASSES = ["Auto", "Warrior", "Rogue", "Mage", "Priest", "Off"]
 
 
 class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
-                   OverlaysPageMixin, EntityPageMixin, CombatPageMixin,
-                   LootPageMixin, CollectionPageMixin, CrosshairPageMixin,
-                   MapPageMixin, LogPageMixin, QtWidgets.QMainWindow):
+                   OverlaysPageMixin, EntityPageMixin, CodexPageMixin,
+                   CombatPageMixin, LootPageMixin, CollectionPageMixin,
+                   MapPageMixin, ServerPageMixin, LogPageMixin,
+                   QtWidgets.QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.s = settings
@@ -140,10 +142,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
         self.log(f"Read-only. Memory backend: {backend_name()}. Press Attach "
                  "(if another memory tool is running, unload it first to avoid "
-                 "interference). The crosshair needs no attach.")
-
-        if getattr(self.s, "open_overlay_crosshair", False):
-            self._request_overlay("crosshair", True)
+                 "interference).")
 
     # The live session is owned by `self.attach_ctl`; the overlay windows + cards
     # by `self.overlay_mgr`. These properties keep the existing `self.proc` /
@@ -188,7 +187,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         """The moustache brand mark for the header, tinted to the current accent on
         a transparent background. The bundled app_icon is opaque (moustache on a
         dark #0e0f13 square), so we derive an alpha mask from each pixel's distance
-        to that background colour and refill it with the accent."""
+        to that background colour and refill it with the accent.
+        """
         for name in ("app_icon.png", "app_icon.ico"):
             p = paths.assets_dir() / name
             if p.exists():
@@ -277,7 +277,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         for key, _icon, _label in NAV:
             page = getattr(self, f"_page_{key}")()
             self._pages[key] = self.stack.addWidget(self._scroll(page)) \
-                if key != "log" else self.stack.addWidget(page)
+                if key not in ("log", "server") else self.stack.addWidget(page)
         v.addWidget(self.stack, 1)
         return col
 
@@ -370,6 +370,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         # Refresh the active page content for profile-specific settings
         if key == "entity" and hasattr(self, "_refresh_entity_page"):
             self._refresh_entity_page()
+        if key == "codex" and hasattr(self, "_refresh_codex_grid"):
+            self._refresh_codex_grid()
 
     # ====================================================================
     #  Pages
@@ -437,7 +439,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
     def _set_accent(self, color):
         """Highlight color: re-tint the whole app live, the control panel and
         every open overlay. Updates the global accent + QSS, re-applies it, and
-        refreshes the widgets that paint the accent directly (not via QSS)."""
+        refreshes the widgets that paint the accent directly (not via QSS).
+        """
         self.s.hud_accent = color
         self.s.save()
         theme.set_accent(color)
@@ -450,7 +453,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     def _restyle_accent(self):
         """Refresh control-panel widgets that hold the accent as a captured value
-        or paint it directly (QSS re-apply alone doesn't repaint these)."""
+        or paint it directly (QSS re-apply alone doesn't repaint these).
+        """
         from .components import (SectionHeader, Stepper, NavItem,
                                  SegmentedControl, OverlayCard, SliderRow,
                                  FilterChip)
@@ -492,7 +496,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         dot = theme.GOOD if attached else theme.NEUTRAL
         self.status.setText(f"●  {text}")
         self.status.setStyleSheet(
-            f"color:{dot};font-family:'{theme.MONO_FONT}','Consolas';font-size:11px;")
+            f"color:{dot};font-family:'{theme.MONO_FONT}','Consoles';font-size:11px;")
 
     # --- self-update ----------------------------------------------------
     def _on_update_found(self, info):
@@ -581,12 +585,56 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     def detach(self):
         """Tear down the live session. The controller closes overlays (via its
-        `detaching` signal) before stopping the model + closing the handle."""
+        `detaching` signal) before stopping the model + closing the handle.
+        """
         self.attach_ctl.detach()
 
     # ====================================================================
     #  Loot prediction
     # ====================================================================
+
+    def _set_unit_hidden(self, uid: str, hidden: bool) -> None:
+        profile = self.model.player_profile() if self.model else None
+        self.s.toggle_unit_hidden(uid, hidden, profile)
+
+        # 1. Sync Entity tab chips
+        if hasattr(self, "_unit_chips"):
+            for u, _n, chip in self._unit_chips:
+                if u == uid:
+                    chip.blockSignals(True)
+                    chip.setChecked(not hidden)
+                    chip.blockSignals(False)
+                    chip.restyle()
+                    break
+
+        # 2. Sync Codex tab cards
+        if hasattr(self, "_refresh_codex_sync"):
+            self._refresh_codex_sync()
+
+        if hasattr(self, "_update_unit_tag"):
+            self._update_unit_tag()
+
+    def _set_all_units_hidden(self, hidden: bool) -> None:
+        profile = self.model.player_profile() if self.model else None
+        
+        # 1. Update Settings
+        if hasattr(self, "_unit_chips"):
+            uids = [u for u, _n, _c in self._unit_chips]
+            self.s.set_all_units_hidden(uids, hidden, profile)
+            
+            # 2. Sync Entity chips
+            for _uid, _name, chip in self._unit_chips:
+                chip.blockSignals(True)
+                chip.setChecked(not hidden)
+                chip.blockSignals(False)
+                chip.restyle()
+        
+        # 3. Sync Codex cards
+        if hasattr(self, "_refresh_codex_sync"):
+            self._refresh_codex_sync()
+
+        if hasattr(self, "_update_unit_tag"):
+            self._update_unit_tag()
 
     def _center(self, widget):
         w = QtWidgets.QWidget()
@@ -597,16 +645,18 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         return w
 
     def closeEvent(self, e):
+        # Stop the hotkeys first (releases global hooks)
         try:
             self.hotkeys.clear()
         except Exception:
             pass
-        try:
-            self.attach_ctl.stop()
-        except Exception:
-            pass
+        # Stop the friends timer
         try:
             self._friends_timer.stop()
+        except Exception:
+            pass
+        # Wait for CallWorkers to finish
+        try:
             if self._friends_worker is not None and self._friends_worker.isRunning():
                 self._friends_worker.wait(1500)
         except Exception:
@@ -622,5 +672,19 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
             # the download worker is left to finish if a swap is mid-flight
         except Exception:
             pass
+
+        # Stop Server Diagnostics workers
+        try:
+            if hasattr(self, "_scan_worker") and self._scan_worker:
+                self._scan_worker.stop()
+                self._scan_worker.wait(1000)
+            if hasattr(self, "_ping_worker") and self._ping_worker:
+                if hasattr(self._ping_worker, "stop"):
+                    self._ping_worker.stop()
+                self._ping_worker.wait(1000)
+        except Exception:
+            pass
+
+        # Detach from the game (this now waits for the locate worker internally)
         self.detach()
         super().closeEvent(e)

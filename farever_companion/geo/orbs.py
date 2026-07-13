@@ -27,6 +27,9 @@ class Orb:
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))
 
+    def dist2d(self, x: float, y: float) -> float:
+        return math.hypot(self.x - x, self.y - y)
+
 
 REGION_NAMES = {
     "Z1": "Skover Island",

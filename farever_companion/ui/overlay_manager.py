@@ -10,20 +10,18 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
-from .entity_overlay import EntityOverlay
-from .dps_overlay import DpsOverlay
-from .skill_overlay import SkillOverlay
-from .minimap import MinimapOverlay
-from .speedrun_overlay import SpeedrunOverlay
-from .crosshair import CrosshairOverlay
+from .overlays.entity_overlay import EntityOverlay
+from .overlays.dps_overlay import DpsOverlay
+from .overlays.skill_overlay import SkillOverlay
+from .overlays.minimap import MinimapOverlay
+from .overlays.speedrun_overlay import SpeedrunOverlay
 from .tracker import TrackController
 from ..geo import orb_sync
 
-# The game HUD overlays that share the global opacity + lock (crosshair has its
-# own opacity/click-through). One place so new overlays inherit both.
+# The game HUD overlays that share the global opacity + lock. One place so new overlays inherit both.
 HUD_OVERLAYS = ("entity", "dps", "skills", "map", "speedrun")
 
-# Overlay key -> widget class (crosshair is special-cased: no model).
+# Overlay key -> widget class.
 _OVERLAY_CLASSES = {
     "entity": EntityOverlay, "dps": DpsOverlay, "skills": SkillOverlay,
     "map": MinimapOverlay, "speedrun": SpeedrunOverlay,
@@ -109,17 +107,19 @@ class OverlayManager(QtCore.QObject):
         self.cards.setdefault(key, []).append(card)
 
     def set_cards_enabled(self, on: bool) -> None:
-        """Cards that need a live process (entity/dps/skills/map/compass) are gated until
-        attach+locate succeeds. Crosshair stays available (cosmetic)."""
-        for key in ("entity", "dps", "skills", "map", "compass"):
+        """Cards that need a live process (entity/dps/skills/map/compass/speedrun) are gated until
+        attach+locate succeeds."""
+        for key in ("entity", "dps", "skills", "map", "compass", "speedrun"):
             for card in self.cards.get(key, []):
                 card.setEnabled(on)
 
     def sync_cards(self, key: str) -> None:
         ov = self.overlays.get(key)
-        visible = bool(ov is not None and (ov.isVisible() or getattr(ov, "_auto_hidden", False) or getattr(ov, "_alt_tabbed", False)))
+        # If the overlay exists, it counts as "active" even if it's currently 
+        # auto-hidden by a menu or alt-tabbed.
+        active = bool(ov is not None)
         for card in self.cards.get(key, []):
-            card.set_checked_silent(visible)
+            card.set_checked_silent(active)
 
 
 
@@ -128,8 +128,6 @@ class OverlayManager(QtCore.QObject):
 
     # --- open / close ----------------------------------------------------
     def _make(self, key: str):
-        if key == "crosshair":
-            return CrosshairOverlay(self.s)
         ov = _OVERLAY_CLASSES[key](self.model, self.s)
         if hasattr(ov, "request_page"):
             ov.request_page.connect(self.request_page)
@@ -140,14 +138,31 @@ class OverlayManager(QtCore.QObject):
             ov.set_collection_owned(self.collection_owned)
         if hasattr(ov, "set_tracker"):
             ov.set_tracker(self.tracker)
-        # Wire the minimap's eye-button \u2192 map-page toggle sync callback
+        # Wire the minimap's eye-button → map-page toggle sync callback
         if key == "map":
             panel = self.parent()
             if panel is not None:
                 if hasattr(ov, "_sync_fn") and hasattr(panel, "_hide_collected_toggle"):
                     ov._sync_fn = panel._hide_collected_toggle.set_checked_silent
-                if hasattr(ov, "_bare_sync_fn") and hasattr(panel, "_bare_toggle"):
-                    ov._bare_sync_fn = panel._bare_toggle.set_checked_silent
+                if hasattr(ov, "_zoom_sync_fn") and hasattr(panel, "_zoom_slider"):
+                    ov._zoom_sync_fn = panel._zoom_slider.setValueSilent
+
+        # Wire universal "Borderless" (bare) toggle sync
+        panel = self.parent()
+        if panel is not None and hasattr(ov, "_bare_sync_fn"):
+            # Every OverlayCard in the overlays page (and the map page card)
+            # registers with the manager. We find the card(s) and wire the sync.
+            for card in self.cards.get(key, []):
+                if hasattr(card, "set_bare_checked_silent"):
+                    # This is a bit tricky since an overlay can have multiple cards
+                    # (like map). We'll use a wrapper to sync all of them.
+                    def sync_all_cards(on, k=key):
+                        for c in self.cards.get(k, []):
+                            if hasattr(c, "set_bare_checked_silent"):
+                                c.set_bare_checked_silent(on)
+                    ov._bare_sync_fn = sync_all_cards
+                    break
+
         return ov
 
     def request(self, key: str, on: bool) -> None:
@@ -155,17 +170,22 @@ class OverlayManager(QtCore.QObject):
             ov = self.overlays.get(key)
             if ov is not None:
                 ov.close()      # WA_DeleteOnClose -> _on_closed
+            self.overlays[key] = None
+            self.sync_cards(key)
             setting_name = f"open_overlay_{key}"
             if hasattr(self.s, setting_name):
                 setattr(self.s, setting_name, False)
                 self.s.save()
             return
-        if key != "crosshair" and (self.model is None or self.model.player_addr is None):
+        if self.model is None or self.model.player_addr is None:
             self.log.emit("Attach and locate the player first.")
             self.sync_cards(key)   # revert the toggle
             return
         ov = self.overlays.get(key)
-        if ov is not None and ov.isVisible():
+        if ov is not None:
+            # If it already exists but is hidden (Alt-tabbed/Menu), show it
+            if not ov.isVisible():
+                ov.show()
             return
         ov = self._make(key)
         ov.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
@@ -246,34 +266,28 @@ class OverlayManager(QtCore.QObject):
                 self._restore_click_through()
             return
 
-        # Alt-tab focus check
+        # 1. Focus check
         import ctypes
         import os
         from ctypes import wintypes
         active_hwnd = ctypes.windll.user32.GetForegroundWindow()
         is_strictly_game = False
-        game_focused = True
-        if active_hwnd:
+        is_app_focused = False
+        if active_hwnd and m.proc:
             pid = ctypes.c_ulong()
             ctypes.windll.user32.GetWindowThreadProcessId(active_hwnd, ctypes.byref(pid))
-            is_strictly_game = (m.proc is not None and pid.value == m.proc.pid)
-            game_focused = is_strictly_game or (pid.value == os.getpid())
-        else:
-            game_focused = False
+            is_strictly_game = (pid.value == m.proc.pid)
+            is_app_focused = (pid.value == os.getpid())
 
-        # Auto-hide overlays when game menus are open (only check if game is active)
-        # Mouse snap releases for ANY menu; auto-hide only for non-Escape menus
-        menu_any = False
-        menu_hide = False
-        if (getattr(self.s, "auto_hide_menus", False) or getattr(self.s, "snap_mouse_to_player", False)) and game_focused:
-            try:
-                menu_any = bool(m.is_game_menu_open(include_escape=True))
-                menu_hide = bool(m.is_game_menu_open(include_escape=False))
-            except Exception:
-                menu_any = False
-                menu_hide = False
+        # 2. Menu Detection
+        try:
+            menu_any = bool(m.is_game_menu_open(include_escape=True))
+            menu_hide = bool(m.is_game_menu_open(include_escape=False))
+        except Exception:
+            menu_any = False
+            menu_hide = False
 
-        # Snap mouse to center of player window when not in menus
+        # 3. Mouse Snapping (only if enabled and not in any menu)
         if getattr(self.s, "snap_mouse_to_player", False) and is_strictly_game and not menu_any:
             rect = wintypes.RECT()
             if ctypes.windll.user32.GetClientRect(active_hwnd, ctypes.byref(rect)):
@@ -284,84 +298,93 @@ class OverlayManager(QtCore.QObject):
                 ctypes.windll.user32.ClientToScreen(active_hwnd, ctypes.byref(pt))
                 ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
 
-        # Check if in a dungeon (uses GameLayer.mainActivity class name — reliable
-        # for all dungeon types, no element scanning or POI string matching needed)
+        # 4. Dungeon detection
         in_dungeon = False
         try:
             in_dungeon = m.is_in_dungeon()
         except Exception:
             pass
 
-
-        # Build list of overlays to check (including the compass needle if active)
+        # 5. Visibility Loop
+        # We don't hide on Alt-Tab anymore as requested ("nothing hidden when 
+        # the game is running"), which also makes restoration much more reliable.
         items = list(self.overlays.items())
         if self.tracker._needle is not None:
             items.append(("compass", self.tracker._needle))
 
         for key, ov in items:
             if ov is not None:
-                # 1. Alt-Tab handling
-                is_alt_tabbed = getattr(ov, "_alt_tabbed", False)
-                if not game_focused:
-                    if not is_alt_tabbed and ov.isVisible():
+                # 1. Focus check (Show if game OR app is in focus)
+                if not (is_strictly_game or is_app_focused):
+                    if ov.isVisible():
                         ov.hide()
-                        ov._alt_tabbed = True
                     continue
-                else:
-                    if is_alt_tabbed:
-                        ov._alt_tabbed = False
-                        # Only show if not hidden by menu or dungeon
-                        if not getattr(ov, "_auto_hidden", False) and not getattr(ov, "_dungeon_hidden", False):
-                            ov.show()
 
-                # 2. Menu Auto-hide handling
-                is_hidden_by_menu = getattr(ov, "_auto_hidden", False)
-                if menu_hide:
-                    if not is_hidden_by_menu and ov.isVisible():
+                # 2. Visibility Rules (Menu & Dungeon)
+                # These rules are bypassed if the companion app itself is focused, 
+                # so you can move/configure overlays even while in a menu or dungeon.
+                # (Exception: Compass is hidden when app is focused as requested).
+                should_hide = False
+                if is_app_focused:
+                    should_hide = (key == "compass")
+                else:
+                    is_esc_menu = menu_any and not menu_hide
+                    auto_hide_enabled = getattr(self.s, "auto_hide_menus", False)
+                    
+                    # Rule A: Escape menu hides everything except Entity and Minimap
+                    if is_esc_menu:
+                        should_hide = (key not in ("entity", "map"))
+                    # Rule B: Gameplay menus hide everything if enabled
+                    elif menu_hide and auto_hide_enabled:
+                        should_hide = True
+                    
+                    # Rule C: Dungeons hide Minimap, Entity, and Compass
+                    if not should_hide:
+                        should_hide = in_dungeon and key in ("map", "entity", "compass")
+
+                    # Exception: DPS and Speedrun never auto-hide in dungeons (ignore menus)
+                    if in_dungeon and key in ("dps", "speedrun"):
+                        should_hide = False
+
+                if should_hide:
+                    if ov.isVisible():
                         ov.hide()
-                        ov._auto_hidden = True
-                        self.log.emit(f"Hiding {key} (menu open)")
                 else:
-                    if is_hidden_by_menu:
-                        ov._auto_hidden = False
-                        self.log.emit(f"Restoring {key} (menu closed)")
-                        # Only show if not hidden by dungeon
-                        if not getattr(ov, "_dungeon_hidden", False):
-                            ov.show()
-
-                # 3. Dungeon Auto-hide handling
-                # Auto hide minimap ("map"), entity ("entity"), and compass ("compass") in dungeon.
-                # Do not hide dps meter ("dps") or speedrun meter ("speedrun").
-                hide_in_dungeon = in_dungeon and key in ("map", "entity", "compass")
-                is_hidden_by_dungeon = getattr(ov, "_dungeon_hidden", False)
-                
-                if hide_in_dungeon:
-                    if not is_hidden_by_dungeon and ov.isVisible():
-                        ov.hide()
-                        ov._dungeon_hidden = True
-                        self.log.emit(f"Hiding {key} (in dungeon)")
-                else:
-                    if is_hidden_by_dungeon:
-                        ov._dungeon_hidden = False
-                        self.log.emit(f"Restoring {key} (left dungeon)")
-                        # Only show if not hidden by menu
-                        if not getattr(ov, "_auto_hidden", False):
-                            ov.show()
+                    if not ov.isVisible():
+                        ov.show()
 
 
-        if not self.s.combat_click_through:
-            if self._combat_lock_active:
-                self._restore_click_through()
-            return
+        # Determine if we should temporarily force click-through (combat or cursor-hidden/Mouse-park)
+        should_force_lock = False
         
-        try:
-            in_combat = False
-            if m.locator and hasattr(m.locator, "in_combat"):
-                in_combat = bool(m.locator.in_combat())
-        except Exception:
-            in_combat = False
-            
-        if in_combat:
+        # 1. Combat check (if enabled)
+        if self.s.combat_click_through:
+            try:
+                if m.locator and hasattr(m.locator, "in_combat") and bool(m.locator.in_combat()):
+                    should_force_lock = True
+            except Exception:
+                pass
+                
+        # 2. Mouse-park check (cursor hidden while playing in game)
+        if not should_force_lock and is_strictly_game:
+            try:
+                class CURSORINFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.DWORD),
+                        ("flags", wintypes.DWORD),
+                        ("hCursor", wintypes.HCURSOR),
+                        ("ptScreenPos", wintypes.POINT),
+                    ]
+                cinfo = CURSORINFO()
+                cinfo.cbSize = ctypes.sizeof(CURSORINFO)
+                if ctypes.windll.user32.GetCursorInfo(ctypes.byref(cinfo)):
+                    # CURSOR_SHOWING = 0x00000001
+                    if (cinfo.flags & 0x00000001) == 0:
+                        should_force_lock = True
+            except Exception:
+                pass
+
+        if should_force_lock:
             if not self._combat_lock_active:
                 for key in HUD_OVERLAYS:
                     ov = self.overlays.get(key)

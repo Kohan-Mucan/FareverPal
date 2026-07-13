@@ -112,13 +112,15 @@ def type_name(type_id: str | None) -> str:
 
 @lru_cache(maxsize=1)
 def codex_unit_ids() -> tuple[str, ...]:
-    """All concrete enemy unit ids whose type is a Codex type (no Base* /
-    *_Base inheritance templates)."""
+    """All concrete enemy unit ids whose type is a Codex type, excluding
+    templates and internals."""
     ctypes = {tid for tid, _ in codex_types()}
     return tuple(sorted(
         u for u, r in _units_by_id().items()
-        if r.get("type") in ctypes and u not in _TEMPLATE_IDS
-        and not u.endswith("_Base")))
+        if (r.get("type") in ctypes or (isinstance(r.get("flags"), int) and (r.get("flags") & 0x10)))
+        and u not in _TEMPLATE_IDS
+        and not u.endswith("_Base")
+    ))
 
 
 def unit_type(unit_id: str | None) -> str | None:
@@ -169,3 +171,40 @@ def predict_unit(unit_id: str, level: int | None = None
     info = unit_info(unit_id)
     lvl = level if level is not None else ((info.get("lvl") if info else None) or 1)
     return loot.predict_sorted(table, lvl)
+
+
+@lru_cache(maxsize=1)
+def _loot_to_unit_types() -> dict[str, list[str]]:
+    """Map of loot_table_id -> list of unit_type_ids that use it."""
+    out: dict[str, list[str]] = {}
+    for ut in cdb.lines("unitType"):
+        lt = ut.get("lootTable")
+        if lt:
+            out.setdefault(lt, []).append(ut["id"])
+    return out
+
+
+def who_drops(item_id: str) -> list[str]:
+    """List of unit type names that can drop this item."""
+    from . import names, loot
+    
+    # 1. Find all tables containing this item
+    tables = loot.reverse_loot_map().get(item_id, [])
+    
+    # 2. Find unit types using those tables
+    ut_map = _loot_to_unit_types()
+    u_types = set()
+    for tid in tables:
+        for utid in ut_map.get(tid, []):
+            u_types.add(utid)
+            
+    # 3. Return readable names
+    out_names = []
+    for utid in u_types:
+        out_names.append(names.unit_name(utid))
+    return sorted(out_names)
+
+
+def static_spawns(unit_id: str) -> list[list[float]]:
+    """Not currently used by the main app (Enemies are live memory scans)."""
+    return []

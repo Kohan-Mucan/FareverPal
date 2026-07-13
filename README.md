@@ -11,6 +11,8 @@ shows:
   (via the game's own `DamageDisplay` numbers) breakdown. Self DPS only.
 - **Minimap** — top-down POI radar (chests, gatherables, enemies, obelisks),
   zoom, right-click to mark collectibles done.
+- **Dungeon Secret Orbs** — Automatic detection of InstanceOrbs and activity orbs
+  within dungeons, even those not in the overworld static database.
 - **Offline loot predictor** — any loot table at any level.
 
 It is out-of-process and write-free, so it **cannot freeze or crash the game**
@@ -60,7 +62,21 @@ companion/
   CREDITS.md         third-party attribution
 ```
 
-Data (CDB sheets, icons, names, chest positions) is reused from the workspace via `paths.py`.
+Data (CDB sheets, icons, names, chest positions) is reused from the sibling
+`htdocs/` workspace via `paths.py`.
+
+## Utility Scripts
+
+The `htdocs/tools/` directory contains several helper scripts and batch files for
+data management and asset extraction:
+
+- `htdocs/tools/Run_Scripts.bat` — Launches `script_runner.py` for general tasks.
+- `htdocs/tools/run_sync_data.bat` — Launches `sync_data.py` to synchronize collected
+  collectibles.
+- `htdocs/tools/extract_assets.bat` — Helper for extracting game assets (sheets, icons)
+  from the game files.
+- `htdocs/tools/extract_critters.py` — Generates `critters.json` from the game's unit
+  data.
 
 ## Run from source
 

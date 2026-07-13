@@ -17,14 +17,14 @@ import struct
 from .appsingleton import GameAppLocator
 from .hl import Hl, is_ptr, _HOBJ, utf16z as _utf16z
 from .proc import Proc, ProcError
-from .constants import TO_NAME, OFF_HEADING, OFF_POS as OFF_XYZ
+from ..constants import (
+    TO_NAME, OFF_HEADING, OFF_POS as OFF_XYZ,
+    OFF_HERO_OWNERPLAYER, OFF_HERO_ISCOMBAT, OFF_PLAYER_ISME
+)
 from .scene import OFF_GAMELAYER, OFF_UNITS_ARR
 
 # --- calibrate live; None => use the fallback heuristic -------------------
-OFF_HERO_OWNERPLAYER: int | None = None   # ent.Hero -> st.Player
-OFF_PLAYER_ISME: int | None = None        # st.Player.isMe (i32/bool)
 OFF_PLAYER_HERO: int | None = None        # st.Player.hero -> ent.Hero
-OFF_HERO_ISCOMBAT: int | None = 0x2a8     # ent.Hero.isInCombat (bool)
 
 # The ent.Hero heap-scan fallback is OPT-IN only (FAREVER_HEAPSCAN=1). It scans
 # the multi-GB GC heap, and when fired against a half-initialized process (the
@@ -235,8 +235,11 @@ class PlayerLocator:
         hero = self.live_address()
         if not hero:
             return None
-        # OFF_HERO_OWNERPLAYER = 16
-        player = self.hl.ptr(hero + 16)
+        hero_type = self.hl.u64(hero)
+        off_owner = self.hl.field_offset(hero_type, "ownerPlayer")
+        if off_owner is None:
+            off_owner = 16
+        player = self.hl.ptr(hero + off_owner)
         if not player:
             return None
         type_ptr = self.hl.u64(player)
@@ -260,19 +263,22 @@ class PlayerLocator:
         for fn in ("dbId", "id", "uid", "pid", "playerId", "charId"):
             off = self.hl.field_offset(type_ptr, fn)
             if off is not None:
+                # String ID check
                 try:
-                    # String ID check
                     val_ptr = self.hl.ptr(player + off)
-                    if val_ptr and self.hl.class_of(val_ptr) == "String":
+                    if val_ptr and is_ptr(val_ptr) and self.hl.class_of(val_ptr) == "String":
                         uid = self.hl.hl_string(val_ptr)
                         break
-                    # Numeric ID check
+                except Exception:
+                    pass
+                # Numeric ID check
+                try:
                     val_i32 = self.hl.i32(player + off)
                     if val_i32 != 0:
                         uid = f"{val_i32 & 0xffffffff:08x}"
                         break
                 except Exception:
-                    continue
+                    pass
 
         # Character-specific profile including the class
         # to differentiate characters with the same name.

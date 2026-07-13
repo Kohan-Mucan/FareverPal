@@ -1,16 +1,15 @@
-"""Single source of truth for HashLink layout + game struct offsets.
+"""Single source of truth for App Globals, Calibration, and Engine Offsets.
 
-Every offset lives here exactly once and is imported by the readers (`hl.py`,
-`scene.py`, `attributes.py`, `player.py`, `appsingleton.py`) so a concept has
-one name and one value. Values are validated against a specific Farever build
-and resolved by class name through `hl.py` reflection where practical; the
-build-validated dates stay with the readers that document each group.
-
-Calibration-pending offsets (e.g. the per-skill level offset, the isMe path)
-stay as `None`-defaulted constants in their own module, they're not shared, so
-they don't belong here.
+Every magic number lives here exactly once so a concept has one name and one
+value. Includes HashLink memory offsets, UI/Minimap calibration, and global
+feature flags.
 """
 from __future__ import annotations
+
+# --- Branding & Versioning -------------------------------------------------
+VERSION = "0.2.9"
+APP_NAME = "FareverPal"
+
 
 # --- HashLink runtime object model -----------------------------------------
 # instance[+0] -> hl_type*; hl_type[+0]=kind(i32); hl_type[+8] -> hl_type_obj*.
@@ -46,20 +45,25 @@ NA_DATA_OFF = 0x18   # NativeArray data (8B object pointers)
 # --- GameObject / unit layout ----------------------------------------------
 # ent.Hero / ent.Foe / ent.interactible.* share the ent.GameObject layout, so
 # the same offsets read the player, enemies and interactibles.
-OFF_GAMELAYER = 0x58     # GameObject -> st.GameLayer
-OFF_OWNER = 0x60         # GameObject -> owner (a Hero for player-owned units)
-OFF_POS = 0x98           # x,y,z contiguous f64 (the player's own position too)
-OFF_HEADING = 0xB0       # facing angle, f64 radians (atan2: 0=+x, CCW)
-OFF_UNITID = 0x250       # unit-id String
-OFF_UATTR = 0x3D0        # GameObject -> ent.*Attributes
-OFF_LEVEL_UNIT = 0x3D8   # live level (i32) on the unit struct
-UNIT_BLOCK = 0x258       # batched header read: type(0) .. unit-id(0x250)
+OFF_GAMELAYER = 88
+OFF_OWNER = 0x498
+OFF_POS = 0x98
+OFF_HEADING = 0xb0
+OFF_UNITID = 0x250
+OFF_UATTR = 0x3d0
+OFF_LEVEL_UNIT = 0x3d8
+UNIT_BLOCK = 0x4c0
 
 # st.GameLayer arrays
-OFF_UNITS_ARR = 0x128    # -> ArrayObj of ent.Hero / ent.Foe subclasses
-OFF_ELEMS_ARR = 0x120    # -> ArrayObj of interactibles (no units)
-OFF_MAIN_ACTIVITY = 0xd8 # -> st.Activity subclass (st.activity.Dungeon when in a dungeon,
+OFF_UNITS_ARR = 0x128
+OFF_ELEMS_ARR = 0x120
+OFF_MAIN_ACTIVITY = 0xd8
                           #    null or different class in the open world / town)
+OFF_CONFIG = 0xb8
+
+# ent.Hero specific fields
+OFF_HERO_OWNERPLAYER = 0x10  # ent.Hero -> st.Player (ownerPlayer)
+OFF_HERO_ISCOMBAT = 0x2a8
 
 
 # st.GameLayer.config {activityID:String, difficulty:Null<Int>, mapId:String}.
@@ -74,8 +78,77 @@ OFF_BOX_VALUE = 0x08          # boxed Null<Int> -> i32 value
 CONFIG_SCAN_BYTES = 0x800     # how far into GameLayer to hunt the config pointer
 
 # interactible element fields
-OFF_ELEMID = 0x268       # element-id String
-OFF_ELEMSTATE = 0x2a0    # element state String
+OFF_ELEMID = 0x268
+OFF_ELEMSTATE = 0x2a0
+OFF_ELEM_FX = 0x2b0
 
 # --- *Attributes struct ----------------------------------------------------
 OFF_HEALTH = 0xF0        # *Attributes + 0xF0 -> current Health (f64)
+
+# --- st.Player struct ------------------------------------------------------
+OFF_PLAYER_NAME = 0xa8
+OFF_PLAYER_GROUP = 0xe8
+OFF_PLAYER_ISME = 0x120
+
+# --- Minimap & Navigation Calibration --------------------------------------
+# Map-image pixel transform (px = (world + offset) * scale).
+X_OFFSET = 1922.261
+Y_OFFSET = 1686.423
+MAP_SCALE = 0.454951
+MAP_BOUNDS = (-1560.950, -1402.111, 2383.863, 2394.622)
+
+# camera-yaw -> view rotation calibration (sign flips orbit direction, offset
+# aligns "up" with the camera's forward).
+CAM_YAW_SIGN = -1.0
+CAM_YAW_OFFSET = 0.0
+
+
+# --- Calibrator Haxe Class & Field Mapping Metadata -------------------------
+# Maps Haxe class names -> Haxe field names -> constants.py variable names.
+# Used by the Calibrator GUI to scan and patch offsets without requiring a separate JSON.
+CALIBRATION_MAP = {
+    "ent.Hero": {
+        "player": "OFF_OWNER",
+        "posx": "OFF_POS",
+        "rotationZ": "OFF_HEADING",
+        "kind": "OFF_UNITID",
+        "attr": "OFF_UATTR",
+        "_level": "OFF_LEVEL_UNIT",
+        "gameLayer": "OFF_GAMELAYER",
+        "layer": "OFF_GAMELAYER",
+        "ownerPlayer": "OFF_HERO_OWNERPLAYER",
+        "isInCombat": "OFF_HERO_ISCOMBAT"
+    },
+    "st.GameLayer": {
+        "units": "OFF_UNITS_ARR",
+        "interactibles": "OFF_ELEMS_ARR",
+        "mainActivity": "OFF_MAIN_ACTIVITY",
+        "config": "OFF_CONFIG"
+    },
+    "st.Player": {
+        "name": "OFF_PLAYER_NAME",
+        "group": "OFF_PLAYER_GROUP",
+        "isMe": "OFF_PLAYER_ISME"
+    },
+    "ent.Element": {
+        "kind": "OFF_ELEMID",
+        "currentVisualState": "OFF_ELEMSTATE",
+        "currentFx": "OFF_ELEM_FX"
+    },
+    "ent.interactible.Chest": {
+        "kind": "OFF_ELEMID",
+        "currentVisualState": "OFF_ELEMSTATE",
+        "currentFx": "OFF_ELEM_FX"
+    },
+    "ent.Attributes": {
+        "hp": "OFF_HEALTH",
+        "life": "OFF_HEALTH",
+        "health": "OFF_HEALTH"
+    },
+    "st.Config": {
+        "difficulty": "OFF_CONFIG_DIFFICULTY",
+        "mapId": "OFF_CONFIG_MAPID"
+    }
+}
+
+

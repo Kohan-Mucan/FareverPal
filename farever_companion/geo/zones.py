@@ -1,14 +1,16 @@
 """Zone resolving utilities.
 
-Computes the active zone dynamically based on the closest static orb or chest
-coordinate, keeping the system robust against memory changes.
+Computes the active zone dynamically based on the closest static anchor
+(Orb, Chest, or POI), keeping the system robust against memory changes.
 """
 from __future__ import annotations
 
 import math
+import json
 from functools import lru_cache
 from . import orbs as geo_orbs
 from . import chests as geo_chests
+from .. import paths
 
 @lru_cache(maxsize=1)
 def zone_parent_map() -> dict[str, str]:
@@ -37,26 +39,56 @@ def get_area_id(zone_id: str | None) -> str | None:
         return None
     return zone_parent_map().get(zone_id, zone_id)
 
+@lru_cache(maxsize=1)
+def load_anchors() -> list[tuple[float, float, float, str]]:
+    """Combined list of (x, y, z, zone_id) from orbs and POIs for zone resolution."""
+    anchors = []
+    
+    # 1. Add Orbs
+    for o in geo_orbs.load_orbs():
+        if o.zone:
+            anchors.append((o.x, o.y, o.z, o.zone))
+            
+    # 2. Add POIs (Obelisks, Respawn Points, Dungeons)
+    try:
+        path = paths.poi_locs_path()
+        if path.exists():
+            poi_data = json.loads(path.read_text(encoding="utf-8"))
+            for p in poi_data.get("pois", []):
+                zid = p.get("zone")
+                wp = p.get("world_pos")
+                if zid and wp:
+                    anchors.append((float(wp["x"]), float(wp["y"]), float(p.get("z", 0)), zid))
+    except Exception:
+        pass
+        
+    return anchors
+
 @lru_cache(maxsize=4096)
 def resolve_zone(x: float, y: float, z: float) -> str | None:
-    """Find the closest static orb to determine the active location/area ID."""
-    orbs = geo_orbs.load_orbs()
-    if not orbs:
+    """Find the closest static anchor to determine the active location/area ID."""
+    anchors = load_anchors()
+    if not anchors:
         return None
-    closest_orb = min(orbs, key=lambda o: math.dist((o.x, o.y, o.z), (x, y, z)))
-    return get_area_id(closest_orb.zone)
+        
+    # Find closest anchor by 3D distance
+    best_zone = None
+    min_dist = float('inf')
+    for ax, ay, az, azone in anchors:
+        dist_sq = (ax - x)**2 + (ay - y)**2 + (az - z)**2
+        if dist_sq < min_dist:
+            min_dist = dist_sq
+            best_zone = azone
+            
+    return get_area_id(best_zone)
 
 @lru_cache(maxsize=1)
 def static_chest_zones() -> dict[str, str | None]:
-    """Map each static chest ID to its closest static orb's parent area ID."""
+    """Map each static chest ID to its closest anchor's parent area ID."""
     chests = geo_chests.load_chests()
-    orbs = geo_orbs.load_orbs()
     out = {}
-    if not orbs:
-        return out
     for c in chests:
-        closest_orb = min(orbs, key=lambda o: math.dist((o.x, o.y, o.z), (c.x, c.y, c.z)))
-        out[c.chest_id] = get_area_id(closest_orb.zone)
+        out[c.chest_id] = resolve_zone(c.x, c.y, c.z)
     return out
 
 def chest_zone(chest_id: str) -> str | None:

@@ -1,7 +1,7 @@
 """Real game icons -> QPixmap, cached.
 
 Resolves item/unit/skill ids to the extracted PNGs under
-htdocs/assets/icons/<sheet>/<id>.png (the same set the web wiki uses). Scaled
+htdocs/assets/icons/<sheet>/<id>.png (the same set the game uses). Scaled
 smoothly and cached by (sheet, id, size). Missing icons fall back to a small
 flat placeholder so the UI never breaks on a gap.
 
@@ -14,6 +14,7 @@ imports, not in-function ones). Keep all Qt use inside functions here.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from functools import lru_cache
 
 from .. import paths
@@ -31,21 +32,152 @@ def _qt():
     return _QtGui, _QtCore
 
 
+@lru_cache(maxsize=1)
+def _atlas_data():
+    """Atlas sprite-sheet coordinates. Merges all JSONs in the atlas folder.
+    Returns a case-insensitive dict (keys normalized to lowercase)."""
+    from ..data import raw_data
+    import json
+    
+    combined = {}
+    atlas_dir = paths.atlas_dir()
+    
+    # 1. Merge all JSON files found in the atlas directory
+    if atlas_dir.exists():
+        for p in atlas_dir.glob("*.json"):
+            # Skip the index file if it exists
+            if p.name == "atlas_index.json":
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    # Normalize keys to lowercase for case-insensitive lookup
+                    for key, value in data.items():
+                        combined[key.lower()] = value
+            except Exception:
+                continue
+                
+    if combined:
+        return combined
+            
+    # 2. Fall back to data from game extraction
+    fallback = raw_data.DATA.get("ATLAS_DATA", {})
+    # Normalize fallback keys as well
+    return {k.lower(): v for k, v in fallback.items()}
+
+
+def _atlas_path(gfx_file: str) -> Path | None:
+    """Resolve an atlas gfx path to an actual file on disk."""
+    name = Path(gfx_file).name
+    # 1. Try local atlas folder first
+    p = paths.atlas_dir() / name
+    if p.exists():
+        return p
+        
+    # 2. Fall back to standard icon bases
+    for base in (
+        paths.icons_dir(),
+        paths.icons_dir() / "Skills",
+        paths.icons_dir() / "Items",
+        paths.icons_dir() / "Units",
+    ):
+        for ext in ("webp", "png"):
+            p = base / f"{name}.{ext}" if "." not in name else base / name
+            if not p.exists() and "." not in name:
+                p = base / name
+            if p.exists():
+                return p
+    # Last resort: preserve relative structure under icons_dir
+    p = paths.icons_dir() / gfx_file
+    if p.exists():
+        return p
+    return None
+
+
+@lru_cache(maxsize=20)
+def _get_atlas_sheet(path: str):
+    """Cache the large atlas QPixmaps so we don't reload from disk for every icon."""
+    QtGui, _ = _qt()
+    pm = QtGui.QPixmap(path)
+    return pm if not pm.isNull() else None
+
+
+def _crop_atlas(atlas_path, x: int, y: int, src_size: int, dst_size: int):
+    """Load an atlas sheet and crop a single region, scaled to dst_size."""
+    QtGui, QtCore = _qt()
+    atlas = _get_atlas_sheet(str(atlas_path))
+    if atlas is None:
+        return None
+    rect = QtCore.QRect(x, y, src_size, src_size)
+    return atlas.copy(rect).scaled(
+        dst_size, dst_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+    )
+
+
+_SHEET_MAP = {
+    "units": "units",
+    "items": "items",
+    "skills": "skills",
+}
+
+
 def _icon_path(sheet: str, id_: str):
-    p = paths.icons_dir() / sheet / f"{id_}.png"
-    return p if p.exists() else None
+    # Normalize to the canonical plural name (e.g., "unit" -> "units")
+    s_low = sheet.lower()
+    canonical = _SHEET_MAP.get(s_low, s_low)
+    
+    # Build list of folders to try: plural lowercase, TitleCase, and original
+    sheets_to_try = [canonical, canonical.capitalize(), sheet]
+    seen = set()
+    unique_sheets = [x for x in sheets_to_try if x and not (x in seen or seen.add(x))]
+    
+    base_dirs = [paths.icons_dir()]
+    local_path = paths.project_root() / "assets" / "icons"
+    sibling_path = paths.project_root().parent / "htdocs" / "assets" / "icons"
+    for path in (local_path, sibling_path):
+        if path not in base_dirs and path.exists():
+            base_dirs.append(path)
+            
+    for base in base_dirs:
+        for s in unique_sheets:
+            for ext in ("webp", "png"):
+                p = base / s / f"{id_}.{ext}"
+                if p.exists():
+                    return p
+    return None
 
 
 @lru_cache(maxsize=4096)
 def pixmap(sheet: str, id_: str, size: int):
-    """A QPixmap for an icon id, scaled to `size`. Never None (placeholder)."""
+    """A QPixmap for an icon id, scaled to `size`. Never None (placeholder).
+
+    Atlas-first: if the id has gfx/atlas data in raw_data, crop from the
+    atlas sheet. Otherwise fall back to the individual file on disk.
+    """
     QtGui, QtCore = _qt()
-    path = _icon_path(sheet, id_) if (sheet and id_) else None
-    if path is not None:
-        pm = QtGui.QPixmap(str(path))
-        if not pm.isNull():
-            return pm.scaled(size, size, QtCore.Qt.KeepAspectRatio,
-                             QtCore.Qt.SmoothTransformation)
+    if sheet and id_:
+        # 1. Try atlas sprite-sheet
+        atlas_entry = _atlas_data().get(id_.lower())
+        if atlas_entry and isinstance(atlas_entry, dict):
+            atlas_path = _atlas_path(atlas_entry.get("file", ""))
+            if atlas_path:
+                pm = _crop_atlas(
+                    atlas_path,
+                    atlas_entry.get("x", 0),
+                    atlas_entry.get("y", 0),
+                    atlas_entry.get("size", 96),
+                    size,
+                )
+                if pm and not pm.isNull():
+                    return pm
+        # 2. Fall back to individual file
+        path = _icon_path(sheet, id_)
+        if path is not None:
+            pm = QtGui.QPixmap(str(path))
+            if not pm.isNull():
+                return pm.scaled(
+                    size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+                )
     return _placeholder(size)
 
 
@@ -62,6 +194,8 @@ def _placeholder(size: int):
 
 
 def has_icon(sheet: str, id_: str) -> bool:
+    if id_.lower() in _atlas_data():
+        return True
     return _icon_path(sheet, id_) is not None
 
 
@@ -169,10 +303,26 @@ def outlined(sheet: str | None, id_: str | None, size: int, accent: str,
 
 @lru_cache(maxsize=64)
 def asset_icon(sheet_name: str, size: int):
-    """A bundled SVG or PNG map icon from assets/map_icons/<name>.(svg|png), scaled. None if missing."""
+    """A bundled SVG or PNG map icon from assets/map_icons/<name>.(svg|png), scaled. 
+    Checks the atlas first, then fallback to disk. None if missing."""
     QtGui, QtCore = _qt()
     
-    # Check for SVG first
+    # 1. Try atlas sprite-sheet first
+    atlas_entry = _atlas_data().get(sheet_name.lower())
+    if atlas_entry and isinstance(atlas_entry, dict):
+        atlas_path = _atlas_path(atlas_entry.get("file", ""))
+        if atlas_path:
+            pm = _crop_atlas(
+                atlas_path,
+                atlas_entry.get("x", 0),
+                atlas_entry.get("y", 0),
+                atlas_entry.get("size", 96),
+                size,
+            )
+            if pm and not pm.isNull():
+                return pm
+
+    # 2. Check for SVG first
     svg_path = paths.assets_dir() / "map_icons" / f"{sheet_name}.svg"
     if svg_path.exists():
         try:
@@ -301,4 +451,3 @@ def tile_ui(name: str, size: int, accent: str):
         p.drawPixmap((size - g.width()) // 2, (size - g.height()) // 2, g)
     p.end()
     return pm
-

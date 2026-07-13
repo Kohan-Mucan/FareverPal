@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import theme
-from . import components as C
-from .workers import CallWorker
-from ..api import FareverAPI
+from .. import theme
+from .. import components as C
+from ..workers import CallWorker
+from ...api import FareverAPI
 
 class SpeedrunPageMixin:
     def _page_speedrun(self):
@@ -141,6 +141,7 @@ class SpeedrunPageMixin:
         lay = QtWidgets.QHBoxLayout(frame)
         lay.setContentsMargins(12, 8, 12, 8)
         lay.setSpacing(10)
+        lay.setAlignment(QtCore.Qt.AlignVCenter)
         name = QtWidgets.QLabel(f.get("username", "?"))
         name.setStyleSheet(f"color:{theme.TEXT};background:transparent;")
         code = f.get("public_id", "")

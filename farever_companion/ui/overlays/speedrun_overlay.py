@@ -15,14 +15,14 @@ import threading
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import theme
-from .overlay_base import OverlayWindow
-from .. import __version__
-from ..core.speedrun import (
+from .. import theme
+from ..overlay_base import OverlayWindow
+from ... import __version__
+from ...core.speedrun import (
     SpeedrunTimer, BossTimer, Encounter, AutoStarter, ModeLatch, RearmGate,
     fmt_time, record_lines)
-from ..data import names, icons
-from ..api import FareverAPI
+from ...data import names, icons
+from ...api import FareverAPI
 
 TICK_MS = 50           # centisecond-smooth display + boss poll while running
 DETECT_EVERY = 10      # run the (heavier) dungeon detection every Nth tick (~500ms)
@@ -33,7 +33,7 @@ class SpeedrunOverlay(OverlayWindow):
     uploaded = QtCore.Signal(str)   # cross-thread upload-result text
 
     def __init__(self, model, settings, parent=None):
-        super().__init__("SPEEDRUN", settings, geo_key="speedrun", parent=parent)
+        super().__init__("Speedrun", settings, geo_key="speedrun", parent=parent)
         self._page_key = "speedrun"
         self.model = model
         self.s = settings
@@ -139,8 +139,9 @@ class SpeedrunOverlay(OverlayWindow):
 
         # Fully automatic: starts on movement in a dungeon, stops on boss death,
         # uploads on finish. Manual control via hotkeys + the titlebar reset icon.
-        self._base_w, self._base_h = 250, 120
-        self.setMinimumWidth(210)
+        self._base_w, self._base_h = 320, 200
+        self.setMinimumWidth(240)
+        self.setMinimumHeight(200)
         self.apply_scale(self.s.speedrun_scale)
 
         self._poll = QtCore.QTimer(self)
@@ -154,10 +155,8 @@ class SpeedrunOverlay(OverlayWindow):
         self._render()
 
     def reset(self):
-        self.timer.reset()
-        self.boss_timer.reset()
-        if self.encounter is not None:
-            self.encounter.reset()
+        self._dungeon_bid = None
+        self._in_dungeon = False
         self._starter.reset()
         self._latch.reset()
         self._rearm.reset()
@@ -166,11 +165,13 @@ class SpeedrunOverlay(OverlayWindow):
         self.boss_is_new_best = False
         self._run_mode = None
         self._run_mode_src = None
+        self.mode_lbl.hide()
         self.upload_lbl.hide()
         self.warn_lbl.hide()
         self.sub_lbl.hide()
         self.full_pb_lbl.hide()
         self._upload_btn.hide()
+        self._dg_icon.hide()
         self._render()
 
     # --- loop ------------------------------------------------------------
@@ -192,6 +193,10 @@ class SpeedrunOverlay(OverlayWindow):
         # enc = (members, kill_id, states) where states = [(unit_id, present, hp)].
         enc = None
         if self.model is not None:
+            # Update dungeon status every tick so the auto-starter is responsive
+            # and works as soon as we enter, even before the boss is seen.
+            self._in_dungeon = self.model.is_in_dungeon()
+
             self._detect_ctr += 1
             detect_now = self._detect_ctr >= DETECT_EVERY
             if running or detect_now:
@@ -216,7 +221,7 @@ class SpeedrunOverlay(OverlayWindow):
                 kill_tuple = self.encounter.feed(states)
             else:
                 kill_tuple = (kill_id, False, None)
-            self._in_dungeon = bool(kill_tuple[1])
+
             self._update_dungeon_icon()
             # Refresh the live difficulty readout (cheap) and, while the boss is
             # alive and fighting, latch a confident auto read so the finish-frame
@@ -511,19 +516,24 @@ class SpeedrunOverlay(OverlayWindow):
 
     # --- render ----------------------------------------------------------
     def _fit(self):
-        """Responsive sizing: grow/shrink the panel to the widest visible line so
-        nothing clips (the FINISHED · BOSS · <name> line, PB/LAST, the full-PB
-        line), and let the height follow the content (word-wrapped status labels
-        included via heightForWidth). The base size is the floor, never a cap."""
-        pad = 22   # content margins (8+8) + card border (1+1) + breathing room
+        """Responsive sizing: grow/shrink the panel to the widest visible line.
+        The base size (200h) is the OS-enforced floor on high-DPI displays to
+        prevent geometry-reset loops."""
+        pad_w = 28
         lines = (self.time_lbl, self.sub_lbl, self.state_lbl, self.mode_lbl,
-                 self.pb_lbl, self.full_pb_lbl)
-        need = max((l.sizeHint().width() for l in lines if not l.isHidden()), default=0) + pad
-        w = max(self.minimumWidth(), round(self._base_w * self._scale), need)
+                 self.pb_lbl, self.full_pb_lbl, self.warn_lbl, self.upload_lbl)
+        need_w = max((l.sizeHint().width() for l in lines if not l.isHidden()), default=0) + pad_w
+        w = max(self.minimumWidth(), round(self._base_w * self._scale), need_w)
+        
         lay = self.layout()
-        h = lay.totalHeightForWidth(w) if lay.hasHeightForWidth() else self.sizeHint().height()
-        h = max(h, round(self._base_h * self._scale))
-        if w != self.width() or h != self.height():
+        if lay:
+            lay.activate()
+        
+        hint = self.sizeHint()
+        # Ensure we never request a height smaller than the OS-enforced 200px floor
+        h = max(round(self._base_h * self._scale), hint.height())
+            
+        if (w - self.width())**2 > 4 or (h - self.height())**2 > 4:
             self.resize(w, h)
 
     def _style_time(self, color: str):
@@ -599,12 +609,12 @@ class SpeedrunOverlay(OverlayWindow):
             mode, src = self._run_mode, (self._run_mode_src or "manual")
         else:
             mode, src = self._live_mode, self._live_mode_src
-        # Show an AUTO-detected difficulty wherever it resolved (a recognized boss
-        # OR the enemy-fleet read in a boss-less dungeon like the bee one). Only the
-        # MANUAL fallback needs a boss/dungeon context to avoid showing in town.
-        if not mode or (src != "auto" and not (self._dungeon_bid or t.boss_id)):
+        # Hide the readout immediately if we are not in a dungeon (unless the timer
+        # is running/done and we are still inside the instance).
+        if not mode or not self._in_dungeon:
             self.mode_lbl.hide()
             return
+
         if src == "auto":
             tag, color = "detected", (self.s.hud_accent or theme.ACCENT)
             tip = "Difficulty read from the live boss level."

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 from .. import components as C
 from ...data import names
 from ...data import icons
@@ -13,30 +13,36 @@ class OverlaysPageMixin:
         from ...config import experimental_enabled
         specs = [
             ("entity", "layers", "Entity & Loot",
-             "Nearby enemies, chests, and the closest drop table."),
+             "Nearby enemies, chests, and their drop tables.", self.s.entity_bare, True),
             ("dps", "swords", "DPS Meter",
-             "Big live self-DPS, survivability, recent cycles."),
+             "Big live self-DPS, survivability, recent cycles.", self.s.dps_bare, True),
             # experimental; release builds hide it (FAREVER_EXPERIMENTAL exposes it)
             *([("skills", "layers", "Skill Breakdown",
-                "Per-skill damage table — icons, real names, crit%. (experimental)")]
+                "Per-skill damage table — icons, real names, crit%. (experimental)", self.s.skills_bare, True)]
               if experimental_enabled() else []),
             ("map", "map", "Minimap",
-             "Top-down POI radar of chests, foes, and gatherables."),
-            ("crosshair", "crosshair", "Crosshair",
-             "Custom aiming reticle drawn over the screen centre."),
+             "Top-down POI radar of chests, foes, and gatherables.", self.s.minimap_bare, True),
             ("speedrun", "timer", "Speedrun",
-             "Run timer — start by hotkey, auto-stops on boss kill."),
+             "Run timer — start by hotkey, auto-stops on boss kill.", self.s.speedrun_bare, True),
+            None, # spacer to keep Compass under Map
             ("compass", "radio", "Compass Needle",
-             "Accent ring on minimap + 3D pointer overlay."),
+             "Accent ring on minimap + 3D pointer overlay.", False, False),
         ]
-        for i, (key, icon, t, d) in enumerate(specs):
-            card = C.OverlayCard(icon, t, d)
+        for i, spec in enumerate(specs):
+            if spec is None:
+                continue
+            key, icon, t, d, bare, has_bare = spec
+            lbl = "Transparent" if key == "speedrun" else "Borderless"
+            card = C.OverlayCard(icon, t, d, bare_checked=bare, has_bare=has_bare, bare_label=lbl)
             if key == "compass":
                 card.toggled.connect(self._set_show_compass)
                 card.set_checked_silent(self.s.show_compass)
                 self.compass_toggle = card
             else:
                 card.toggled.connect(lambda on, k=key: self._request_overlay(k, on))
+                if has_bare:
+                    card.bareToggled.connect(lambda on, k=key: self._set_bare(k, on))
+            
             self._register_card(key, card)
             cards.addWidget(card, i // 3, i % 3)
         v.addLayout(cards)
@@ -72,7 +78,7 @@ class OverlaysPageMixin:
 
         v.addWidget(C.SectionHeader("Appearance"))
         op = C.SliderRow("Overlay opacity", 30, 100, int(self.s.opacity * 100),
-                         lambda x: f"{x}%")
+                         lambda x: f"{x}%", default_val=90)
         op.valueChanged.connect(self._set_opacity)
         v.addWidget(op)
         hl = C.ColorSwatch(self.s.hud_accent)
@@ -80,6 +86,13 @@ class OverlaysPageMixin:
         v.addWidget(C.Field("Highlight color", hl))
         v.addStretch(1)
         return page
+
+    def _set_bare(self, key: str, on: bool) -> None:
+        attr = f"{key}_bare"
+        self._set(attr, on)
+        ov = self.overlay_mgr.overlays.get(key)
+        if ov is not None and hasattr(ov, "set_bare"):
+            ov.set_bare(on)
 
     def _set_lock(self, on):
         self.overlay_mgr.set_lock(on)

@@ -22,10 +22,6 @@ class LootPageMixin:
         head.addStretch(1)
         head.addWidget(tag)
         v.addLayout(head)
-        sub = QtWidgets.QLabel(
-            "Deterministic expansion of any loot table to per-item drop probability.")
-        sub.setObjectName("Muted")
-        v.addWidget(sub)
 
         controls = QtWidgets.QHBoxLayout()
         controls.setSpacing(12)
@@ -41,7 +37,8 @@ class LootPageMixin:
         if default_ix >= 0:
             self.table_combo.setCurrentIndex(default_ix)
         controls.addWidget(C.Field("Loot source", self.table_combo), 1)
-        self.level_stepper = C.Stepper(self.s.level, 1, 60)
+        self.level_stepper = C.Stepper(self.s.level, 1, 25)
+        self.level_stepper.valueChanged.connect(self._on_level_changed)
         controls.addWidget(C.Field("Level", self.level_stepper))
         btn = QtWidgets.QPushButton("Predict")
         btn.setObjectName("Accent")
@@ -60,10 +57,13 @@ class LootPageMixin:
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(0, QtWidgets.QHeaderView.Interactive)
+        self.table.setColumnWidth(0, 65)
         hh.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        hh.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QtWidgets.QHeaderView.Interactive)
+        self.table.setColumnWidth(2, 95)
+        hh.setSectionResizeMode(3, QtWidgets.QHeaderView.Interactive)
+        self.table.setColumnWidth(3, 160)
         self.table.setMinimumHeight(220)
         v.addWidget(self.table, 1)
 
@@ -76,6 +76,10 @@ class LootPageMixin:
         v.addLayout(footer)
         return page
 
+    def _on_level_changed(self, v):
+        self.s.level = v
+        self.s.save()
+
     def predict(self):
         self.table.setRowCount(0)
         tid = self.table_combo.currentData() or self.table_combo.currentText().strip()
@@ -87,11 +91,15 @@ class LootPageMixin:
         for r, (item, prob, rar, typ) in enumerate(rows):
             prob_item = QtWidgets.QTableWidgetItem(fmt_pct(prob))
             prob_item.setForeground(QtGui.QColor(theme.ACCENT))
-            f = prob_item.font(); f.setFamily(theme.MONO_FONT); prob_item.setFont(f)
+            f = prob_item.font()
+            f.setFamily(theme.MONO_FONT)
+            if f.pointSize() <= 0:
+                f.setPointSize(9)
+            prob_item.setFont(f)
             self.table.setItem(r, 0, prob_item)
             self.table.setCellWidget(r, 1, self._loot_item_cell(item, rar))
             self.table.setCellWidget(r, 2, self._center(C.RarityTag(rar)))
-            typ_item = QtWidgets.QTableWidgetItem(names.humanize(typ))
+            typ_item = QtWidgets.QTableWidgetItem(names.humanize(typ) + "   ")
             typ_item.setForeground(QtGui.QColor(theme.MUTED))
             self.table.setItem(r, 3, typ_item)
         self.table.resizeRowsToContents()
@@ -100,10 +108,11 @@ class LootPageMixin:
 
     def _loot_item_cell(self, item: str, rarity: str):
         w = QtWidgets.QWidget()
+        w.setMinimumHeight(40)
         lay = QtWidgets.QHBoxLayout(w)
-        lay.setContentsMargins(4, 3, 4, 3)
-        lay.setSpacing(8)
-        tile = C.IconTile(24)
+        lay.setContentsMargins(4, 5, 4, 5)
+        lay.setSpacing(10)
+        tile = C.IconTile(30)
         tile.set("item", item, theme.rarity_color(rarity))
         name = QtWidgets.QLabel()
         if tokens.is_token(item):

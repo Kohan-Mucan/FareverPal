@@ -90,20 +90,41 @@ class Proc:
 
     # --- lifecycle -------------------------------------------------------
     @classmethod
-    def attach(cls, name: str = PROCESS_NAME) -> "Proc":
-        if _native is not None:
+    def attach(cls, name: str = PROCESS_NAME, backend: str | None = None) -> "Proc":
+        """Attach to the process using the specified backend or auto-detect."""
+        errors = []
+
+        # 1. Try Native (Rust)
+        if backend == "native" or (backend is None and _native is not None):
             try:
                 r = _native.Reader.attach(name)
-            except OSError as e:
-                raise ProcError(str(e)) from e
-            return cls(r, "native", r.pid, name)
-        if _pymem is not None:
+                return cls(r, "native", r.pid, name)
+            except Exception as e:
+                errors.append(f"native: {e}")
+                if backend == "native":
+                    raise ProcError(f"native attach failed: {e}") from e
+
+        # 2. Try Pymem (Python)
+        if backend == "pymem" or (backend is None and _pymem is not None):
             try:
                 pm = _pymem.Pymem(name)
-            except Exception as e:  # pymem raises its own types
-                raise ProcError(f"pymem attach failed: {e}") from e
-            return cls(pm, "pymem", pm.process_id, name)
-        raise ProcError("no memory backend available (build farever_native or install pymem)")
+                return cls(pm, "pymem", pm.process_id, name)
+            except Exception as e:
+                errors.append(f"pymem: {e}")
+                if backend == "pymem":
+                    raise ProcError(f"pymem attach failed: {e}") from e
+
+        # 3. Handle failure
+        if errors:
+            print(f"[Proc] Attachment fallback/failure log: {'; '.join(errors)}")
+
+        if backend:
+            raise ProcError(f"requested backend '{backend}' is not available or failed: {errors}")
+        
+        if not _native and not _pymem:
+            raise ProcError("no memory backend available (build farever_native or install pymem)")
+            
+        raise ProcError(f"could not attach to {name}: {'; '.join(errors)}")
 
     def close(self) -> None:
         try:
@@ -138,17 +159,20 @@ class Proc:
     def u64(self, addr: int) -> int:
         if self.kind == "native":
             return self._impl.read_u64(addr)
-        return struct.unpack("<Q", self.read(addr, 8))[0]
+        b = self.read(addr, 8)
+        return struct.unpack("<Q", b)[0]
 
     def i32(self, addr: int) -> int:
         if self.kind == "native":
             return self._impl.read_i32(addr)
-        return struct.unpack("<i", self.read(addr, 4))[0]
+        b = self.read(addr, 4)
+        return struct.unpack("<i", b)[0]
 
     def f64(self, addr: int) -> float:
         if self.kind == "native":
             return self._impl.read_f64(addr)
-        return struct.unpack("<d", self.read(addr, 8))[0]
+        b = self.read(addr, 8)
+        return struct.unpack("<d", b)[0]
 
     def read_many(self, addrs: list[int], size: int) -> list[bytes | None]:
         """One batched read of many equal-size blocks (native), or a loop."""
@@ -181,12 +205,31 @@ class Proc:
 
     def find_bytes_in(self, needle: bytes, ranges: list[tuple[int, int]],
                       align: int = 1, max_hits: int = 4096) -> list[int]:
-        """Scan ONLY `ranges` (each `(base, len)`) for `needle`. The fast path for
-        re-enumerating a clustered object type: the caller hands in the small set
-        of GC size-class page ranges instead of paying a full ~23 GB heap walk."""
-        if self.kind != "native":
-            raise ProcError("find_bytes_in needs the farever_native extension (memory scan)")
-        return list(self._impl.find_bytes_in(needle, ranges, align, max_hits))
+        """Scan ONLY `ranges` (each `(base, len)`) for `needle`."""
+        if self.kind == "native":
+            return list(self._impl.find_bytes_in(needle, ranges, align, max_hits))
+        
+        # Pymem fallback: scan each range
+        out = []
+        for base, size in ranges:
+            try:
+                # Pymem's pattern_scan_module/all doesn't take ranges easily
+                # but we can read the whole range and search in python (slow)
+                # or use pattern_scan_all and filter by range (faster if needle is rare)
+                pass 
+            except: pass
+        
+        # For now, if ranges are provided, just use the global scan and filter.
+        # This is inefficient but correct.
+        all_hits = self.find_bytes(needle, align, False, 10000)
+        in_range = []
+        for h in all_hits:
+            for r_base, r_size in ranges:
+                if r_base <= h < r_base + r_size:
+                    in_range.append(h)
+                    break
+            if len(in_range) >= max_hits: break
+        return in_range
 
     def find_qword_in(self, value: int, ranges: list[tuple[int, int]],
                       max_hits: int = 4096) -> list[int]:

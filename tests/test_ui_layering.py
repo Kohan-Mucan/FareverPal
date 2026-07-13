@@ -29,7 +29,7 @@ FORBIDDEN_TAILS = (
     "core.damage", "core.player",
 )
 PAGE_FILES = sorted((UI_DIR / "pages").glob("*.py")) + [
-    UI_DIR / "account.py", UI_DIR / "friends_page.py", UI_DIR / "speedrun_page.py",
+    UI_DIR / "account.py",
 ]
 
 

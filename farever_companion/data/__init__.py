@@ -1,1 +1,1 @@
-"""Static, process-free data layer (CDB sheets + wiki data + icons)."""
+"""Static, process-free data layer (CDB sheets + display data + icons)."""

@@ -27,8 +27,18 @@ __pycache__/
 *.log
 
 # --- local game data (optional sibling data) ---
-data/
-htdocs/
+# Note: htdocs is now a sister folder in the root, but we keep these ignored
+# here just in case local copies are made.
+/data/
+/htdocs/
+assets/data/
+!farever_companion/data/
+/assets/icons/
+assets/map_icons/
+/farever_companion/assets/icons/
+
+# --- generated game data (compiled from .pak) ---
+# farever_companion/data/raw_data.py
 
 # --- Secrets / credentials (none expected, but never commit these) ---
 .env
@@ -51,9 +61,9 @@ _scratch*.py
 _tmp*.py
 *_dump.txt
 *.txt.tmp
-notes/
+farever_companion/constants.py
 *PLAN.md
-docs/*_INTERNALS.md
+docs/
 Run_Scripts.bat
 
 

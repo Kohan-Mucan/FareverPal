@@ -43,7 +43,15 @@ class ChestResolver:
         boss_chest = chest_id.startswith("BossChest")
         if not boss_chest and chest_id in self._table_cache:
             return self._table_cache[chest_id]
+            
         tbl = default_table or chestdb.loot_table_for(chest_id)
+        
+        # Fallback for generic world chests that missing a table assignment
+        if not tbl:
+            eid_l = chest_id.lower()
+            if "chest" in eid_l or "crate" in eid_l:
+                tbl = "WorldCrate"
+
         if boss_chest and dungeon_boss and (not tbl or not udata.is_boss(tbl)):
             tbl = udata.boss_loot_table(dungeon_boss) or tbl
         if tbl and not boss_chest:
@@ -52,9 +60,15 @@ class ChestResolver:
 
     def nearest_chests_merged(self, xyz, n: int, dungeon_boss: str | None,
                               live_chests, max_dist: float = 0.0,
-                              player_zone: str | None = None) -> list[ChestRow]:
+                              player_zone: str | None = None,
+                              use_2d: bool = False) -> list[ChestRow]:
         rows: dict[str, ChestRow] = {}
-        for c, d in chestdb.nearest(self.chests, *xyz, n=10 ** 6):
+        px, py, pz = xyz
+        
+        static_ranks = chestdb.nearest2d(self.chests, px, py, n=10 ** 6) if use_2d \
+                       else chestdb.nearest(self.chests, *xyz, n=10 ** 6)
+        
+        for c, d in static_ranks:
             # Exclude BossChests, Activity triggers, and Camps
             if (c.chest_id.startswith("BossChest") or
                 "activity" in c.chest_id.lower() or
@@ -75,15 +89,15 @@ class ChestResolver:
         for e in live_chests:
             if not e.elem_id:
                 continue
-            # Exclude BossChests and Activity triggers from live scan
+            # Exclude BossChests, checkpoints and Activity triggers from live scan
             elem_id_lower = e.elem_id.lower()
-            if "activity" in elem_id_lower or e.elem_id.startswith("BossChest"):
+            if "activity" in elem_id_lower or "checkpoint" in elem_id_lower or e.elem_id.startswith("BossChest"):
                 continue
-            d = e.dist(*xyz)
+            d = e.dist2d(px, py) if use_2d else e.dist(*xyz)
             rows[e.elem_id] = ChestRow(
                 e.elem_id, d, self.chest_table(e.elem_id, dungeon_boss),
                 None, e.state, True, anomaly=(e.elem_id not in self._static_ids))
         out = sorted(rows.values(), key=lambda r: r.dist)
-        if max_dist > 0 and not player_zone:
+        if max_dist > 0:
             out = [r for r in out if r.dist <= max_dist]
         return out[:n]

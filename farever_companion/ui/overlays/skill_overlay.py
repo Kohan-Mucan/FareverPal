@@ -12,14 +12,14 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import theme
-from .overlay_base import OverlayWindow
-from .components import SectionHeader, IconTile
-from .widgets import Bar
-from .skill_table import (KindTabs, TableHeader, SkillRow, TABLE_COLUMNS,
+from .. import theme
+from ..overlay_base import OverlayWindow
+from ..components import SectionHeader, IconTile
+from ..widgets import Bar
+from ..skill_table import (KindTabs, TableHeader, SkillRow, TABLE_COLUMNS,
                           COLUMN_ORDER, DEFAULT_COLUMNS, col_value, abbr)
-from ..data import names, icons
-from ..combat import encounter as enc_mod
+from ...data import names, icons
+from ...combat import encounter as enc_mod
 
 POLL_MS = 120           # fast refresh so per-skill + feed update smoothly (no stutter)
 N_ROWS = 8               # per-skill table rows (wide-not-tall default; resizable)
@@ -48,8 +48,8 @@ class _FeedRow(QtWidgets.QWidget):
         lay.addWidget(self.text, 1)
 
     def set(self, skill_id: str, text: str, color: str, accent: str) -> None:
-        if skill_id and icons.has_icon("skill", skill_id):
-            self.tile.set("skill", skill_id, accent)
+        if skill_id and icons.has_icon("Skills", skill_id):
+            self.tile.set("Skills", skill_id, accent)
             self.tile.show()
         else:
             self.tile.hide()
@@ -70,7 +70,7 @@ class SkillOverlay(OverlayWindow):
 
         # title bar: recalibrate + export + reset
         recal = QtWidgets.QPushButton(); recal.setObjectName("Icon")
-        recal.setIcon(icons.ui_qicon("crosshair", theme.MUTED, 14))
+        recal.setIcon(icons.ui_qicon("search", theme.MUTED, 14))
         recal.setToolTip("Recalibrate per-skill — attack something while it re-maps")
         recal.clicked.connect(self._recalibrate)
         exp = QtWidgets.QPushButton(); exp.setObjectName("Icon")
@@ -229,7 +229,7 @@ class SkillOverlay(OverlayWindow):
                 vals = {k: col_value(k, st, kt, dur) for k in self._columns}
                 r.set_row(names.skill_name(skill) or skill,
                           st.total / mx if mx else 0, vals,
-                          sheet="skill", id_=skill, accent=accent)
+                          sheet="Skills", id_=skill, accent=accent)
                 r.show()
             else:
                 r.hide()
@@ -292,3 +292,4 @@ class SkillOverlay(OverlayWindow):
     def closeEvent(self, e):
         self._timer.stop()
         super().closeEvent(e)
+

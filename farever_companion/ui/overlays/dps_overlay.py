@@ -13,13 +13,13 @@ from collections import deque
 
 from PySide6 import QtCore, QtWidgets
 
-from . import theme
-from .overlay_base import OverlayWindow
-from .widgets import Sparkline, Bar
-from .components import SectionHeader
-from .skill_table import abbr as _abbr, SkillRow
-from ..data import names, icons
-from ..combat import encounter as enc_mod
+from .. import theme
+from ..overlay_base import OverlayWindow
+from ..widgets import Sparkline, Bar
+from ..components import SectionHeader
+from ..skill_table import abbr as _abbr, SkillRow
+from ...data import names, icons
+from ...combat import encounter as enc_mod
 
 POLL_MS = 400
 HIST = 80
@@ -281,7 +281,7 @@ class DpsOverlay(OverlayWindow):
             if i < len(top):
                 uid, dmg = top[i]
                 r.set_row(names.any_name(uid) or uid, dmg / mx if mx else 0, {},
-                          bar_label=_abbr(dmg), sheet="unit", id_=uid, accent=accent)
+                          bar_label=_abbr(dmg), sheet="Units", id_=uid, accent=accent)
                 r.show()
             else:
                 r.hide()

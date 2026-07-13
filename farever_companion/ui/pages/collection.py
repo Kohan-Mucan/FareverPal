@@ -115,15 +115,22 @@ class CollectionPageMixin:
         self._col_sync_lbl.setVisible(False)
         cm.addWidget(self._col_sync_lbl)
 
-        # the list — one checkable row per catalog item, filtered via setHidden
+        # the list — checkable icons in a grid, filtered via setHidden
         self._col_list = QtWidgets.QListWidget()
+        self._col_list.setViewMode(QtWidgets.QListView.IconMode)
+        self._col_list.setResizeMode(QtWidgets.QListView.Adjust)
+        self._col_list.setMovement(QtWidgets.QListView.Static)
+        self._col_list.setSpacing(12)
+        self._col_list.setWordWrap(True)
         self._col_list.setUniformItemSizes(True)
-        self._col_list.setIconSize(QtCore.QSize(26, 26))
+        self._col_list.setIconSize(QtCore.QSize(48, 48))
         self._col_list.setMinimumHeight(420)
         self._col_list.setStyleSheet(
-            f"QListWidget{{background:{theme.PANEL};border:1px solid {theme.BORDER};}}"
-            f"QListWidget::item{{padding:5px 8px;border-bottom:1px solid {theme.with_alpha(theme.BORDER, 110)};}}"
-            f"QListWidget::item:selected{{background:{theme.with_alpha(theme.ACCENT, 30)};color:{theme.TEXT};}}")
+            f"QListWidget{{background:{theme.PANEL};border:1px solid {theme.BORDER};outline:none;}}"
+            f"QListWidget::item{{padding:8px; border:1px solid transparent; border-radius:4px;}}"
+            f"QListWidget::item:hover{{background:{theme.with_alpha(theme.ACCENT, 15)};}}"
+            f"QListWidget::item:selected{{background:{theme.with_alpha(theme.ACCENT, 30)};"
+            f"border:1px solid {theme.ACCENT};color:{theme.TEXT};}}")
         self._col_populate()
         self._col_list.itemChanged.connect(self._col_item_changed)
         cm.addWidget(self._col_list, 1)
@@ -147,9 +154,9 @@ class CollectionPageMixin:
             sheet = coldata.icon_sheet(it["category"])
             li = QtWidgets.QListWidgetItem()
             lvl = f"  ·  Lv {it['level']}" if it.get("level") else ""
-            li.setText(f"{it['name']}    —  {it['subtype']}{lvl}")
-            li.setToolTip(f"{it['name']}\n{it['source']}")
-            li.setIcon(QtGui.QIcon(icons.tile(sheet, it["id"], 26,
+            li.setText(it['name'])
+            li.setToolTip(f"{it['name']}\n{it['subtype']}{lvl}\n{it['source']}")
+            li.setIcon(QtGui.QIcon(icons.tile(sheet, it["id"], 48,
                                               theme.rarity_color(it.get("rarity")))))
             li.setData(_ID, it["id"])
             li.setData(_ROW, it)

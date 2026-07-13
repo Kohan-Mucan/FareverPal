@@ -10,7 +10,7 @@ from __future__ import annotations
 import struct
 
 from .hl import Hl
-from .constants import OFF_UATTR, OFF_HEALTH, OFF_LEVEL_UNIT
+from ..constants import OFF_UATTR, OFF_HEALTH, OFF_LEVEL_UNIT
 
 # Live unit level - an i32 on the UNIT/GameObject struct, right after the
 # attributes pointer (OFF_UATTR), shared across ent.Foe/ent.boss.*/ent.Hero
