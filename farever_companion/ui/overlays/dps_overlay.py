@@ -324,11 +324,12 @@ class DpsOverlay(OverlayWindow):
         deaths = getattr(self.model, "deaths", 0)
         enc = enc_mod.snapshot(m, boss=boss, deaths=deaths, ended_at=now)
         self._last_encounter = enc
-        if boss and enc_mod.update_best(self.s.dps_best, enc):
-            self._best_flash_until = now + 4.0
-            self.s.save()
-        elif boss:
-            self.s.save()
+        if boss:
+            profile = self.model.player_profile()
+            best_dict = self.s.get_dps_best(profile)
+            if enc_mod.update_best(best_dict, enc):
+                self._best_flash_until = now + 4.0
+            self.s.save_dps_best(profile, best_dict)
 
     def _render_history(self):
         for i, r in enumerate(self._hist_rows):

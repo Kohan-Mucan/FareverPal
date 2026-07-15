@@ -53,6 +53,8 @@ class OverlayManager(QtCore.QObject):
         self._combat_timer = QtCore.QTimer(self)
         self._combat_timer.setInterval(getattr(self.s, "mouse_snap_rate", 500))
         self._combat_timer.timeout.connect(self._combat_tick)
+        self._last_prof = None
+        self._last_map_id = None
 
     def update_combat_timer_rate(self) -> None:
         rate = getattr(self.s, "mouse_snap_rate", 500)
@@ -61,6 +63,13 @@ class OverlayManager(QtCore.QObject):
             self._combat_timer.start(rate)
 
     def set_model(self, model) -> None:
+        # Check for character change to clear the compass tracker
+        if model:
+            prof = model.player_profile()
+            if self._last_prof and prof and prof != self._last_prof:
+                self.tracker.clear()
+            self._last_prof = prof
+
         self.model = model
         self.tracker.set_model(model)
         if model is None:
@@ -149,7 +158,7 @@ class OverlayManager(QtCore.QObject):
 
         # Wire universal "Borderless" (bare) toggle sync
         panel = self.parent()
-        if panel is not None and hasattr(ov, "_bare_sync_fn"):
+        if panel is not None:
             # Every OverlayCard in the overlays page (and the map page card)
             # registers with the manager. We find the card(s) and wire the sync.
             for card in self.cards.get(key, []):
@@ -162,6 +171,12 @@ class OverlayManager(QtCore.QObject):
                                 c.set_bare_checked_silent(on)
                     ov._bare_sync_fn = sync_all_cards
                     break
+
+        # Apply the Borderless (bare) setting from config on creation
+        if hasattr(ov, "set_bare"):
+            geo_key = getattr(ov, "_geo_key", key)
+            if getattr(self.s, f"{geo_key}_bare", False):
+                ov.set_bare(True)
 
         return ov
 
@@ -298,12 +313,43 @@ class OverlayManager(QtCore.QObject):
                 ctypes.windll.user32.ClientToScreen(active_hwnd, ctypes.byref(pt))
                 ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
 
-        # 4. Dungeon detection
+        # 4. Dungeon/Rift detection
         in_dungeon = False
+        in_rift = False
         try:
             in_dungeon = m.is_in_dungeon()
+            in_rift = m.is_in_rift()
         except Exception:
             pass
+
+        # 4.5 Zone/Map change detection (auto-reset DPS/Speedrun on zone swap)
+        try:
+            curr_map = m.scene.map_id(m.player_addr) or m.scene.activity_id(m.player_addr)
+        except Exception:
+            curr_map = None
+
+        if curr_map:
+            if self._last_map_id and curr_map != self._last_map_id:
+                # Reset combat session data
+                try:
+                    m.reset_combat()
+                except Exception:
+                    pass
+                # Reset DPS overlay history cycles
+                dps_ov = self.overlays.get("dps")
+                if dps_ov is not None and hasattr(dps_ov, "_reset"):
+                    try:
+                        dps_ov._reset()
+                    except Exception:
+                        pass
+                # Reset Speedrun Timer
+                sr_ov = self.overlays.get("speedrun")
+                if sr_ov is not None and hasattr(sr_ov, "reset"):
+                    try:
+                        sr_ov.reset()
+                    except Exception:
+                        pass
+            self._last_map_id = curr_map
 
         # 5. Visibility Loop
         # We don't hide on Alt-Tab anymore as requested ("nothing hidden when 
@@ -315,18 +361,26 @@ class OverlayManager(QtCore.QObject):
         for key, ov in items:
             if ov is not None:
                 # 1. Focus check (Show if game OR app is in focus)
-                if not (is_strictly_game or is_app_focused):
+                # Hide map, entity, and compass if the player is not located (e.g. loading screen)
+                if not (is_strictly_game or is_app_focused) or (m.player_addr is None and key in ("map", "entity", "compass")):
                     if ov.isVisible():
                         ov.hide()
                     continue
 
-                # 2. Visibility Rules (Menu & Dungeon)
-                # These rules are bypassed if the companion app itself is focused, 
-                # so you can move/configure overlays even while in a menu or dungeon.
-                # (Exception: Compass is hidden when app is focused as requested).
+                # 2. Visibility Rules (Menu & Dungeon/Rift)
+                # Menu rules (A/B) are bypassed if the companion app itself is focused,
+                # so you can move/configure overlays while in a menu.
+                # Dungeon/Rift Rule C is NOT bypassed when app-focused — clicking on an
+                # overlay (e.g. a DPS history row) sets is_app_focused=True but must NOT
+                # cause entity/minimap to reappear while in a dungeon/rift.
+                # (Compass is always hidden when app is focused as requested).
                 should_hide = False
                 if is_app_focused:
                     should_hide = (key == "compass")
+                    # Still suppress entity/map/compass in dungeons/rifts even when
+                    # an overlay window (e.g. DPS) has app focus.
+                    if not should_hide:
+                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity", "compass")
                 else:
                     is_esc_menu = menu_any and not menu_hide
                     auto_hide_enabled = getattr(self.s, "auto_hide_menus", False)
@@ -338,20 +392,24 @@ class OverlayManager(QtCore.QObject):
                     elif menu_hide and auto_hide_enabled:
                         should_hide = True
                     
-                    # Rule C: Dungeons hide Minimap, Entity, and Compass
+                    # Rule C: Dungeons/Rifts hide Minimap, Entity, and Compass
                     if not should_hide:
-                        should_hide = in_dungeon and key in ("map", "entity", "compass")
+                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity", "compass")
 
-                    # Exception: DPS and Speedrun never auto-hide in dungeons (ignore menus)
-                    if in_dungeon and key in ("dps", "speedrun"):
+                    # Exception: DPS and Speedrun never auto-hide in dungeons/rifts (ignore menus)
+                    if (in_dungeon or in_rift) and key in ("dps", "speedrun"):
                         should_hide = False
 
                 if should_hide:
                     if ov.isVisible():
                         ov.hide()
                 else:
-                    if not ov.isVisible():
-                        ov.show()
+                    if key == "compass" and not (self.tracker.s.track_kind and self.tracker.s.track_id):
+                        if ov.isVisible():
+                            ov.hide()
+                    else:
+                        if not ov.isVisible():
+                            ov.show()
 
 
         # Determine if we should temporarily force click-through (combat or cursor-hidden/Mouse-park)

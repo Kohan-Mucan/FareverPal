@@ -24,7 +24,7 @@ from ..constants import (   # offsets live in one place; re-exported for callers
     OFF_UNITID, OFF_ELEMID, OFF_ELEMSTATE, UNIT_BLOCK,
     OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
     OFF_MAIN_ACTIVITY, OFF_UATTR, OFF_LEVEL_UNIT, OFF_HEALTH,
-    OFF_HERO_OWNERPLAYER, OFF_RIFT_BOOL, OFF_WORLD_MAPID,
+    OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_RIFT_BOOL, OFF_WORLD_MAPID,
     OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES
 )
 
@@ -134,7 +134,7 @@ class Element:
             return True
         if self.cls == "ent.Element" and self.elem_id:
             eid_l = self.elem_id.lower()
-            return ("chest" in eid_l or "crate" in eid_l) and "orb" not in eid_l and "checkpoint" not in eid_l
+            return ("chest" in eid_l or "crate" in eid_l or "recipe" in eid_l) and "orb" not in eid_l and "checkpoint" not in eid_l and "levelup" not in eid_l
         return False
 
     @property
@@ -422,15 +422,25 @@ class Scene:
         return aid is not None and "Rift" in aid
 
     def _clean_id(self, raw_id: str | None) -> str | None:
-        """Handle path-like IDs returned by some engine versions
-        (e.g. 'Units/Enemies/Wolf/Wolf_Z1W.prefab' -> 'Wolf_Z1W')."""
+        """Handle path-like IDs and Clone suffixes returned by some engine versions."""
         if not raw_id:
             return raw_id
-        if "/" in raw_id or "\\" in raw_id:
-            # Take the last part of the path and strip the extension
+        # 1. Strip (Clone), (Instance), etc.
+        clean = raw_id.split("(")[0].strip()
+        # 2. Handle path-like IDs (e.g. 'Units/Enemies/Wolf/Wolf_Z1W.prefab' -> 'Wolf_Z1W')
+        if "/" in clean or "\\" in clean:
             import os
-            return os.path.splitext(os.path.basename(raw_id))[0]
-        return raw_id
+            clean = os.path.splitext(os.path.basename(clean))[0]
+            
+        # 3. Handle trailing variants for patrol/unique units (e.g. _Elite, _1)
+        # to ensure they match their static CDB definitions.
+        if "Patrol" in clean:
+            for suffix in ("_Elite", "_1", "_2", "_3", "_4", "_5"):
+                if clean.endswith(suffix):
+                    clean = clean[:-len(suffix)]
+                    break
+
+        return clean
 
     def units(self, pbase: int | None) -> list[Entity]:
         gl = self.gamelayer(pbase)
@@ -477,9 +487,11 @@ class Scene:
             unit_id = self.hl.hl_string(uid_ptr) if is_ptr(uid_ptr) else None
             unit_id = self._clean_id(unit_id)
             
-            # Determine the owner: prefer st.Player (o2 on Hero), then any Hero class (o1 on Foe/Pet)
-            o1 = struct.unpack_from("<Q", blk, OFF_OWNER)[0]
-            o2 = struct.unpack_from("<Q", blk, OFF_HERO_OWNERPLAYER)[0] if len(blk) > OFF_HERO_OWNERPLAYER else 0
+            # Determine the owner:
+            # o2 = OFF_HERO_OWNERPLAYER (0x498): Hero's ownerPlayer -> st.Player (highest authority)
+            # o1 = OFF_FOE_OWNER (0x78):  Foe/pet's player field -> ent.Hero owner (confirmed via dump_elements)
+            o1 = struct.unpack_from("<Q", blk, OFF_FOE_OWNER)[0]       # Foe/pet -> Hero owner
+            o2 = struct.unpack_from("<Q", blk, OFF_HERO_OWNERPLAYER)[0] if len(blk) > OFF_HERO_OWNERPLAYER else 0  # Hero -> st.Player
             
             final_owner_ptr = 0
             final_owner_cls = None

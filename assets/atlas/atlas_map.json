@@ -2043,6 +2043,13 @@
     "x": 552,
     "y": 530
   },
+  "Crimson_Book_Aura": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 602,
+    "y": 530
+  },
   "Crimson_Captain_FanaticalFuryStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
@@ -2054,14 +2061,14 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 652,
     "y": 530
   },
   "Crimson_SwordShield_Consecration_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 702,
     "y": 530
   },
   "Crimson_Z1W_Bow": {
@@ -2621,28 +2628,28 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1752,
     "y": 530
   },
   "DM_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1802,
     "y": 530
   },
   "DM_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1852,
     "y": 530
   },
   "DM_Base_Attack4": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
+    "x": 1902,
     "y": 530
   },
   "DM_Multispin": {
@@ -2656,154 +2663,154 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
+    "x": 1952,
     "y": 530
   },
   "DM_Multispin_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1952,
-    "y": 530
-  },
-  "DM_Multispin_Passive": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 2,
     "y": 580
   },
-  "DM_Multispin_Passive_Status": {
+  "DM_Multispin_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 52,
     "y": 580
   },
-  "DM_Multispin_Passive_Status2": {
+  "DM_Multispin_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 102,
     "y": 580
   },
-  "DM_Multispin_Passive_Status_Max_Stacks": {
+  "DM_Multispin_Passive_Status2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 152,
     "y": 580
   },
-  "DM_Multispin_Skill1": {
+  "DM_Multispin_Passive_Status_Max_Stacks": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 202,
     "y": 580
   },
-  "DM_Multispin_Skill1_Recast": {
+  "DM_Multispin_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 252,
     "y": 580
   },
-  "DM_Multispin_Skill1_Status": {
+  "DM_Multispin_Skill1_Recast": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 302,
     "y": 580
   },
-  "DM_Multispin_Skill2": {
+  "DM_Multispin_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 352,
     "y": 580
   },
-  "DS_Base_Attack": {
+  "DM_Multispin_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 402,
     "y": 580
   },
-  "DS_Base_Attack2": {
+  "DS_Base_Attack": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 452,
     "y": 580
   },
-  "DS_Base_Attack3": {
+  "DS_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 502,
     "y": 580
   },
-  "DS_Base_Attack4": {
+  "DS_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 552,
     "y": 580
   },
-  "DS_Bladeleaf_Combo": {
+  "DS_Base_Attack4": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 602,
     "y": 580
   },
-  "DS_Bladeleaf_Combo_Status": {
+  "DS_Bladeleaf_Combo": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 652,
     "y": 580
   },
-  "DS_Bladeleaf_Passive": {
+  "DS_Bladeleaf_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 702,
     "y": 580
   },
-  "DS_Bladeleaf_Passive_Status": {
+  "DS_Bladeleaf_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 752,
     "y": 580
   },
-  "DS_Bladeleaf_Skill1": {
+  "DS_Bladeleaf_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 802,
     "y": 580
   },
-  "DS_Bladeleaf_Skill2": {
+  "DS_Bladeleaf_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 852,
     "y": 580
   },
-  "DS_Bladeleaf_Skill2_Status": {
+  "DS_Bladeleaf_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 902,
     "y": 580
   },
-  "DS_Bladeleaf_Skill_1Recast": {
+  "DS_Bladeleaf_Skill2_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 952,
+    "y": 580
+  },
+  "DS_Bladeleaf_Skill_1Recast": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1002,
     "y": 580
   },
   "DS_Z1RBee_AssWiz": {
@@ -2852,84 +2859,84 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 752,
     "y": 530
   },
   "Daggers_Demondash_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 802,
     "y": 530
   },
   "Daggers_Demondash_Mark": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 852,
     "y": 530
   },
   "Daggers_Demondash_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 902,
     "y": 530
   },
   "Daggers_Demondash_Passive_Debuff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 952,
     "y": 530
   },
   "Daggers_Demondash_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1002,
     "y": 530
   },
   "Daggers_Demondash_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1052,
     "y": 530
   },
   "Daggers_Demondash_Skill1_Counter": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1102,
     "y": 530
   },
   "Daggers_Demondash_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1152,
     "y": 530
   },
   "Daggers_Demondash_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1202,
     "y": 530
   },
   "Daggers_Demondash_Skill2_Counter": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1252,
     "y": 530
   },
   "Daggers_Demondash_Skill2_Shoot": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1302,
     "y": 530
   },
   "Daggers_DuplicatePoison": {
@@ -2943,56 +2950,56 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1352,
     "y": 530
   },
   "Daggers_DuplicatePoison_ComboAttack_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1402,
     "y": 530
   },
   "Daggers_DuplicatePoison_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1452,
     "y": 530
   },
   "Daggers_DuplicatePoison_PassiveStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1502,
     "y": 530
   },
   "Daggers_DuplicatePoison_Passive_Bonus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1552,
     "y": 530
   },
   "Daggers_DuplicatePoison_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1602,
     "y": 530
   },
   "Daggers_DuplicatePoison_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1652,
     "y": 530
   },
   "Daggers_DuplicatePoison_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1702,
     "y": 530
   },
   "Daggers_Start": {
@@ -3261,11 +3268,32 @@
     "x": 1784,
     "y": 398
   },
-  "DemonHunterRita": {
+  "DemonHunterMira": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 992,
+    "y": 200
+  },
+  "DemonHunterRita": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 1058,
+    "y": 200
+  },
+  "DemonHunterRumi": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 1124,
+    "y": 200
+  },
+  "DemonHunterZoey": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 1190,
     "y": 200
   },
   "DemonSigil_Mage_HighVoltage": {
@@ -3356,140 +3384,140 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 200
   },
   "DemonSuperElite_Fairy": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 200
   },
   "DemonSuperElite_Fairy_FalseClone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 200
   },
   "DemonSuperElite_Fairy_Guardian": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 200
   },
   "DemonSuperElite_Fairy_TrueClone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 200
   },
   "Demon_Rift_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 200
   },
   "Demon_Rift_Claws_Major": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 200
   },
   "Demon_Rift_Spear_Major": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 200
   },
   "Demon_Z1_Claws_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 200
   },
   "Demon_Z1_Spear_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 200
   },
   "Demon_Z2_Claws_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 200
   },
   "Demon_Z2_Spear_Soulstone_Leg": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 200
   },
   "Demon_Z3W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 200
-  },
-  "Demon_Z3W_Claws_Big": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 200
-  },
-  "Demon_Z3W_Claws_E": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 200
-  },
-  "Demon_Z3W_Claws_E_1": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 266
   },
-  "Demon_Z3W_Claws_FS": {
+  "Demon_Z3W_Claws_Big": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 266
   },
-  "Demon_Z3W_Spear": {
+  "Demon_Z3W_Claws_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 266
   },
-  "Demon_Z3W_Spear_Big": {
+  "Demon_Z3W_Claws_E_1": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 266
   },
-  "Demon_Z3W_Spear_E": {
+  "Demon_Z3W_Claws_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
+    "y": 266
+  },
+  "Demon_Z3W_Spear": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 332,
+    "y": 266
+  },
+  "Demon_Z3W_Spear_Big": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 398,
+    "y": 266
+  },
+  "Demon_Z3W_Spear_E": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 464,
     "y": 266
   },
   "DemonicHorn": {
@@ -3538,84 +3566,84 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 332,
+    "x": 530,
     "y": 266
   },
   "Dog_Z3D": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 266
   },
   "Dog_Z3W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 266
   },
   "Dog_Z3W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 266
   },
   "Dog_Z3W_RamPatrol01": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 266
   },
   "Dog_Z3W_RamPatrol02": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 266
   },
   "Dog_Z3W_RamPatrol03": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 266
   },
   "Dog_Z3W_RamPatrol04": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 266
   },
   "Dog_Z3W_RamPatrol05": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 266
   },
   "Dog_Z3W_RamPatrol06": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 266
   },
   "Dog_Z3W_RamPatrol07": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 266
   },
   "Dog_Z3W_RamPatrol08": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 266
   },
   "DominationCursedCutEye": {
@@ -3643,175 +3671,175 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 266
   },
   "Dummy_FX": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 266
   },
   "Dummy_Runner": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 266
   },
   "Dummy_Support": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 266
   },
   "Egglektra": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 266
   },
   "Elemental_Z1D_Earth": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 266
   },
   "Elemental_Z1D_Lava": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 266
   },
   "Elemental_Z1W_Earth": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 266
   },
   "Elemental_Z1W_Earth_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 266
   },
   "Elemental_Z1W_Earth_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 266
   },
   "Elemental_Z1W_Underwater": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 266
   },
   "Elemental_Z1_FS_Earth": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 266
-  },
-  "Elemental_Z1_FS_Earth_2": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 266
-  },
-  "Elemental_Z1_FS_Underwater": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 266
-  },
-  "Elemental_Z2D_Underwater": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 332
   },
-  "Elemental_Z2W": {
+  "Elemental_Z1_FS_Earth_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 332
   },
-  "Elemental_Z2W_2": {
+  "Elemental_Z1_FS_Underwater": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 332
   },
-  "Elemental_Z2W_Lava": {
+  "Elemental_Z2D_Underwater": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 332
   },
-  "Elemental_Z2W_Lava_2": {
+  "Elemental_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
     "y": 332
   },
-  "Elemental_Z2W_Underwater": {
+  "Elemental_Z2W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 332,
     "y": 332
   },
-  "Elemental_Z2W_Underwater_U": {
+  "Elemental_Z2W_Lava": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 398,
     "y": 332
   },
-  "Elemental_Z2_FS": {
+  "Elemental_Z2W_Lava_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 464,
     "y": 332
   },
-  "Elemental_Z2_FS_Lava": {
+  "Elemental_Z2W_Underwater": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 530,
     "y": 332
   },
-  "Elemental_Z2_FS_Lava_2": {
+  "Elemental_Z2W_Underwater_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 596,
     "y": 332
   },
-  "Elemental_Z3W_Earth_U": {
+  "Elemental_Z2_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 662,
+    "y": 332
+  },
+  "Elemental_Z2_FS_Lava": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 728,
+    "y": 332
+  },
+  "Elemental_Z2_FS_Lava_2": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 794,
+    "y": 332
+  },
+  "Elemental_Z3W_Earth_U": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 860,
     "y": 332
   },
   "ElixirOfAbundance": {
@@ -3937,211 +3965,218 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 332
   },
   "FaerieBee_Z1D_GreatMace": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 332
   },
   "FaerieBee_Z1D_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 332
   },
   "FaerieBee_Z1W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 332
   },
   "FaerieBee_Z1W_Claws_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 332
   },
   "FaerieBee_Z1W_GreatMace": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 332
   },
   "FaerieBee_Z1W_GreatMace_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 332
   },
   "FaerieBee_Z1W_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 332
   },
   "FaerieBee_Z1W_Spear_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 332
   },
   "FaerieBee_Z1W_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 332
   },
   "FaerieBee_Z1_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 332
   },
   "FaerieBee_Z2W_Champ_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 332
   },
   "FaerieBee_Z2W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 332
   },
   "FaerieBee_Z2W_FS_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 332
   },
   "FaerieBee_Z2W_GreatMace": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 332
   },
   "FaerieBee_Z2W_GreatMace_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 332
   },
   "FaerieBee_Z2W_GreatMace_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 332
   },
   "FaerieBee_Z2W_GreatMace_U_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 332
-  },
-  "FaerieBee_Z2W_Spear": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 332
-  },
-  "FaerieBee_Z2W_Spear_U": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 332
-  },
-  "FaerieBee_Z2W_Tank": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 398
   },
-  "FaerieBee_Z2_FS_Tank_2": {
+  "FaerieBee_Z2W_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 398
   },
-  "FaerieDemon_Rift_Caster": {
+  "FaerieBee_Z2W_Spear_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 398
   },
-  "FaerieDemon_Rift_Caster_Major": {
+  "FaerieBee_Z2W_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 398
   },
-  "FaerieDemon_Z1_Soulstone_Leg": {
+  "FaerieBee_Z2_FS_Tank_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
     "y": 398
   },
-  "FaerieDemon_Z2_Soulstone": {
+  "FaerieDemon_Rift_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 332,
     "y": 398
   },
-  "FaerieDemon_Z3W_Caster": {
+  "FaerieDemon_Rift_Caster_Major": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 398,
     "y": 398
   },
-  "FaerieDemon_Z3W_Caster_Big": {
+  "FaerieDemon_Z1_Soulstone_Leg": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 464,
     "y": 398
   },
-  "FaerieDemon_Z3W_Caster_E": {
+  "FaerieDemon_Z2_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 530,
     "y": 398
   },
-  "FaerieDemon_Z3W_Caster_E1": {
+  "FaerieDemon_Z3W_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 596,
     "y": 398
+  },
+  "FaerieDemon_Z3W_Caster_Big": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 662,
+    "y": 398
+  },
+  "FaerieDemon_Z3W_Caster_E": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 728,
+    "y": 398
+  },
+  "FaerieDemon_Z3W_Caster_E1": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 794,
+    "y": 398
+  },
+  "FaerieEliteDemon_NightRain_Status": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1052,
+    "y": 580
   },
   "FairieSuperElite_Clones_Stealth": {
     "category": "Skills",
@@ -4770,28 +4805,28 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1102,
     "y": 580
   },
   "Fists_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1152,
     "y": 580
   },
   "Fists_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1202,
     "y": 580
   },
   "Fists_Base_Attack4": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1252,
     "y": 580
   },
   "Fists_LightMonk": {
@@ -4805,63 +4840,63 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1302,
     "y": 580
   },
   "Fists_LightMonk_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1352,
     "y": 580
   },
   "Fists_LightMonk_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1402,
     "y": 580
   },
   "Fists_LightMonk_Passive_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1452,
     "y": 580
   },
   "Fists_LightMonk_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1502,
     "y": 580
   },
   "Fists_LightMonk_Skill1_Recast": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1552,
     "y": 580
   },
   "Fists_LightMonk_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1602,
     "y": 580
   },
   "Fists_LightMonk_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1652,
     "y": 580
   },
   "Fists_LightMonk_Skill2_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1702,
     "y": 580
   },
   "Fists_WaterUppecut": {
@@ -4875,70 +4910,70 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1752,
     "y": 580
   },
   "Fists_WaterUppercut_C_CritStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1802,
     "y": 580
   },
   "Fists_WaterUppercut_P": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1852,
     "y": 580
   },
   "Fists_WaterUppercut_P_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1902,
     "y": 580
   },
   "Fists_WaterUppercut_P_Status_Slow": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
+    "x": 1952,
     "y": 580
   },
   "Fists_WaterUppercut_S1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 580
+    "x": 2,
+    "y": 630
   },
   "Fists_WaterUppercut_S2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1952,
-    "y": 580
+    "x": 52,
+    "y": 630
   },
   "Fists_WaterUppercut_S3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 2,
+    "x": 102,
     "y": 630
   },
   "Fly_Demon_Rift": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 398
   },
   "Fly_Demon_Z3W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 398
   },
   "FormulaFeetArmorPen_Z2": {
@@ -5246,21 +5281,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 52,
+    "x": 152,
     "y": 630
   },
   "GA_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 102,
+    "x": 202,
     "y": 630
   },
   "GA_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 152,
+    "x": 252,
     "y": 630
   },
   "GA_Craft": {
@@ -5274,35 +5309,35 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 202,
+    "x": 302,
     "y": 630
   },
   "GA_Craft_FinalCombo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 252,
+    "x": 352,
     "y": 630
   },
   "GA_Craft_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 302,
+    "x": 402,
     "y": 630
   },
   "GA_Craft_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 352,
+    "x": 452,
     "y": 630
   },
   "GA_Craft_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 402,
+    "x": 502,
     "y": 630
   },
   "GA_Demon": {
@@ -5316,77 +5351,77 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 452,
+    "x": 552,
     "y": 630
   },
   "GA_Demon_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 502,
+    "x": 602,
     "y": 630
   },
   "GA_Demon_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 552,
+    "x": 652,
     "y": 630
   },
   "GA_Demon_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 702,
     "y": 630
   },
   "GA_Demon_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 752,
     "y": 630
   },
   "GA_Demon_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 802,
     "y": 630
   },
   "GA_Demon_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 852,
     "y": 630
   },
   "GA_Demon_Skill2_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 902,
     "y": 630
   },
   "GM_Base_Attack": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 952,
     "y": 630
   },
   "GM_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 1002,
     "y": 630
   },
   "GM_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1052,
     "y": 630
   },
   "GM_MassGrab": {
@@ -5400,91 +5435,91 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1102,
     "y": 630
   },
   "GM_MassGrab_Combo_Proc": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1152,
     "y": 630
   },
   "GM_MassGrab_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1202,
     "y": 630
   },
   "GM_MassGrab_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1252,
     "y": 630
   },
   "GM_MassGrab_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1302,
     "y": 630
   },
   "GM_MassGrab_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1352,
     "y": 630
   },
   "GM_MassGrab_Skill1_Status2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1402,
     "y": 630
   },
   "GM_MassGrab_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1452,
     "y": 630
   },
   "GM_MassGrab_Skill2_Area": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1502,
     "y": 630
   },
   "GM_MassGrab_Skill2_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1552,
     "y": 630
   },
   "GS_Base_Attack": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1602,
     "y": 630
   },
   "GS_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1652,
     "y": 630
   },
   "GS_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1702,
     "y": 630
   },
   "GS_Nova": {
@@ -5498,70 +5533,70 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1752,
     "y": 630
   },
   "GS_Nova_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1802,
     "y": 630
   },
   "GS_Nova_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1852,
     "y": 630
   },
   "GS_Nova_Passive_Stack": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1902,
     "y": 630
   },
   "GS_Nova_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
+    "x": 1952,
     "y": 630
   },
   "GS_Nova_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 630
-  },
-  "GS_Nova_Skill2_Buff": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 1952,
-    "y": 630
-  },
-  "GS_Nova_Ultimate": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 2,
     "y": 680
   },
-  "GS_Nova_Ultimate_Proc": {
+  "GS_Nova_Skill2_Buff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 52,
     "y": 680
   },
-  "GS_Nova_Ultimate_Slow": {
+  "GS_Nova_Ultimate": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 102,
+    "y": 680
+  },
+  "GS_Nova_Ultimate_Proc": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 152,
+    "y": 680
+  },
+  "GS_Nova_Ultimate_Slow": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 202,
     "y": 680
   },
   "GS_Z1Mines_Fig": {
@@ -5575,14 +5610,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 398
   },
   "GiantCrab_Z1W_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 398
   },
   "GildedCutBeryl": {
@@ -6135,14 +6170,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 398
   },
   "Golcano_Minion": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 398
   },
   "Gold": {
@@ -6163,147 +6198,147 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 398
   },
   "Golem_Z1W_Earth_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 398
   },
   "Golem_Z1W_Earth_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 398
   },
   "Golem_Z1W_Earth_E_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 398
   },
   "Golem_Z1_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 398
   },
   "Golem_Z1_FS_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 398
   },
   "Golem_Z2D_FireExplosive": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 398
   },
   "Golem_Z2D_FireExplosive_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 398
   },
   "Golem_Z2W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 398
   },
   "Golem_Z2W_E_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 398
   },
   "Golem_Z2W_FireExplosive": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 398
   },
   "Golem_Z2W_FireExplosive_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 398
   },
   "Golem_Z2W_FireExplosive_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 398
-  },
-  "Golem_Z2W_FireExplosive_E_2": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 398
-  },
-  "Golem_Z2W_U": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 398
-  },
-  "Golem_Z2W_Wind1": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 464
   },
-  "Golem_Z2W_Wind2": {
+  "Golem_Z2W_FireExplosive_E_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 464
   },
-  "Golem_Z2_FS": {
+  "Golem_Z2W_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 464
   },
-  "Golem_Z2_FS_2": {
+  "Golem_Z2W_Wind1": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 464
   },
-  "Golem_Z2_FS_FireExplosive": {
+  "Golem_Z2W_Wind2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
     "y": 464
   },
-  "Golem_Z2_FS_FireExplosive_2": {
+  "Golem_Z2_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 332,
+    "y": 464
+  },
+  "Golem_Z2_FS_2": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 398,
+    "y": 464
+  },
+  "Golem_Z2_FS_FireExplosive": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 464,
+    "y": 464
+  },
+  "Golem_Z2_FS_FireExplosive_2": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 530,
     "y": 464
   },
   "GracefulCopperPlate": {
@@ -6324,21 +6359,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 152,
+    "x": 252,
     "y": 680
   },
   "Halos_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 202,
+    "x": 302,
     "y": 680
   },
   "Halos_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 252,
+    "x": 352,
     "y": 680
   },
   "Halos_Demon": {
@@ -6352,70 +6387,70 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 302,
+    "x": 402,
     "y": 680
   },
   "Halos_Demon_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 352,
+    "x": 452,
     "y": 680
   },
   "Halos_Demon_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 402,
+    "x": 502,
     "y": 680
   },
   "Halos_Demon_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 452,
+    "x": 552,
     "y": 680
   },
   "Halos_Demon_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 502,
+    "x": 602,
     "y": 680
   },
   "Halos_Demon_Skill1_Recast": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 552,
+    "x": 652,
     "y": 680
   },
   "Halos_Demon_Skill1_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 702,
     "y": 680
   },
   "Halos_Demon_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 752,
     "y": 680
   },
   "Halos_Demon_Skill2_Leash": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 802,
     "y": 680
   },
   "Halos_Demon_Skill2_R3_Counter": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 852,
     "y": 680
   },
   "Halos_Totem": {
@@ -6429,56 +6464,56 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 902,
     "y": 680
   },
   "Halos_Totem_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 952,
     "y": 680
   },
   "Halos_Totem_Passive_Aoe": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 1002,
     "y": 680
   },
   "Halos_Totem_Passive_Slow": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1052,
     "y": 680
   },
   "Halos_Totem_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1102,
     "y": 680
   },
   "Halos_Totem_Skill": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1152,
     "y": 680
   },
   "Halos_Totem_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1202,
     "y": 680
   },
   "Halos_Totem_SummonPassive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1252,
     "y": 680
   },
   "Hammer": {
@@ -7171,7 +7206,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 464
   },
   "HonedCopperPlate": {
@@ -7220,77 +7255,77 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 464
   },
   "ImpDemon_Elite_Red": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 464
   },
   "ImpDemon_GreyBlue": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 464
   },
   "ImpDemon_Red": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 464
   },
   "ImpDemon_Rift": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 464
   },
   "ImpDemon_Rift_Major": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 464
   },
   "ImpDemon_Summoned": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 464
   },
   "ImpDemon_Z1_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 464
   },
   "ImpDemon_Z2_Soulstone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 464
   },
   "ImpDemon_Z3W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 464
   },
   "ImpDemon_Z3W_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 464
   },
   "InfusedTusk": {
@@ -7346,126 +7381,126 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 464
   },
   "Kobold_Prisoner": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 464
   },
   "Kobold_Ratsar_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 464
   },
   "Kobold_Z1D_Daggers": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 464
   },
   "Kobold_Z1D_FS_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 464
   },
   "Kobold_Z1D_Mace": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 464
   },
   "Kobold_Z1W_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 464
   },
   "Kobold_Z1W_Caster_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 464
   },
   "Kobold_Z1W_Daggers": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 464
   },
   "Kobold_Z1W_Daggers_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 464
   },
   "Kobold_Z1W_Mace": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 464
-  },
-  "Kobold_Z1W_Mace_2": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 464
-  },
-  "Kobold_Z1W_Mace_U": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 464
-  },
-  "Kobold_Z2D_Caster": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 530
   },
-  "Kobold_Z2D_Mace_2": {
+  "Kobold_Z1W_Mace_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 530
   },
-  "Kobold_Z2W_Caster": {
+  "Kobold_Z1W_Mace_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 530
   },
-  "Kobold_Z2W_Daggers": {
+  "Kobold_Z2D_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 530
   },
-  "Kobold_Z2W_Mace": {
+  "Kobold_Z2D_Mace_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
+    "y": 530
+  },
+  "Kobold_Z2W_Caster": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 332,
+    "y": 530
+  },
+  "Kobold_Z2W_Daggers": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 398,
+    "y": 530
+  },
+  "Kobold_Z2W_Mace": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 464,
     "y": 530
   },
   "LP_Z1_Bee": {
@@ -8144,21 +8179,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1302,
     "y": 680
   },
   "Mace_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1352,
     "y": 680
   },
   "Mace_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1402,
     "y": 680
   },
   "Mace_Benediction": {
@@ -8172,49 +8207,49 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1452,
     "y": 680
   },
   "Mace_Benediction_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1502,
     "y": 680
   },
   "Mace_Benediction_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1552,
     "y": 680
   },
   "Mace_Benediction_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1602,
     "y": 680
   },
   "Mace_Benediction_Skill1_Proc": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1652,
     "y": 680
   },
   "Mace_Benediction_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1702,
     "y": 680
   },
   "Mace_Benediction_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1752,
     "y": 680
   },
   "Mackerel": {
@@ -8382,14 +8417,14 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1802,
     "y": 680
   },
   "Mage_StaticNova_Status_M1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1852,
     "y": 680
   },
   "Mage_StaticNova_Status_Root": {
@@ -8403,63 +8438,63 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1902,
     "y": 680
   },
   "Mage_Talent_ChainStrike": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 2,
+    "x": 102,
     "y": 730
   },
   "Mage_Talent_Chaincast": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
+    "x": 1952,
     "y": 680
   },
   "Mage_Talent_Chaincast_Accum_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 680
+    "x": 2,
+    "y": 730
   },
   "Mage_Talent_Chaincast_Status": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 1952,
-    "y": 680
-  },
-  "Mage_Talent_ConcentratedPower": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 52,
     "y": 730
   },
-  "Mage_Talent_ConduitLifebolt": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 102,
-    "y": 730
-  },
-  "Mage_Talent_ConduitLifebolt_Conduit": {
+  "Mage_Talent_ConcentratedPower": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 152,
     "y": 730
   },
-  "Mage_Talent_ConduitResidues": {
+  "Mage_Talent_ConduitLifebolt": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 202,
+    "y": 730
+  },
+  "Mage_Talent_ConduitLifebolt_Conduit": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 252,
+    "y": 730
+  },
+  "Mage_Talent_ConduitResidues": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 302,
     "y": 730
   },
   "Mage_Talent_ConduitSparkExplosion": {
@@ -8480,112 +8515,119 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 252,
+    "x": 352,
     "y": 730
   },
   "Mage_Talent_EchoingLife": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 302,
+    "x": 402,
     "y": 730
   },
   "Mage_Talent_ExpandedSpirit": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 352,
+    "x": 452,
     "y": 730
   },
   "Mage_Talent_FerventWizard": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 402,
+    "x": 502,
     "y": 730
   },
   "Mage_Talent_FlowingVitality": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 452,
+    "x": 552,
     "y": 730
   },
   "Mage_Talent_HighVoltage": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 502,
-    "y": 730
-  },
-  "Mage_Talent_InfiniteResources": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 552,
-    "y": 730
-  },
-  "Mage_Talent_KineticSurge": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 602,
     "y": 730
   },
-  "Mage_Talent_LifeCurrent": {
+  "Mage_Talent_HighVoltage_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 652,
     "y": 730
   },
-  "Mage_Talent_NimbleFingers": {
+  "Mage_Talent_InfiniteResources": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 702,
     "y": 730
   },
-  "Mage_Talent_PowerCircuit": {
+  "Mage_Talent_KineticSurge": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 752,
     "y": 730
   },
-  "Mage_Talent_PowerCircuit_Status": {
+  "Mage_Talent_LifeCurrent": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 802,
     "y": 730
   },
-  "Mage_Talent_ProdigiousMind": {
+  "Mage_Talent_NimbleFingers": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 852,
     "y": 730
   },
-  "Mage_Talent_Reverberate": {
+  "Mage_Talent_PowerCircuit": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 902,
     "y": 730
   },
-  "Mage_Talent_SparkFlask": {
+  "Mage_Talent_PowerCircuit_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 952,
     "y": 730
   },
-  "Mage_Talent_TemporalCompression": {
+  "Mage_Talent_ProdigiousMind": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 1002,
+    "y": 730
+  },
+  "Mage_Talent_Reverberate": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1052,
+    "y": 730
+  },
+  "Mage_Talent_SparkFlask": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1102,
+    "y": 730
+  },
+  "Mage_Talent_TemporalCompression": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1152,
     "y": 730
   },
   "MagicBlock": {
@@ -8606,183 +8648,183 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 332,
+    "x": 530,
     "y": 530
   },
   "Manfish_Prisonner": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 530
   },
   "Manfish_Z1D_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 530
   },
   "Manfish_Z1D_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 530
   },
   "Manfish_Z1D_FS_Healer": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 530
   },
   "Manfish_Z1D_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 530
   },
   "Manfish_Z1W_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 530
   },
   "Manfish_Z1W_Caster_3": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 530
   },
   "Manfish_Z1W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 530
   },
   "Manfish_Z1W_Claws_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 530
   },
   "Manfish_Z1W_E_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 530
   },
   "Manfish_Z1W_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 530
   },
   "Manfish_Z1W_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 530
   },
   "Manfish_Z1W_Spear_3": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 530
   },
   "Manfish_Z1W_U_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 530
   },
   "Manfish_Z2D_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 530
   },
   "Manfish_Z2D_Healer": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 530
   },
   "Manfish_Z2D_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 530
   },
   "Manfish_Z2D_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 530
   },
   "Manfish_Z2W_Caster": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 530
   },
   "Manfish_Z2W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 530
   },
   "Manfish_Z2W_E_Spear_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 530
   },
   "Manfish_Z2W_FS_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 530
   },
   "Manfish_Z2W_Healer": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 530
+    "x": 2,
+    "y": 596
   },
   "Manfish_Z2W_Spear": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1916,
-    "y": 530
+    "x": 68,
+    "y": 596
   },
   "Manfish_Z2W_Sword": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1982,
-    "y": 530
+    "x": 134,
+    "y": 596
   },
   "Mastery": {
     "category": "Items",
@@ -8844,7 +8886,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 2,
+    "x": 200,
     "y": 596
   },
   "Mortar": {
@@ -8900,49 +8942,49 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 68,
+    "x": 266,
     "y": 596
   },
   "MountGoat_02": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 134,
+    "x": 332,
     "y": 596
   },
   "MountGoat_03": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 200,
+    "x": 398,
     "y": 596
   },
   "MountGoat_04": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 266,
+    "x": 464,
     "y": 596
   },
   "MountWolf_01": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 332,
+    "x": 530,
     "y": 596
   },
   "MountWolf_04": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 596
   },
   "MountWolf_06": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 596
   },
   "Mount_Aries_01": {
@@ -9390,7 +9432,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 596
   },
   "MysticCopperPlate": {
@@ -9495,7 +9537,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 596
   },
   "Net_Basic": {
@@ -9509,7 +9551,7 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1202,
     "y": 730
   },
   "Nightblood": {
@@ -9530,175 +9572,175 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 596
   },
   "OgreHuman_Z2W_Peasant_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 596
   },
   "OgreHuman_Z3D_GM": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 596
   },
   "OgreHuman_Z3W_Claws_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 596
   },
   "OgreHuman_Z3W_GM": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 596
   },
   "OgreHuman_Z3W_GM_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 596
   },
   "OgreHuman_Z3W_GM_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 596
   },
   "OgreHuman_Z3W_Peasant": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 596
   },
   "OgreKobold_Z1D_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 596
   },
   "OgreKobold_Z1D_FS_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 596
   },
   "OgreKobold_Z1W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 596
   },
   "OgreKobold_Z1W_Claws_3": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 596
   },
   "OgreKobold_Z1W_Claws_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 596
   },
   "OgreKobold_Z1W_E_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 596
   },
   "OgreKobold_Z2D_Docker": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 596
   },
   "OgreKobold_Z2W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 596
   },
   "OgreKobold_Z2W_GM": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 596
   },
   "OgreManfish_Z1D_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 596
   },
   "OgreManfish_Z1W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 596
-  },
-  "OgreManfish_Z1W_Claws_U": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 596
-  },
-  "OgreManfish_Z1W_FS_Claws": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 596
-  },
-  "OgreManfish_Z2D_Claws": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 662
   },
-  "OgreManfish_Z2W_Claws": {
+  "OgreManfish_Z1W_Claws_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 662
   },
-  "OgreManfish_Z2W_Claws_E": {
+  "OgreManfish_Z1W_FS_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 662
   },
-  "OgreManfish_Z2W_FS_Claws": {
+  "OgreManfish_Z2D_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
+    "y": 662
+  },
+  "OgreManfish_Z2W_Claws": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 266,
+    "y": 662
+  },
+  "OgreManfish_Z2W_Claws_E": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 332,
+    "y": 662
+  },
+  "OgreManfish_Z2W_FS_Claws": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 398,
     "y": 662
   },
   "OreAffix_Air": {
@@ -9796,28 +9838,28 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 266,
+    "x": 464,
     "y": 662
   },
   "Phrixes_ChaosOrbStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1252,
     "y": 730
   },
   "Phrixes_DimensionalInstability": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1302,
     "y": 730
   },
   "Phrixes_DimensionalInstabilityStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1352,
     "y": 730
   },
   "PhysicalBlock": {
@@ -10027,189 +10069,189 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1402,
     "y": 730
   },
   "Priest_Talent_BlessedSpirituality": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1452,
     "y": 730
   },
   "Priest_Talent_BurningRays": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1502,
     "y": 730
   },
   "Priest_Talent_BurningRays_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1552,
     "y": 730
   },
   "Priest_Talent_CrusadersResolve": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1602,
     "y": 730
   },
   "Priest_Talent_FerventDefender": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1652,
     "y": 730
   },
   "Priest_Talent_LuminousBastion": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1702,
     "y": 730
   },
   "Priest_Talent_MeltingFaith": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1752,
     "y": 730
   },
   "Priest_Talent_MeltingFaith_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1802,
     "y": 730
   },
   "Priest_Talent_MightyExecutioner": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1852,
     "y": 730
   },
   "Priest_Talent_OppressiveRays": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1902,
     "y": 730
   },
   "Priest_Talent_PiercingLight": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1952,
     "y": 730
   },
   "Priest_Talent_PiousAdept": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
-    "y": 730
-  },
-  "Priest_Talent_PotentFortitude": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 1902,
-    "y": 730
-  },
-  "Priest_Talent_PotentFortitude_Status": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 1952,
-    "y": 730
-  },
-  "Priest_Talent_Prosecutor": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 2,
     "y": 780
   },
-  "Priest_Talent_PurgingStrikes": {
+  "Priest_Talent_PotentFortitude": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 52,
     "y": 780
   },
-  "Priest_Talent_PurgingStrikes_Status": {
+  "Priest_Talent_PotentFortitude_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 102,
     "y": 780
   },
-  "Priest_Talent_Radiance": {
+  "Priest_Talent_Prosecutor": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 152,
     "y": 780
   },
-  "Priest_Talent_SharpMind": {
+  "Priest_Talent_PurgingStrikes": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 202,
     "y": 780
   },
-  "Priest_Talent_SolarDevotion": {
+  "Priest_Talent_PurgingStrikes_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 252,
     "y": 780
   },
-  "Priest_Talent_SoothingRays": {
+  "Priest_Talent_Radiance": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 302,
     "y": 780
   },
-  "Priest_Talent_SunHalo": {
+  "Priest_Talent_SharpMind": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 352,
     "y": 780
   },
-  "Priest_Talent_Sunlight": {
+  "Priest_Talent_SolarDevotion": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 402,
     "y": 780
   },
-  "Priest_Talent_Sunlight_Status": {
+  "Priest_Talent_SoothingRays": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 452,
     "y": 780
   },
-  "Priest_Talent_SwiftJustice": {
+  "Priest_Talent_SunHalo": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 502,
     "y": 780
   },
-  "Priest_Talent_ZealousFighter": {
+  "Priest_Talent_Sunlight": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 552,
+    "y": 780
+  },
+  "Priest_Talent_Sunlight_Status": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 602,
+    "y": 780
+  },
+  "Priest_Talent_SwiftJustice": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 652,
+    "y": 780
+  },
+  "Priest_Talent_ZealousFighter": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 702,
     "y": 780
   },
   "PrismaticFragment": {
@@ -10237,35 +10279,35 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 332,
+    "x": 530,
     "y": 662
   },
   "PunchingBagArmor": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 662
   },
   "PunchingBagInvulnerable": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 662
   },
   "PunchingBagMagicRes": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 662
   },
   "PunchingBagShield": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 662
   },
   "PurifiedHeart": {
@@ -10293,7 +10335,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 662
   },
   "Rabbit_Brown": {
@@ -10370,21 +10412,21 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 662
   },
   "Ratsar_KingRage": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 752,
     "y": 780
   },
   "Reblochonk": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 662
   },
   "Recipe_AttunedCutBeryl": {
@@ -10979,14 +11021,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 662
   },
   "RobinHoofDog01": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 662
   },
   "Rock_Z1": {
@@ -11119,203 +11161,203 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 802,
     "y": 780
   },
   "Rogue_Talent_AcidicSplatter_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 852,
     "y": 780
   },
   "Rogue_Talent_Adrenaline": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 902,
     "y": 780
   },
   "Rogue_Talent_Adrenaline_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 952,
     "y": 780
   },
   "Rogue_Talent_AtrophicPoison": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 1002,
     "y": 780
   },
   "Rogue_Talent_AtrophicPoison_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 1052,
     "y": 780
   },
   "Rogue_Talent_BullyingTheWeak": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1102,
     "y": 780
   },
   "Rogue_Talent_CheatDeath": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1152,
     "y": 780
   },
   "Rogue_Talent_CheatDeath_Cooldown": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1202,
     "y": 780
   },
   "Rogue_Talent_CheatDeath_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1252,
     "y": 780
   },
   "Rogue_Talent_CripplingPoison": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1302,
     "y": 780
   },
   "Rogue_Talent_CripplingPoison_Tracker": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1352,
     "y": 780
   },
   "Rogue_Talent_DeadlyPoison": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1402,
     "y": 780
   },
   "Rogue_Talent_Envenom": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1452,
     "y": 780
   },
   "Rogue_Talent_FinishTheJob": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1502,
     "y": 780
   },
   "Rogue_Talent_Footwork": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1552,
     "y": 780
   },
   "Rogue_Talent_ImprovedMixture": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1602,
     "y": 780
   },
   "Rogue_Talent_IntentToKill": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1652,
     "y": 780
   },
   "Rogue_Talent_LeechingPoison": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1702,
     "y": 780
   },
   "Rogue_Talent_LethalDose": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1752,
     "y": 780
   },
   "Rogue_Talent_LethalPoison": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1802,
     "y": 780
   },
   "Rogue_Talent_LethalPoison_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1852,
     "y": 780
   },
   "Rogue_Talent_NoxiousStrategem": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1902,
     "y": 780
   },
   "Rogue_Talent_OpportunityStrike": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1952,
     "y": 780
   },
   "Rogue_Talent_RegeneratingMiasmas": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
-    "y": 780
+    "x": 2,
+    "y": 830
   },
   "Rogue_Talent_UpTheAnte": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 780
+    "x": 52,
+    "y": 830
   },
   "Rogue_Talent_VenomInfusion": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1952,
-    "y": 780
+    "x": 102,
+    "y": 830
   },
   "Rogue_Talent_VenomousFinisher": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 2,
+    "x": 152,
     "y": 830
   },
   "Rogue_Talent_VirulentMagic": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 52,
+    "x": 202,
     "y": 830
   },
   "Rogue_UrgeToKill": {
@@ -11399,21 +11441,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 102,
+    "x": 252,
     "y": 830
   },
   "Scepter_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 152,
+    "x": 302,
     "y": 830
   },
   "Scepter_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 202,
+    "x": 352,
     "y": 830
   },
   "Scepter_Flamie": {
@@ -11427,70 +11469,70 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 252,
+    "x": 402,
     "y": 830
   },
   "Scepter_Flamie_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 302,
+    "x": 452,
     "y": 830
   },
   "Scepter_Flamie_Flamie": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 352,
+    "x": 502,
     "y": 830
   },
   "Scepter_Flamie_P": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 402,
+    "x": 552,
     "y": 830
   },
   "Scepter_Flamie_S2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 452,
+    "x": 602,
     "y": 830
   },
   "Scepter_Flamie_S2_R2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 502,
+    "x": 652,
     "y": 830
   },
   "Scepter_Flamie_S2_R3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 552,
+    "x": 702,
     "y": 830
   },
   "Scepter_Flamie_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 752,
     "y": 830
   },
   "Scepter_Flamie_Skill1_Area": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 802,
     "y": 830
   },
   "Scepter_Flamie_Skill1_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 852,
     "y": 830
   },
   "Scepter_Start": {
@@ -11504,35 +11546,35 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 902,
     "y": 830
   },
   "Scepter_Start_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 952,
     "y": 830
   },
   "Scepter_Start_Skill1_Burn": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 1002,
     "y": 830
   },
   "Scepter_Start_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 1052,
     "y": 830
   },
   "Scepter_Start_Skill2_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1102,
     "y": 830
   },
   "Scissors": {
@@ -11714,21 +11756,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1152,
     "y": 830
   },
   "Shield_Firebreath_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1202,
     "y": 830
   },
   "Shield_Firebreath_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1252,
     "y": 830
   },
   "Shield_OrbitWater": {
@@ -11742,35 +11784,35 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1302,
     "y": 830
   },
   "Shield_OrbitWater_P_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1352,
     "y": 830
   },
   "Shield_OrbitWater_P_StatusBlockBuffed": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1402,
     "y": 830
   },
   "Shield_OrbitWater_S1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1452,
     "y": 830
   },
   "Shield_OrbitWater_S1_OrbStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1502,
     "y": 830
   },
   "Shield_Start": {
@@ -11798,14 +11840,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 662
   },
   "ShiroNext_Pirate1": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 662
   },
   "ShopCurrency": {
@@ -12120,147 +12162,147 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 662
   },
   "Skunk_Z1W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 662
   },
   "Skunk_Z1W_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 662
   },
   "Skunk_Z1W_FS_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 662
   },
   "Skunk_Z1W_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 662
   },
   "Slime_Demonic_Z3W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 662
   },
   "Slime_Demonic_Z3W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 662
   },
   "Slime_Z1D_Honey": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 662
   },
   "Slime_Z1D_Honey_NoXP": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 662
   },
   "Slime_Z1D_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 662
   },
   "Slime_Z1W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 662
   },
   "Slime_Z1W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 662
-  },
-  "Slime_Z1W_4": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 662
-  },
-  "Slime_Z1W_E": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 662
-  },
-  "Slime_Z1W_E_2": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 728
   },
-  "Slime_Z1W_FS": {
+  "Slime_Z1W_4": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 728
   },
-  "Slime_Z1W_FS_2": {
+  "Slime_Z1W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 728
   },
-  "Slime_Z1W_Honey": {
+  "Slime_Z1W_E_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 728
   },
-  "Slime_Z1W_U": {
+  "Slime_Z1W_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
     "y": 728
   },
-  "Slime_Z2W_FS": {
+  "Slime_Z1W_FS_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 332,
     "y": 728
   },
-  "Slime_Z3W": {
+  "Slime_Z1W_Honey": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 398,
+    "y": 728
+  },
+  "Slime_Z1W_U": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 464,
+    "y": 728
+  },
+  "Slime_Z2W_FS": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 530,
+    "y": 728
+  },
+  "Slime_Z3W": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 596,
     "y": 728
   },
   "Slow": {
@@ -12386,21 +12428,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1552,
     "y": 830
   },
   "Spear_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1602,
     "y": 830
   },
   "Spear_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1652,
     "y": 830
   },
   "Spear_Eruption": {
@@ -12414,57 +12456,57 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1702,
     "y": 830
   },
   "Spear_Eruption_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1752,
     "y": 830
   },
   "Spear_Eruption_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1802,
     "y": 830
   },
   "Spear_Eruption_Passive_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1852,
     "y": 830
   },
   "Spear_Eruption_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1902,
     "y": 830
   },
   "Spear_Eruption_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
+    "x": 1952,
     "y": 830
   },
   "Spear_Eruption_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
-    "y": 830
+    "x": 2,
+    "y": 880
   },
   "Spear_Eruption_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 830
+    "x": 52,
+    "y": 880
   },
   "Spear_Goo": {
     "category": "Items",
@@ -12477,56 +12519,56 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1952,
-    "y": 830
-  },
-  "Spear_Goo_Combo_Status": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 2,
-    "y": 880
-  },
-  "Spear_Goo_Passive": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 52,
-    "y": 880
-  },
-  "Spear_Goo_PassiveStatus": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 102,
     "y": 880
   },
-  "Spear_Goo_Passive_Dot": {
+  "Spear_Goo_Combo_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 152,
     "y": 880
   },
-  "Spear_Goo_Skill1": {
+  "Spear_Goo_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 202,
     "y": 880
   },
-  "Spear_Goo_Skill1_Status": {
+  "Spear_Goo_PassiveStatus": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 252,
     "y": 880
   },
-  "Spear_Goo_Skill2": {
+  "Spear_Goo_Passive_Dot": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 302,
+    "y": 880
+  },
+  "Spear_Goo_Skill1": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 352,
+    "y": 880
+  },
+  "Spear_Goo_Skill1_Status": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 402,
+    "y": 880
+  },
+  "Spear_Goo_Skill2": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 452,
     "y": 880
   },
   "SpiritHeart_Z2": {
@@ -12540,182 +12582,182 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 728
   },
   "Spirit_Z2W_Claws2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 728
   },
   "Spirit_Z2W_Claws_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 728
   },
   "Spirit_Z2W_Claws_E2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 728
   },
   "Spirit_Z2W_FS_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 728
   },
   "Spirit_Z3W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 728
   },
   "Spirit_Z3W_Claws_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 728
   },
   "SpongeBlob": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 728
   },
   "Sprout_DarkRice_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 728
   },
   "Sprout_Garlic_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 728
   },
   "Sprout_Garlic_Z2W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 728
   },
   "Sprout_Onion_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 728
   },
   "Sprout_Onion_Z2W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 728
   },
   "Sprout_Onion_Z2_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 728
   },
   "Sprout_Rice_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 728
   },
   "Sprout_Rice_Z2W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore_3": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore_4": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore_5": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 728
   },
   "Sprout_Rice_Z2W_Plantivore_6": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 728
+    "x": 2,
+    "y": 794
   },
   "Sprout_Rice_Z2W_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1916,
-    "y": 728
+    "x": 68,
+    "y": 794
   },
   "Sprout_Rice_Z2_FS": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1982,
-    "y": 728
+    "x": 134,
+    "y": 794
   },
   "Sprout_Turnip_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 2,
+    "x": 200,
     "y": 794
   },
   "Sprout_Turnip_Z2W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 68,
+    "x": 266,
     "y": 794
   },
   "Squirrel_Blue": {
@@ -12771,21 +12813,21 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 352,
+    "x": 502,
     "y": 880
   },
   "Staff_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 402,
+    "x": 552,
     "y": 880
   },
   "Staff_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 452,
+    "x": 602,
     "y": 880
   },
   "Staff_Censer": {
@@ -12799,42 +12841,42 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 502,
+    "x": 652,
     "y": 880
   },
   "Staff_Censer_Combo_Buff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 552,
+    "x": 702,
     "y": 880
   },
   "Staff_Censer_Mark": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 602,
+    "x": 752,
     "y": 880
   },
   "Staff_Censer_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 652,
+    "x": 802,
     "y": 880
   },
   "Staff_Censer_Passive_Buff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 702,
+    "x": 852,
     "y": 880
   },
   "Staff_Censer_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 752,
+    "x": 902,
     "y": 880
   },
   "Staff_Censer_Skill2": {
@@ -12855,14 +12897,14 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 802,
+    "x": 952,
     "y": 880
   },
   "Staff_Censer_Ultimate_Proc": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 852,
+    "x": 1002,
     "y": 880
   },
   "Staff_Craft": {
@@ -12876,63 +12918,63 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 902,
+    "x": 1052,
     "y": 880
   },
   "Staff_Craft_C_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 952,
+    "x": 1102,
     "y": 880
   },
   "Staff_Craft_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1002,
+    "x": 1152,
     "y": 880
   },
   "Staff_Craft_Passive_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1052,
+    "x": 1202,
     "y": 880
   },
   "Staff_Craft_S1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1102,
+    "x": 1252,
     "y": 880
   },
   "Staff_Craft_S1_Proc": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1152,
+    "x": 1302,
     "y": 880
   },
   "Staff_Craft_S1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1202,
+    "x": 1352,
     "y": 880
   },
   "Staff_Craft_S2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1252,
+    "x": 1402,
     "y": 880
   },
   "Staff_Craft_S2_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1302,
+    "x": 1452,
     "y": 880
   },
   "Staff_SummonDemon": {
@@ -12946,63 +12988,63 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1352,
+    "x": 1502,
     "y": 880
   },
   "Staff_SummonDemon_Combo_R3_Buff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1402,
+    "x": 1552,
     "y": 880
   },
   "Staff_SummonDemon_Imp": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 134,
+    "x": 332,
     "y": 794
   },
   "Staff_SummonDemon_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1452,
+    "x": 1602,
     "y": 880
   },
   "Staff_SummonDemon_Passive_Buff": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1502,
+    "x": 1652,
     "y": 880
   },
   "Staff_SummonDemon_Passive_Shield": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1552,
+    "x": 1702,
     "y": 880
   },
   "Staff_SummonDemon_Skill1": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1602,
+    "x": 1752,
     "y": 880
   },
   "Staff_SummonDemon_Skill1_Status": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1652,
+    "x": 1802,
     "y": 880
   },
   "Staff_SummonDemon_Skill2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1702,
+    "x": 1852,
     "y": 880
   },
   "StaleBread": {
@@ -13128,14 +13170,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 200,
+    "x": 398,
     "y": 794
   },
   "Summon_Imp": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 266,
+    "x": 464,
     "y": 794
   },
   "SunderedCutAgate": {
@@ -13166,6 +13208,13 @@
     "x": 530,
     "y": 332
   },
+  "SuperEliteDemon_Status_Stackable": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 1902,
+    "y": 880
+  },
   "SurgingCutAgate": {
     "category": "Items",
     "file": "atlas_items_01.webp",
@@ -13184,7 +13233,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 332,
+    "x": 530,
     "y": 794
   },
   "SweetRoot": {
@@ -13345,56 +13394,56 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 398,
+    "x": 596,
     "y": 794
   },
   "TODO_Crocopork_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 794
   },
   "TODO_DemonSuperElite_Fairy": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 794
   },
   "TODO_DemonSuperElite_Fairy_FalseClone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 794
   },
   "TODO_DemonSuperElite_Fairy_TrueClone": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 794
   },
   "TODO_FaerieBee": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 794
   },
   "TODO_FaerieSwarowl_Z3W_Claws": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 794
   },
   "TODO_Fly_Demon_Elite": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 794
   },
   "TODO_Glider_Crimson01": {
@@ -13520,14 +13569,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 794
   },
   "TODO_Kobold_Z2W_Tank": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 794
   },
   "TODO_Mount_Aries_01": {
@@ -13576,154 +13625,154 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 794
   },
   "TODO_OgreBagon_BlueGrey": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1124,
+    "x": 1322,
     "y": 794
   },
   "TODO_OgreBagon_Brown": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1190,
+    "x": 1388,
     "y": 794
   },
   "TODO_OgreBagon_Brown02": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1256,
+    "x": 1454,
     "y": 794
   },
   "TODO_OgreBagon_DarkBlue": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1322,
+    "x": 1520,
     "y": 794
   },
   "TODO_OgreBagon_Grey": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1388,
+    "x": 1586,
     "y": 794
   },
   "TODO_OgreBagon_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1454,
+    "x": 1652,
     "y": 794
   },
   "TODO_ProfessionTrainer": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1520,
+    "x": 1718,
     "y": 794
   },
   "TODO_Slime_King": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1586,
+    "x": 1784,
     "y": 794
   },
   "TODO_SnowPanther_Black": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1652,
+    "x": 1850,
     "y": 794
   },
   "TODO_SnowPanther_DarkBrown": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1718,
+    "x": 1916,
     "y": 794
   },
   "TODO_SnowPanther_Grey": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1784,
+    "x": 1982,
     "y": 794
   },
   "TODO_SnowPanther_LightBrown": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1850,
-    "y": 794
-  },
-  "TODO_SnowPanther_Spark": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1916,
-    "y": 794
-  },
-  "TODO_SnowPanther_White": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
-    "x": 1982,
-    "y": 794
-  },
-  "TODO_SnowPanther_Yellow": {
-    "category": "Enemies",
-    "file": "atlas_enemies_01.webp",
-    "size": 64,
     "x": 2,
     "y": 860
   },
-  "TODO_Sprout_Garlic_Spark": {
+  "TODO_SnowPanther_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 68,
     "y": 860
   },
-  "TODO_Sprout_Onion_Spark": {
+  "TODO_SnowPanther_White": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 134,
     "y": 860
   },
-  "TODO_Sprout_Turnip_Spark": {
+  "TODO_SnowPanther_Yellow": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 200,
     "y": 860
   },
-  "TODO_StableMaster": {
+  "TODO_Sprout_Garlic_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 266,
     "y": 860
   },
-  "TODO_Toad": {
+  "TODO_Sprout_Onion_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 332,
     "y": 860
   },
-  "TODO_WanderingMerchant": {
+  "TODO_Sprout_Turnip_Spark": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
     "x": 398,
+    "y": 860
+  },
+  "TODO_StableMaster": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 464,
+    "y": 860
+  },
+  "TODO_Toad": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 530,
+    "y": 860
+  },
+  "TODO_WanderingMerchant": {
+    "category": "Enemies",
+    "file": "atlas_enemies_01.webp",
+    "size": 64,
+    "x": 596,
     "y": 860
   },
   "TPDeathStone": {
@@ -13779,22 +13828,22 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1752,
+    "x": 1952,
     "y": 880
   },
   "Thrown_Base_Attack2": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1802,
-    "y": 880
+    "x": 2,
+    "y": 930
   },
   "Thrown_Base_Attack3": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1852,
-    "y": 880
+    "x": 52,
+    "y": 930
   },
   "Thrown_Seeds": {
     "category": "Items",
@@ -13807,49 +13856,49 @@
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
-    "x": 1902,
-    "y": 880
-  },
-  "Thrown_Seeds_Dot": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 1952,
-    "y": 880
-  },
-  "Thrown_Seeds_Passive": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 2,
-    "y": 930
-  },
-  "Thrown_Seeds_Skill1": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
-    "x": 52,
-    "y": 930
-  },
-  "Thrown_Seeds_Skill2": {
-    "category": "Skills",
-    "file": "atlas_skills_01.webp",
-    "size": 48,
     "x": 102,
     "y": 930
   },
-  "Thrown_Seeds_Skill2_Status": {
+  "Thrown_Seeds_Dot": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 152,
     "y": 930
   },
-  "Thrown_Seeds_Sprout": {
+  "Thrown_Seeds_Passive": {
     "category": "Skills",
     "file": "atlas_skills_01.webp",
     "size": 48,
     "x": 202,
+    "y": 930
+  },
+  "Thrown_Seeds_Skill1": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 252,
+    "y": 930
+  },
+  "Thrown_Seeds_Skill2": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 302,
+    "y": 930
+  },
+  "Thrown_Seeds_Skill2_Status": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 352,
+    "y": 930
+  },
+  "Thrown_Seeds_Sprout": {
+    "category": "Skills",
+    "file": "atlas_skills_01.webp",
+    "size": 48,
+    "x": 402,
     "y": 930
   },
   "TinOre": {
@@ -13870,14 +13919,14 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 464,
+    "x": 662,
     "y": 860
   },
   "Totem_Tidal": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 530,
+    "x": 728,
     "y": 860
   },
   "TpRiftStone": {
@@ -14010,7 +14059,7 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 596,
+    "x": 794,
     "y": 860
   },
   "UpgradeAll": {
@@ -14850,49 +14899,49 @@
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 662,
+    "x": 860,
     "y": 860
   },
   "Wolf_Z1W_Alpha": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 728,
+    "x": 926,
     "y": 860
   },
   "Wolf_Z1W_E": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 794,
+    "x": 992,
     "y": 860
   },
   "Wolf_Z2W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 860,
+    "x": 1058,
     "y": 860
   },
   "Wolf_Z2W_2": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 926,
+    "x": 1124,
     "y": 860
   },
   "Wolf_Z2W_U": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 992,
+    "x": 1190,
     "y": 860
   },
   "Wolf_Z3W": {
     "category": "Enemies",
     "file": "atlas_enemies_01.webp",
     "size": 64,
-    "x": 1058,
+    "x": 1256,
     "y": 860
   },
   "YellowRabbits": {

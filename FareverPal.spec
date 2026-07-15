@@ -53,7 +53,8 @@ has_raw_data = os.path.exists(raw_data_path) and os.path.getsize(raw_data_path) 
 data_src = os.path.join(SPECPATH, "assets", "data")
 essential_data = [
     "poi_locs.json", "chest_locs.json", "critter_locs.json",
-    "orb_positions.json", "gatherable_locs.json", "_version.json"
+    "orb_positions.json", "gatherable_locs.json", "_version.json",
+    "mob_locs.json"
 ]
 for f in essential_data:
     src = os.path.join(data_src, f)

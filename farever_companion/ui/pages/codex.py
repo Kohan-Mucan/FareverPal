@@ -44,7 +44,7 @@ class CodexPageMixin:
         self._btn_codex_disable.clicked.connect(lambda: self._codex_set_all(False))
         bar.addWidget(self._btn_codex_disable)
         
-        self._codex_status = C.SegmentedControl(["ALL", "VISIBLE", "HIDDEN"], current="ALL")
+        self._codex_status = C.SegmentedControl(["ALL", "VISIBLE", "HIDDEN", "NEARBY"], current="VISIBLE")
         self._codex_status.currentChanged.connect(self._refresh_codex_grid)
         bar.addWidget(self._codex_status)
 
@@ -60,22 +60,21 @@ class CodexPageMixin:
 
         v.addLayout(footer)
         
-        v.addSpacing(6)
-        
         # Scroll area for the grid
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff) # Hidden scrollbar
+        self._codex_scroll = QtWidgets.QScrollArea()
+        self._codex_scroll.setWidgetResizable(True)
+        self._codex_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._codex_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._codex_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff) # Hidden scrollbar
         
         body = QtWidgets.QWidget()
         self._codex_grid = QtWidgets.QGridLayout(body)
-        self._codex_grid.setSpacing(8) # Reduced spacing
+        self._codex_grid.setHorizontalSpacing(8)
+        self._codex_grid.setVerticalSpacing(6)
         self._codex_grid.setContentsMargins(0, 0, 0, 0)
         self._codex_grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-        scroll.setWidget(body)
-        v.addWidget(scroll, 1)
+        self._codex_scroll.setWidget(body)
+        v.addWidget(self._codex_scroll, 1)
         
         self._codex_cards: list[CodexUnitCard] = []
         self._refresh_codex_grid()
@@ -84,15 +83,20 @@ class CodexPageMixin:
 
     def _refresh_codex_grid(self) -> None:
         """Re-build the grid based on active tab, search query, and status filter."""
+        # Reset scroll position to top whenever the view changes
+        if hasattr(self, "_codex_scroll"):
+            self._codex_scroll.verticalScrollBar().setValue(0)
+
         # 1. Get filters
         query = self._codex_search.text().strip().lower()
         status_filter = self._codex_status.currentText()
         
-        # Toggle bulk buttons (hide when searching globally)
+        # Toggle bulk buttons (hide when searching globally or showing nearby)
+        is_global = bool(query) or status_filter == "NEARBY"
         if hasattr(self, "_btn_codex_enable"):
-            self._btn_codex_enable.setVisible(not query)
+            self._btn_codex_enable.setVisible(not is_global)
         if hasattr(self, "_btn_codex_disable"):
-            self._btn_codex_disable.setVisible(not query)
+            self._btn_codex_disable.setVisible(not is_global)
         
         # Performance: Disable updates during bulk grid rebuild
         self._codex_grid.parentWidget().setUpdatesEnabled(False)
@@ -103,6 +107,9 @@ class CodexPageMixin:
                 if item.widget():
                     item.widget().deleteLater()
             self._codex_cards.clear()
+            # Reset row stretches to avoid gaps from previous results
+            for r in range(self._codex_grid.rowCount()):
+                self._codex_grid.setRowStretch(r, 0)
             
             # 3. Determine regions to show
             all_regions = codex.region_names()
@@ -115,23 +122,37 @@ class CodexPageMixin:
                     current_rid = rid
                     break
 
-            if query:
-                # Global search: show all regions, but prioritize the current tab at the top
+            if is_global:
+                # Global search or Nearby filter: show all regions, but prioritize current tab
                 regions_to_show = {current_rid: all_regions[current_rid]}
                 for rid, name in all_regions.items():
                     if rid != current_rid:
                         regions_to_show[rid] = name
-                self._codex_grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
             else:
                 # Tabbed view: show only selected region
                 regions_to_show = {current_rid: tab_label}
-                self._codex_grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
+            
+            # Always use AlignLeft to avoid "gaps" caused by centering partial rows
+            self._codex_grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
 
             # 4. Populate grid
             profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
             hidden_units = set(self.s.get_entity_hidden_units(profile))
             hidden_comps = set(self.s.get_companion_hidden_units(profile)) if hasattr(self.s, "get_companion_hidden_units") else set()
             
+            # Get nearby units if filter is active
+            nearby_info = {}  # uid -> distance
+            if status_filter == "NEARBY" and hasattr(self, "model") and self.model:
+                xyz = self.model.player_xyz()
+                if xyz:
+                    # Enumerate enemies and companions within 300m
+                    for e, d in self.model.nearest_enemies(xyz, 500, max_dist=300.0):
+                        if e.unit_id:
+                            nearby_info[e.unit_id] = min(nearby_info.get(e.unit_id, 999.0), d)
+                    for e, d in self.model.nearest_companions(xyz, 100, max_dist=300.0):
+                        if e.unit_id:
+                            nearby_info[e.unit_id] = min(nearby_info.get(e.unit_id, 999.0), d)
+
             grid_row = 0
             total_shown = 0
             
@@ -152,25 +173,36 @@ class CodexPageMixin:
                         continue
                     if status_filter == "HIDDEN" and is_active:
                         continue
+                    if status_filter == "NEARBY" and uid not in nearby_info:
+                        continue
                         
                     # Apply Search Filter
                     if query and query not in uname.lower() and query not in uid.lower():
                         continue
                     
-                    matches.append((uid, item, is_active, is_pet))
+                    matches.append((uid, item, is_active, is_pet, nearby_info.get(uid, 0)))
                 
                 if not matches:
                     continue
+                
+                # Sort matches: visible first, then by distance (if nearby) or name
+                if status_filter == "NEARBY":
+                    matches.sort(key=lambda x: (not x[2], x[4]))
+                else:
+                    matches.sort(key=lambda x: (not x[2], x[1]["name"].lower()))
                     
                 # Add Zone Header if searching globally or multi-zone
-                if query:
+                if is_global:
                     header = C.SectionHeader(rname)
                     self._codex_grid.addWidget(header, grid_row, 0, 1, _CARD_COLS)
                     grid_row += 1
                 
                 # Add cards
-                for i, (uid, item, is_active, is_pet) in enumerate(matches):
+                for i, (uid, item, is_active, is_pet, dist) in enumerate(matches):
                     card = CodexUnitCard(uid, item, 0, 10, is_active)
+                    if dist > 0:
+                        card.setToolTip(f"{card.toolTip()}\nDistance: {dist:.0f}m")
+
                     if is_pet:
                         card.toggled.connect(lambda on, u=uid: self._set_companion_hidden(u, not on))
                     else:
@@ -181,11 +213,12 @@ class CodexPageMixin:
                     
                 grid_row += (len(matches) + _CARD_COLS - 1) // _CARD_COLS
                 total_shown += len(matches)
-                if not query:
-                    total_in_zone = len(items)
+
+            # Push all content to the top to avoid vertical gaps in the grid
+            self._codex_grid.setRowStretch(grid_row, 1)
 
             if hasattr(self, "_codex_count"):
-                if query:
+                if is_global:
                     self._codex_count.setText(f"FOUND: {total_shown}")
                 else:
                     self._codex_count.setText(f"SHOWN: {total_shown}")
@@ -197,13 +230,10 @@ class CodexPageMixin:
         profile = self.model.player_profile() if hasattr(self, "model") and self.model else None
         hidden_units = set(self.s.get_entity_hidden_units(profile))
         hidden_comps = set(self.s.get_companion_hidden_units(profile)) if hasattr(self.s, "get_companion_hidden_units") else set()
-        status_filter = self._codex_status.currentText()
         
-        # If we are in a filtered view, we might need a full refresh to move cards in/out
-        if status_filter != "ALL":
-            self._refresh_codex_grid()
-            return
-
+        # We do NOT call _refresh_codex_grid here even if filters are active.
+        # This allows cards to stay in place (just dimmed) until the user
+        # explicitly changes tabs or filters, preventing accidental "disappearing" cards.
         for card in self._codex_cards:
             is_pet = units.is_companion(card.uid)
             is_active = card.uid not in (hidden_comps if is_pet else hidden_units)
@@ -251,7 +281,12 @@ class CodexPageMixin:
                     chip.restyle()
 
         # 5. Refresh UI
-        self._refresh_codex_grid()
+        # Use sync for hiding to keep cards visible (faded) for accidental clicks.
+        # Use grid rebuild for showing to ensure all newly enabled units appear.
+        if visible:
+            self._refresh_codex_grid()
+        else:
+            self._refresh_codex_sync()
         
         if hasattr(self, "_update_unit_tag"):
             self._update_unit_tag()
@@ -318,6 +353,7 @@ class CodexUnitCard(QtWidgets.QFrame):
         """Update visual state (dimming)."""
         self.active = active
         is_boss = self.data.get("is_boss", False)
+        is_elite = self.data.get("is_elite", False)
         # Sparking detection: check ID suffix or readable name ONLY for critters/pets
         is_critter = self.data.get("is_critter", False)
         is_spark = is_critter and ("spark" in self.uid.lower() or "sparkling" in self.data.get("name", "").lower())
@@ -326,9 +362,12 @@ class CodexUnitCard(QtWidgets.QFrame):
         accent = theme.ACCENT if active else theme.ACCENT_DIM
         self.icon_tile.set(self.sheet, self.icon_id, accent=accent)
         
-        # Apply 2px gold border only to the icon if boss or sparkling PET
+        # Apply border only to the icon
         if is_boss or is_spark:
             bcol = theme.GOLD if active else "#a16207"
+            self.icon_tile.setStyleSheet(f"border: 2px solid {bcol};")
+        elif is_elite:
+            bcol = theme.SILVER if active else "#717171"
             self.icon_tile.setStyleSheet(f"border: 2px solid {bcol};")
         else:
             self.icon_tile.setStyleSheet("border: 0;")

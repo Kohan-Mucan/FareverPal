@@ -21,7 +21,8 @@ logic_sheets = [
 # Files that are ALWAYS required at runtime for world markers
 essential_location_data = [
     "poi_locs.json", "chest_locs.json", "critter_locs.json",
-    "orb_positions.json", "gatherable_locs.json", "_version.json"
+    "orb_positions.json", "gatherable_locs.json", "_version.json",
+    "mob_locs.json"
 ]
 
 missing_count = 0

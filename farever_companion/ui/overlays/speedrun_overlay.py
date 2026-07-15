@@ -195,7 +195,7 @@ class SpeedrunOverlay(OverlayWindow):
         if self.model is not None:
             # Update dungeon status every tick so the auto-starter is responsive
             # and works as soon as we enter, even before the boss is seen.
-            self._in_dungeon = self.model.is_in_dungeon()
+            self._in_dungeon = self.model.is_in_dungeon() or self.model.is_in_rift()
 
             self._detect_ctr += 1
             detect_now = self._detect_ctr >= DETECT_EVERY
@@ -328,27 +328,32 @@ class SpeedrunOverlay(OverlayWindow):
         bid = self.timer.boss_id or "_"
         saved = False
         cur = self.timer.last
+        profile = self.model.player_profile()
         if cur is not None:
-            best = self.s.speedrun_best.get(bid)
+            best_dict = self.s.get_speedrun_best(profile)
+            best = best_dict.get(bid)
             if best is None or cur < best:
-                self.s.speedrun_best[bid] = cur
+                best_dict[bid] = cur
+                self.s.save_speedrun_best(profile, best_dict)
                 self.timer.is_new_best = True
                 saved = True
         bcur = self.boss_timer.last
         if bcur is not None and self.boss_timer.state == BossTimer.DONE:
-            bbest = self.s.speedrun_boss_best.get(bid)
+            boss_best_dict = self.s.get_speedrun_boss_best(profile)
+            bbest = boss_best_dict.get(bid)
             if bbest is None or bcur < bbest:
-                self.s.speedrun_boss_best[bid] = bcur
+                boss_best_dict[bid] = bcur
+                self.s.save_speedrun_boss_best(profile, boss_best_dict)
                 self.boss_is_new_best = True
                 saved = True
-        if saved:
+        if saved and not profile:
             self.s.save()
 
     def _maybe_upload(self):
         """On finish: auto-upload ONLY a confirmed boss kill (and only if enabled);
         otherwise offer a manual Upload button. A finish without a detected kill
         (a manual stop, or anything that wasn't a real kill) is never auto-sent."""
-        if self._uploaded:
+        if self._uploaded or self.s.disable_speedrun_upload:
             return
         bid = self.timer.boss_id or self._dungeon_bid
         if not bid or self.timer.last is None:
@@ -386,7 +391,7 @@ class SpeedrunOverlay(OverlayWindow):
         CONFIRMED clear (auto-detected boss kill), independent of the leaderboard:
         a non-PB or Normal run still counts as "you ran this dungeon". Fire-and-
         forget, one ping per run, idempotent server-side via the shared run id."""
-        if self._completion_sent or not self.s.account_token:
+        if self._completion_sent or not self.s.account_token or self.s.disable_speedrun_upload:
             return
         if not self.timer.is_kill:                 # only genuine clears count
             return
@@ -581,13 +586,14 @@ class SpeedrunOverlay(OverlayWindow):
         as the headline, the full-run PB on a smaller secondary line below."""
         t = self.timer
         bid = t.boss_id or "_"
+        profile = self.model.player_profile()
         primary, secondary = record_lines(
             done=(t.state == t.DONE),
             boss_armed=boss_armed,
             boss_last=self.boss_timer.last,
             full_last=t.last,
-            boss_best=self.s.speedrun_boss_best.get(bid),
-            full_best=self.s.speedrun_best.get(bid),
+            boss_best=self.s.get_speedrun_boss_best(profile).get(bid),
+            full_best=self.s.get_speedrun_best(profile).get(bid),
             boss_is_new_best=self.boss_is_new_best,
             full_is_new_best=t.is_new_best,
         )

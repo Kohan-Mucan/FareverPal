@@ -58,11 +58,17 @@ class NeedleOverlay(QtWidgets.QWidget):
         self.setMinimumSize(1, 1)        # tracker resizes to the game window
         self._legacy_geometry()
 
-    def _legacy_geometry(self) -> None:
-        """Centre-screen SIDE x SIDE box for the no-matrix fallback mode."""
-        screen = QtWidgets.QApplication.primaryScreen().geometry()
-        self.setGeometry(screen.center().x() - SIDE // 2,
-                         screen.center().y() - SIDE // 2, SIDE, SIDE)
+    def _legacy_geometry(self, rect=None) -> None:
+        """Centre-screen SIDE x SIDE box for the no-matrix fallback mode.
+        If a game rect is provided, center within that; otherwise use the primary screen."""
+        if rect:
+            rx, ry, rw, rh = rect
+            self.setGeometry(rx + (rw - SIDE) // 2,
+                             ry + (rh - SIDE) // 2, SIDE, SIDE)
+        else:
+            screen = QtWidgets.QApplication.primaryScreen().geometry()
+            self.setGeometry(screen.center().x() - SIDE // 2,
+                             screen.center().y() - SIDE // 2, SIDE, SIDE)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -84,10 +90,10 @@ class NeedleOverlay(QtWidgets.QWidget):
     ALPHA_SQUASH = 0.20
 
     def set_state(self, angle: float | None, dist: float, dz: float, label: str,
-                  squash: float | None = None) -> None:
+                  squash: float | None = None, rect = None) -> None:
         if self._scene is not None:
             self._scene = None
-            self._legacy_geometry()      # back from game-window-sized mode
+            self._legacy_geometry(rect)      # back from game-window-sized mode
         if angle is not None and self._angle is not None and label == self._label:
             d = (angle - self._angle + math.pi) % (2 * math.pi) - math.pi
             angle = self._angle + (d if abs(d) > 1.0 else d * self.ALPHA_ANGLE)
@@ -106,11 +112,11 @@ class NeedleOverlay(QtWidgets.QWidget):
         self._dist, self._dz, self._label = dist, dz, label
         self.update()
 
-    def set_searching(self, label: str) -> None:
+    def set_searching(self, label: str, rect = None) -> None:
         """Target not in the loaded scene right now: dial + label, no needle."""
         if self._scene is not None:
             self._scene = None
-            self._legacy_geometry()
+            self._legacy_geometry(rect)
         self._angle, self._dist, self._dz, self._label = None, -1.0, 0.0, label
         self.update()
 

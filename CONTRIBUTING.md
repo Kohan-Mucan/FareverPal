@@ -116,6 +116,7 @@ through `LiveModel`. Keeping that boundary is what lets the logic stay testable.
    and say in the PR that it needs live calibration. Never fabricate a value. See
    `core/damage.py` and `core/player.py` for the pattern (the `OFF_*: int | None`
    constants).
+    - **Known Offset Traps:** Some offsets like `OFF_HERO_OWNERPLAYER` (usually `0x498`) are stable across patches but the Calibrator GUI often misidentifies them as `0x10`. If pets show up as wild companions, `OFF_HERO_OWNERPLAYER` or `OFF_OWNER` (common values: `0x4b8`, `0x78`, `0x60`) are misaligned.
 5. `pytest -q` must be green.
 6. Match the surrounding style. Sharp-corner dark UI for anything visual (see
    `docs/ARCHITECTURE.md`).

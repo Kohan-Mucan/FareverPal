@@ -31,6 +31,8 @@ def compile_to_py(raw_data_path: Path, htdocs_path: Path, output_file: Path):
                     zone = entry.get("zone", "") or ""
                     if "CrimsonIsland" in zone or "Ramburg" in zone:
                         rid = "Z3"
+                    elif any(k in zone for k in ("Azuram", "Nescent", "Krisomal", "Eksod")):
+                        rid = "Z2"
                     
                     if rid:
                         for uid in uids:
@@ -65,6 +67,10 @@ def compile_to_py(raw_data_path: Path, htdocs_path: Path, output_file: Path):
             raw = json.loads(p.read_text(encoding="utf-8"))
             rows = []
             for line in raw.get("lines", []):
+                # Skip compiling units flagged with NoCodex (bit 18 / 0x40000)
+                fl = line.get("flags", 0)
+                if isinstance(fl, int) and (fl & 0x40000):
+                    continue
                 # Only include fields that have a value
                 row = {f: line[f] for f in fields if line.get(f) is not None}
                 # Bake the name directly into the row to save runtime logic
@@ -74,7 +80,7 @@ def compile_to_py(raw_data_path: Path, htdocs_path: Path, output_file: Path):
                     uid = line.get("id")
                     rid = unit_region_map.get(uid)
                     if not rid:
-                        if "_D_" in uid or "_D" in uid or "D_" in uid:
+                        if "_D_" in uid or uid.endswith("_D") or uid.startswith("D_") or "Z1D" in uid or "Z2D" in uid or "Z3D" in uid:
                             rid = "Dungeon"
                         elif "Z3" in uid: rid = "Z3"
                         elif "Z2" in uid: rid = "Z2"
@@ -155,6 +161,8 @@ def compile_to_py(raw_data_path: Path, htdocs_path: Path, output_file: Path):
                 }
                 if r.get("isBoss"):
                     clean_row["isBoss"] = True
+                if r.get("isElite"):
+                    clean_row["isElite"] = True
                 if utype == "Critter":
                     clean_row["isCritter"] = True
 

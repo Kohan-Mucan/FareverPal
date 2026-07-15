@@ -32,6 +32,8 @@ class SpeedrunPageMixin:
             "Auto-upload finished runs", self.s.speedrun_auto_upload)
         self._auto_upload_toggle.toggled.connect(self._toggle_auto_upload)
         v.addWidget(self._auto_upload_toggle)
+        if self.s.disable_speedrun_upload:
+            self._auto_upload_toggle.hide()
 
         rearm = C.LabeledToggle(
             "Re-arm for back-to-back runs", self.s.speedrun_auto_rearm)
@@ -65,6 +67,9 @@ class SpeedrunPageMixin:
             "Override build per run", self.s.speedrun_build_override_on)
         self._build_override_toggle.toggled.connect(self._toggle_build_override)
         v.addWidget(self._build_override_toggle)
+        if self.s.disable_speedrun_upload:
+            self._build_override_toggle.hide()
+            self._build_profile_lbl.hide()
 
         self._build_override_box = QtWidgets.QWidget()
         bob = QtWidgets.QVBoxLayout(self._build_override_box)
@@ -103,6 +108,12 @@ class SpeedrunPageMixin:
         self._corunner_box.setContentsMargins(0, 0, 0, 0)
         self._corunner_box.setSpacing(8)
         v.addWidget(self._corunner_host)
+        if self.s.disable_speedrun_upload:
+            self._corunner_head.hide()
+            co_intro.hide()
+            self._corunner_hint.hide()
+            self._corunner_host.hide()
+
         self._render_corunners()
 
         v.addWidget(C.SectionHeader("Hotkeys (global · work while in-game)"))
@@ -302,7 +313,9 @@ class SpeedrunPageMixin:
             ov.apply_scale(sc)
 
     def _clear_speedrun_best(self):
-        self.s.speedrun_best = {}
+        profile = self.model().player_profile() if self.model() else None
+        self.s.save_speedrun_best(profile, {})
+        self.s.save_speedrun_boss_best(profile, {})
         self.s.save()
         ov = self.overlays.get("speedrun")
         if ov is not None:

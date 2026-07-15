@@ -33,6 +33,14 @@ class _TitleBar(QtWidgets.QFrame):
         lay.addStretch(1)
         self.extra = lay   # callers can insert controls before the navigation btns
 
+        self.codex_btn = QtWidgets.QPushButton()
+        self.codex_btn.setObjectName("Icon")
+        self.codex_btn.setIcon(icons.ui_qicon("layout", theme.MUTED, 16))
+        self.codex_btn.setToolTip("Open Bestiary (Codex)")
+        self.codex_btn.clicked.connect(window._on_codex_clicked)
+        self.codex_btn.setVisible(False)
+        lay.addWidget(self.codex_btn, 0, QtCore.Qt.AlignVCenter)
+
         self.cog_btn = QtWidgets.QPushButton()
         self.cog_btn.setObjectName("Icon")
         self.cog_btn.setIcon(icons.ui_qicon("settings", theme.MUTED, 16))
@@ -83,6 +91,7 @@ class OverlayWindow(QtWidgets.QWidget):
         self._scale = 1.0
         self._drag = None
         self._page_key = "overlays"         # default page to open on cog click
+        self._bare_sync_fn = None
         # Per-overlay accent (the "Highlight color" setting). Overlays re-tint
         # their own QSS to it; the control panel keeps the default cyan.
         self._accent = getattr(settings, "hud_accent", None) if settings else None
@@ -142,6 +151,7 @@ class OverlayWindow(QtWidgets.QWidget):
         Drag the body to move it (when unlocked)."""
         self._is_bare = on
         self.titlebar.setVisible(not on)
+        self._apply_style()
         if on:
             # For list-heavy overlays (Entity, DPS), keep a solid background so 
             # they remain readable. Speedrun/Map stay fully transparent.
@@ -186,6 +196,9 @@ class OverlayWindow(QtWidgets.QWidget):
     def _on_cog_clicked(self) -> None:
         self.request_page.emit(self._page_key)
 
+    def _on_codex_clicked(self) -> None:
+        self.request_page.emit("codex")
+
     # --- click-through (Win32) ------------------------------------------
     def set_click_through(self, on: bool) -> None:
         if not sys.platform.startswith("win"):
@@ -222,7 +235,13 @@ class OverlayWindow(QtWidgets.QWidget):
 
     # --- accent (the live "Highlight color") ----------------------------
     def _apply_style(self) -> None:
-        self.setStyleSheet(theme.scaled_qss(self._scale))
+        qss = theme.scaled_qss(self._scale)
+        if getattr(self, "_is_bare", False):
+            # If no scaled QSS, start with the global QSS so we can override the background
+            if not qss:
+                qss = theme.QSS
+            qss += "\nQWidget { background: transparent; }"
+        self.setStyleSheet(qss)
 
     def apply_accent(self, accent: str) -> None:
         """Re-tint this overlay (and its non-QSS accent widgets) to `accent`."""

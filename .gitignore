@@ -34,11 +34,12 @@ __pycache__/
 assets/data/
 !farever_companion/data/
 /assets/icons/
+/assets/atlas/
 assets/map_icons/
 /farever_companion/assets/icons/
 
 # --- generated game data (compiled from .pak) ---
-# farever_companion/data/raw_data.py
+farever_companion/data/raw_data.py
 
 # --- Secrets / credentials (none expected, but never commit these) ---
 .env
@@ -63,13 +64,21 @@ _tmp*.py
 *.txt.tmp
 farever_companion/constants.py
 *PLAN.md
-docs/
+docs/*
+!docs/index.md
+!docs/robots.txt
+!docs/google*.html
+!docs/images/
+!docs/setup.md
+!docs/_config.yml
+!docs/CREDITS.md
 Run_Scripts.bat
 
 
 # --- local tooling / editor config ---
 CLAUDE.md
 **/CLAUDE.md
+AGENTS.md
 .claude/
 .cursor/
 .cursorrules

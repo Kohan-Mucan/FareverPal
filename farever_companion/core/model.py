@@ -208,13 +208,14 @@ class LiveModel:
             if e.addr == p_addr:
                 continue
             
-            # Filter out internal engine objects (Spawners, Patrol paths, triggers)
+            # Filter out internal engine objects (Spawners, Patrol paths, triggers, Bumpers, Portals)
             uid_l = (e.unit_id or "").lower()
             found_internal = False
-            for s in ("patrol", "spawn", "trigger", "marker", "point", "target", "area"):
-                if s in uid_l:
-                    found_internal = True
-                    break
+            if not udata.is_unique(e.unit_id):
+                for s in ("patrol", "partol", "patrole", "spawn", "trigger", "marker", "point", "target", "area", "path", "route", "bumper", "idle", "portal"):
+                    if s in uid_l:
+                        found_internal = True
+                        break
             if found_internal:
                 continue
                 
@@ -222,7 +223,9 @@ class LiveModel:
         if hide_types:
             pool = [e for e in pool if udata.unit_type(e.unit_id) not in hide_types]
         if hide_units:
-            pool = [e for e in pool if e.unit_id not in hide_units]
+            from ..data import names
+            hidden_names = {names.unit_name(uid) for uid in hide_units if uid}
+            pool = [e for e in pool if e.unit_id not in hide_units and names.unit_name(e.unit_id) not in hidden_names]
         if player_zone:
             from ..geo import zones as geo_zones
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
@@ -248,8 +251,11 @@ class LiveModel:
                     continue
                 if e.is_player_owned:
                     continue
-                if hide_units and e.unit_id in hide_units:
-                    continue
+                if hide_units:
+                    from ..data import names
+                    hidden_names = {names.unit_name(uid) for uid in hide_units if uid}
+                    if e.unit_id in hide_units or names.unit_name(e.unit_id) in hidden_names:
+                        continue
                 pool.append(e)
 
         if player_zone:
@@ -349,7 +355,6 @@ class LiveModel:
             out = []
             for e in self.scene.elements(self.player_addr):
                 if e.is_chest and e.elem_id and not (
-                    "activity" in e.elem_id.lower() or
                     "checkpoint" in e.elem_id.lower() or
                     e.elem_id.startswith("BossChest")
                 ):
@@ -575,6 +580,13 @@ class LiveModel:
         """
         try:
             return self.scene.in_dungeon(self.player_addr)
+        except ProcError:
+            return False
+
+    def is_in_rift(self) -> bool:
+        """True when the player is inside a Rift instance."""
+        try:
+            return self.scene.is_rift(self.player_addr)
         except ProcError:
             return False
 

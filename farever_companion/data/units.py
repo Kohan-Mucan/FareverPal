@@ -18,6 +18,8 @@ from . import cdb, loot
 # unit.flags boss bit, calibrated from the CDB: exactly 13 of 403 units carry
 # 0x10 (all named bosses plus Phrixes/PhrixesP1/Ulserous), zero trash mobs.
 BOSS_FLAG_BIT: int | None = 0x10
+# Unique/named units (like the RamPatrol dogs) carry 0x80 (often 192/0xC0).
+UNIQUE_FLAG_BIT: int = 0x80
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +56,16 @@ def is_boss(unit_id: str | None) -> bool:
         if isinstance(flags, int) and (flags & BOSS_FLAG_BIT):
             return True
     return False
+
+
+def is_unique(unit_id: str | None) -> bool:
+    """True if the unit is marked with the UNIQUE_FLAG_BIT (0x80), identifying
+    it as a named/special unit that should typically bypass filters."""
+    if not unit_id:
+        return False
+    row = _units_by_id().get(unit_id)
+    flags = row.get("flags") if row else None
+    return isinstance(flags, int) and (flags & UNIQUE_FLAG_BIT)
 
 
 def boss_loot_table(unit_id: str | None) -> str | None:
@@ -113,13 +125,16 @@ def type_name(type_id: str | None) -> str:
 @lru_cache(maxsize=1)
 def codex_unit_ids() -> tuple[str, ...]:
     """All concrete enemy unit ids whose type is a Codex type, excluding
-    templates and internals."""
+    templates and internals. Bosses and Unique units are always included."""
     ctypes = {tid for tid, _ in codex_types()}
     return tuple(sorted(
         u for u, r in _units_by_id().items()
-        if (r.get("type") in ctypes or (isinstance(r.get("flags"), int) and (r.get("flags") & 0x10)))
+        if (r.get("type") in ctypes or is_boss(u) or is_unique(u))
         and u not in _TEMPLATE_IDS
         and not u.endswith("_Base")
+        and (is_boss(u) or is_unique(u) or not ("patrol" in u.lower() or "spawn" in u.lower() or
+                 "trigger" in u.lower() or "marker" in u.lower() or
+                 "bumper" in u.lower() or "idle" in u.lower()))
     ))
 
 

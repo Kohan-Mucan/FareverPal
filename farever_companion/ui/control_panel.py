@@ -51,6 +51,13 @@ NAV = [
     ("server", "broadcast", "Server Ping"),
     ("log", "terminal", "Log"),
 ]
+
+def filtered_nav(settings: Settings) -> list:
+    # Always show friends and collection, even if disable_web_features is True in saved settings.
+    # Speedrun uploads are handled by disable_speedrun_upload separately.
+    hidden = set()
+    return [item for item in NAV if item[0] not in hidden]
+
 CLASSES = ["Auto", "Warrior", "Rogue", "Mage", "Priest", "Off"]
 
 
@@ -110,6 +117,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         self._friends_timer = QtCore.QTimer(self)
         self._friends_timer.setInterval(45_000)
         self._friends_timer.timeout.connect(self._friends_poll)
+        # Always enable friend gating logic regardless of disable_web_features
         self._refresh_friends_gating()
 
         # Auto-attach watcher (in the controller): a cheap 2 s poll that attaches
@@ -246,7 +254,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         lay.addWidget(self._update_btn)
         lay.addSpacing(18)
 
-        for key, icon, label in NAV:
+        for key, icon, label in filtered_nav(self.s):
             item = C.NavItem(key, icon, label)
             item.clicked.connect(self._select_nav)
             self._nav_items[key] = item
@@ -274,7 +282,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         v.addWidget(self._build_topbar())
         self.stack = QtWidgets.QStackedWidget()
         self._pages = {}
-        for key, _icon, _label in NAV:
+        for key, _icon, _label in filtered_nav(self.s):
             page = getattr(self, f"_page_{key}")()
             self._pages[key] = self.stack.addWidget(self._scroll(page)) \
                 if key not in ("log", "server") else self.stack.addWidget(page)
@@ -322,7 +330,12 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         lay.addWidget(self._locate_bar)
         lay.addStretch(1)
         # account button (sign in / avatar + name)
-        lay.addWidget(self._build_account_host())
+        self._acct_container = self._build_account_host()
+        lay.addWidget(self._acct_container)
+        # Always show account container
+        # if self.s.disable_web_features:
+        #     self._acct_container.hide()
+
         # Attach/detach is fully automatic (watches for Farever) - no buttons or
         # toggle; the status label above is the single source of truth for state.
         self._refresh_account_button()
@@ -357,7 +370,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     # --- nav -------------------------------------------------------------
     def _select_nav(self, key: str):
-        order = [k for k, _, _ in NAV]
+        order = [k for k, _, _ in filtered_nav(self.s)]
         for k, item in self._nav_items.items():
             item.setSelected(k == key)
         self.stack.setCurrentIndex(order.index(key))

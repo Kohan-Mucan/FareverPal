@@ -62,6 +62,11 @@ class OverlaysPageMixin:
         v.addLayout(row)
 
         v.addWidget(C.SectionHeader("Mouse Snapping Behavior"))
+        desc = QtWidgets.QLabel("Center cursor in game (prevents drifting to second monitor)")
+        desc.setObjectName("Muted")
+        desc.setWordWrap(True)
+        v.addWidget(desc)
+
         snap_lay = QtWidgets.QHBoxLayout()
         snap_lay.setSpacing(12)
         snap_active = self.s.snap_mouse_to_player
@@ -140,9 +145,7 @@ class OverlaysPageMixin:
             if tracker.model is not None and tracker.s.track_kind and tracker.s.track_id:
                 tracker._start()
         else:
-            tracker._timer.stop()
-            if tracker._needle is not None:
-                tracker._needle.hide()
+            tracker.clear()
         
         # Synchronize toggles on both pages if loaded
         for t in (getattr(self, "compass_toggle", None), getattr(self, "entity_compass_toggle", None)):

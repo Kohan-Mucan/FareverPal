@@ -22,7 +22,7 @@ from .. import theme
 from ..overlay_base import OverlayWindow
 from ..components import SectionHeader, IconTile
 from ..widgets import fmt_pct
-from ...data import names, tokens, icons
+from ...data import names, tokens, icons, units as udata
 from ...geo import orbs as geo_orbs, zones as geo_zones
 
 POLL_MS = 350
@@ -199,6 +199,7 @@ class EntityOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("Entity", settings, geo_key="entity", parent=parent)
         self._page_key = "entity"
+        self.titlebar.codex_btn.setVisible(True)
         self.model = model
         self.s = settings
         self._enemies: list = []          # [(entity, dist)]
@@ -288,7 +289,9 @@ class EntityOverlay(OverlayWindow):
               if getattr(e, "addr", None) is not None]
         t += [("gather", g[5]) for g, _ in self._gatherables]
         t += [("orb", o.orb_id) for o, _ in self._orbs]
-        t += [("chest", c.chest_id) for c in self._chests]
+        for c in self._chests:
+            is_r = "recipe" in c.chest_id.lower() or (c.loot_table and "recipe" in (c.loot_table or "").lower())
+            t.append(("recipe" if is_r else "chest", c.chest_id))
         return t
 
     def _selected_source(self):
@@ -305,6 +308,7 @@ class EntityOverlay(OverlayWindow):
                     return (self.model.enemy_drop_source(e, d, self.s.level),
                             names.unit_name(e.unit_id) or "?")
         else:
+            # chest or recipe
             for c in self._chests:
                 if c.chest_id == key:
                     name = names.chest_label(c.chest_id, c.loot_table)
@@ -328,17 +332,12 @@ class EntityOverlay(OverlayWindow):
             e = next((e for e, _ in self._enemies if getattr(e, "addr", None) == key), None)
             if e: self._track("unit", e.unit_id, addr=key, force=True)
             self._open_drops()
-        elif kind == "chest":
+        elif kind in ("chest", "recipe"):
             c = next((c for c in self._chests if c.chest_id == key), None)
             if c:
-                cx, cy, cz = 0.0, 0.0, 0.0
-                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                if sc: cx, cy, cz = sc.x, sc.y, sc.z
-                else:
-                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
-                    if lc: cx, cy, cz = lc.x, lc.y, lc.z
+                cx, cy, cz = c.x, c.y, c.z
                 label = names.chest_label(c.chest_id, c.loot_table)
-                self._track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}", force=True)
+                self._track(kind, f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}", force=True)
             self._open_drops()
         elif kind == "comp":
             e = next((e for e, _ in self._comps if getattr(e, "addr", None) == key), None)
@@ -380,17 +379,12 @@ class EntityOverlay(OverlayWindow):
                     g_data = next((g[0] for g in self._gatherables if g[0][5] == key), None)
                     if g_data:
                         self._track("gather", f"{g_data[0]:.1f},{g_data[1]:.1f},{g_data[2]:.1f}|{g_data[4]}", force=True)
-                elif kind == "chest":
+                elif kind in ("chest", "recipe"):
                     c = next((c for c in self._chests if c.chest_id == key), None)
                     if c:
-                        cx, cy, cz = 0.0, 0.0, 0.0
-                        sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                        if sc: cx, cy, cz = sc.x, sc.y, sc.z
-                        else:
-                            lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
-                            if lc: cx, cy, cz = lc.x, lc.y, lc.z
+                        cx, cy, cz = c.x, c.y, c.z
                         label = names.chest_label(c.chest_id, c.loot_table)
-                        self._track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}", force=True)
+                        self._track(kind, f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}", force=True)
 
             if kind in ("enemy", "chest"):
                 self._open_drops()
@@ -508,7 +502,7 @@ class EntityOverlay(OverlayWindow):
                 self.close_drops()
                 return
             kind, key = self._sel
-            if kind not in ("enemy", "chest"):
+            if kind not in ("enemy", "chest", "recipe"):
                 self.close_drops()
                 return
             self._drop_win.set_target(*self._selected_source())
@@ -546,22 +540,38 @@ class EntityOverlay(OverlayWindow):
         if xyz is None:
             self.pos.setText("waiting for player…")
             return
+
+        # Clear all lists while inside a dungeon/rift — overworld enemies, chests
+        # and orbs are irrelevant there and stale data would be confusing.
+        try:
+            if self.model.is_in_dungeon() or self.model.is_in_rift():
+                self._enemies = []
+                self._group_members = []
+                self._comps = []
+                self._orbs = []
+                self._gatherables = []
+                self._chests = []
+                self.pos.setText(f"X {xyz[0]:.0f}   Y {xyz[1]:.0f}   Z {xyz[2]:.0f}")
+                return
+        except Exception:
+            pass
+
         self.pos.setText(f"X {xyz[0]:.0f}   Y {xyz[1]:.0f}   Z {xyz[2]:.0f}")
         isz = round(self.s.icon_size * self._scale)
         profile = self.model.player_profile()
 
         # Logic:
-        # ON (limit_by_zone=True) -> 300m range limit.
+        # ON (limit_by_zone=True) -> 300m range limit + same zone filtering.
         # OFF (limit_by_zone=False) -> Distance limit from slider (no zone filtering).
-        player_zone = None
+        player_zone = geo_zones.resolve_zone(xyz[0], xyz[1], xyz[2]) if self.s.limit_by_zone else None
         eff_max_dist = 300.0 if self.s.limit_by_zone else self.s.max_dist
 
-        # Companion range: False = 200m, Number = that range, True = eff_max_dist (fallback)
+        # Companion range: False = 250m, Number = that range, True = eff_max_dist (fallback)
         c_debug = getattr(self.s, "show_companions_debug", False)
         if isinstance(c_debug, (int, float)) and not isinstance(c_debug, bool):
             comp_max_dist = float(c_debug)
         else:
-            comp_max_dist = 200.0 if c_debug is False else eff_max_dist
+            comp_max_dist = 250.0 if c_debug is False else eff_max_dist
 
         # 1) gather every section's list (selection cycles across all of them)
         # Using 2D distance for filtering ensures consistency with the Minimap's top-down view
@@ -569,6 +579,8 @@ class EntityOverlay(OverlayWindow):
             xyz, self.s.enemy_count, eff_max_dist, player_zone=player_zone, use_2d=True,
             hide_units=set(self.s.get_entity_hidden_units(profile))) \
             if self.s.show_enemies else []
+        if self._enemies:
+            self._enemies = [x for x in self._enemies if x[0].unit_id != "CannonPlant"]
         self._group_members = self.model.nearest_group_members(
             xyz, self.s.enemy_count, eff_max_dist, player_zone=player_zone, use_2d=True) \
             if getattr(self.s, "show_group_members", False) else []
@@ -588,7 +600,7 @@ class EntityOverlay(OverlayWindow):
                 eid_l = eid.lower()
                 # Filter out TRULY generic internal names, but keep anything resource-like
                 is_resource = any(s in eid_l for s in ("ore", "flower", "madrigold", "zealotus", "lavendula", "thyme", "tungstene", "tin", "copper", "r2plant"))
-                is_internal = any(s in eid_l for s in ("spawn", "trigger", "point", "marker", "area", "volume", "target"))
+                is_internal = any(s in eid_l for s in ("spawn", "trigger", "point", "marker", "area", "volume", "target", "bumper", "idle"))
                 if is_internal and not is_resource:
                     continue
                 dg = g.dist2d(xyz[0], xyz[1])
@@ -612,11 +624,16 @@ class EntityOverlay(OverlayWindow):
         if self._tracker is not None:
             tk, tid, taddr = self.s.track_kind, self.s.track_id, self._tracker.locked_addr
             if tk == "unit" and tid and taddr:
-                if not any(getattr(e, "addr", None) == taddr for e, _ in self._enemies):
+                if not any(getattr(e, "addr", None) == taddr for e, _ in self._enemies) and \
+                   not any(getattr(e, "addr", None) == taddr for e, _ in self._comps):
                     # Find the entity by address directly
                     ent = next((e for e in self.model.units() if e.addr == taddr), None)
                     if ent:
-                        self._enemies.append((ent, ent.dist2d(xyz[0], xyz[1])))
+                        dist = ent.dist2d(xyz[0], xyz[1])
+                        if udata.is_companion(ent.unit_id):
+                            self._comps.append((ent, dist))
+                        else:
+                            self._enemies.append((ent, dist))
             elif tk == "hero" and tid and taddr:
                 if not any(getattr(e, "addr", None) == taddr for e, _ in self._group_members):
                     ent = next((e for e in self.model.units() if e.addr == taddr), None)
@@ -650,7 +667,12 @@ class EntityOverlay(OverlayWindow):
                 if o and not self.s.is_done(o.orb_id, profile):
                     self._orbs.append((o, o.dist2d(xyz[0], xyz[1])))
 
-        # Automatically mark opened chests and collected orbs as done in settings
+        # Automatically mark opened chests and collected orbs as done in settings.
+        # One-way only: we add to done_list when a chest/orb is opened, but NEVER
+        # auto-remove. Live state is unreliable during load transitions (e.g. dungeon
+        # exit) — chests reappear in memory as "closed" before the game syncs their
+        # state, which would wipe collected progress. Un-marking is manual only
+        # (right-click on the minimap).
         done_list = self.s.get_poi_done(profile)
         changed = False
         
@@ -659,14 +681,11 @@ class EntityOverlay(OverlayWindow):
         for e in self.model.live_chests(max_dist=eff_max_dist, use_2d=True):
             if e.elem_id:
                 is_open = e.state and e.state.lower() in ("opened", "open", "looted")
-                if is_open:
-                    if e.elem_id not in done_list:
-                        done_list.append(e.elem_id)
-                        changed = True
-                else:
-                    if e.elem_id in done_list:
-                        done_list.remove(e.elem_id)
-                        changed = True
+                if is_open and e.elem_id not in done_list:
+                    done_list.append(e.elem_id)
+                    changed = True
+                # Never auto-remove: the user must manually un-mark via right-click
+
 
         # 2. World Orbs (RedOrb_World)
         # Glow disappears reliably when collected
@@ -692,7 +711,7 @@ class EntityOverlay(OverlayWindow):
         else:
             self._chests = raw_chests
 
-        if self.s.track_kind == "chest" and self.s.track_id:
+        if self.s.track_kind in ("chest", "recipe") and self.s.track_id:
             try:
                 from ...core.chest_resolver import ChestRow
                 coords_str, _, label = self.s.track_id.partition("|")
@@ -706,27 +725,20 @@ class EntityOverlay(OverlayWindow):
                 if raw_id not in done_list:
                     is_in_list = False
                     for c in self._chests:
-                        cx, cy = 0.0, 0.0
-                        sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                        if sc:
-                            cx, cy = sc.x, sc.y
-                        else:
-                            lc = next((lc for lc in self.model.live_chests(player_zone) if lc.elem_id == c.chest_id), None)
-                            if lc:
-                                cx, cy = lc.x, lc.y
-                        if math.hypot(tx - cx, ty - cy) < 1.0 or c.chest_id == chest_id:
+                        if c.chest_id == raw_id or math.hypot(tx - c.x, ty - c.y) < 1.0:
                             is_in_list = True
                             break
                     if not is_in_list:
                         dist = math.hypot(tx - xyz[0], ty - xyz[1])
-                        matching_c = next((c for c in self.model.chests if c.chest_id == chest_id), None)
-                        if matching_c:
-                            loot_table = matching_c.loot_table
-                            level = matching_c.level
+                        # If we're tracking it but it's obscenely far (despawned/unloaded), 
+                        # just let it go if it's not the active selection.
+                        if dist > 800.0 and self._sel != (self.s.track_kind, raw_id):
+                            self._tracker.clear()
                         else:
-                            loot_table = label
-                            level = None
-                        self._chests.append(ChestRow(chest_id, dist, loot_table, level, None, False))
+                            matching_c = next((c for c in self.model.chests if c.chest_id == raw_id), None)
+                            loot_table = matching_c.loot_table if matching_c else label
+                            level = matching_c.level if matching_c else None
+                            self._chests.append(ChestRow(raw_id, dist, loot_table, level, None, False, tx, ty, tz))
             except (ValueError, IndexError):
                 pass
 
@@ -735,31 +747,54 @@ class EntityOverlay(OverlayWindow):
         if self._sel is not None and self._sel not in targets:
             old_sel = self._sel
             self._sel = None
-            if getattr(self.s, "auto_select_next_collectible", True):
-                if old_sel[0] in ("orb", "chest"):
-                    kind = old_sel[0]
-                    next_coll = next((t for t in targets if t[0] == kind), None)
+            
+            # ONLY auto-select the next one if the toggle is actually ON in settings
+            if getattr(self.s, "auto_select_next_collectible", False):
+                old_kind = old_sel[0]
+                if old_kind in ("orb", "chest", "recipe"):
+                    # Prioritize finding the exact same kind first
+                    next_coll = next((t for t in targets if t[0] == old_kind), None)
+                    
+                    # Fallback to similar types only if the current category is empty
+                    if not next_coll and old_kind in ("chest", "recipe"):
+                        other_kind = "recipe" if old_kind == "chest" else "chest"
+                        next_coll = next((t for t in targets if t[0] == other_kind), None)
+                        if next_coll: # Update kind for the tracker call below
+                            old_kind = next_coll[0]
+
                     if next_coll:
+                        limit = eff_max_dist if eff_max_dist > 0 else 500.0
                         if next_coll[0] == "orb":
-                            self._sel = next_coll
-                            self._track("orb", next_coll[1], force=True)
-                        elif next_coll[0] == "chest":
-                            c = next((ch for ch in self._chests if ch.chest_id == next_coll[1]), None)
-                            if c and c.dist <= 300.0:
+                            o = next((orb for orb, _dist in self._orbs if orb.orb_id == next_coll[1]), None)
+                            dist = o.dist2d(xyz[0], xyz[1]) if o else 9999.0
+                            if dist <= limit:
                                 self._sel = next_coll
-                                cx, cy, cz = 0.0, 0.0, 0.0
-                                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                                if sc:
-                                    cx, cy, cz = sc.x, sc.y, sc.z
-                                else:
-                                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
-                                    if lc:
-                                        cx, cy, cz = lc.x, lc.y, lc.z
+                                self._track("orb", next_coll[1], force=True)
+                        elif next_coll[0] in ("chest", "recipe"):
+                            c = next((ch for ch in self._chests if ch.chest_id == next_coll[1]), None)
+                            if c and c.dist <= limit:
+                                self._sel = next_coll
                                 label = names.chest_label(c.chest_id, c.loot_table)
-                                self._track("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}", force=True)
+                                self._track(next_coll[0], f"{c.x:.1f},{c.y:.1f},{c.z:.1f}|{label}", force=True)
 
             # If the selected target is gone and no auto-replacement was found, clear the compass
             if self._sel is None and self._tracker is not None:
+                self._tracker.clear()
+
+        # 3) fallback: clear tracker if the target is now "done" (handles minimap clicks without HUD selection)
+        if self._tracker is not None and self.s.track_kind in ("orb", "chest", "recipe", "gather", "pos"):
+            tk, tid = self.s.track_kind, self.s.track_id
+            target_id = tid.partition("|")[2] if tk in ("chest", "recipe", "gather", "pos") else tid
+            if tk in ("chest", "recipe", "gather", "pos") and not target_id:
+                try: # resolve from coords
+                    coords, _, label = tid.partition("|")
+                    tx, ty, _ = (float(v) for v in coords.split(","))
+                    if tk in ("chest", "recipe"):
+                        matching_c = next((c for c in self.model.chests if math.hypot(tx - c.x, ty - c.y) < 1.0), None)
+                        target_id = matching_c.chest_id if matching_c else label
+                    else: target_id = label
+                except: target_id = label
+            if target_id and self.s.is_done(target_id, profile):
                 self._tracker.clear()
 
         # 3) render enemies
@@ -873,6 +908,7 @@ class EntityOverlay(OverlayWindow):
                 key = ("gather", g_data[5])
                 sel = self._sel == key
                 tracked = self._is_tracked("pos", f"{g_data[0]:.1f},{g_data[1]:.1f},{g_data[2]:.1f}|{label}") or \
+                          self._is_tracked("gather", f"{g_data[0]:.1f},{g_data[1]:.1f},{g_data[2]:.1f}|{label}") or \
                           self.s.track_kind == "gather" and self.s.track_id.startswith(f"{g_data[0]:.1f},{g_data[1]:.1f}")
                 
                 name_l = label.lower()
@@ -939,34 +975,19 @@ class EntityOverlay(OverlayWindow):
             self.chest_box.show()
             specs = []
             for c in self._chests:
-                sel = ("chest", c.chest_id) == self._sel
+                is_recipe = "recipe" in c.chest_id.lower() or (c.loot_table and "recipe" in (c.loot_table or "").lower())
+                kind = "recipe" if is_recipe else "chest"
+                sel = (kind, c.chest_id) == self._sel
                 anomaly = bool(c.live and c.anomaly)
                 color = self.s.hud_accent if (sel or anomaly) else theme.CHEST
                 
-                is_recipe = "recipe" in c.chest_id.lower() or (c.loot_table and "recipe" in (c.loot_table or "").lower())
                 done = c.chest_id in done_list
-                
-                m = re.search(r'(\d+)$', c.chest_id)
-                num = m.group(1) if m else ""
-                
-                if is_recipe:
-                    label = f"Recipe {num}" if num else "Recipe"
-                else:
-                    label = names.chest_label(c.chest_id, c.loot_table)
-                    if num and not label.endswith(num):
-                        label = f"{label} {num}"
+                label = names.chest_label(c.chest_id, c.loot_table)
 
-                cx, cy, cz = 0.0, 0.0, 0.0
-                sc = next((sc for sc in self.model.chests if sc.chest_id == c.chest_id), None)
-                if sc:
-                    cx, cy, cz = sc.x, sc.y, sc.z
-                else:
-                    lc = next((lc for lc in self.model.live_chests() if lc.elem_id == c.chest_id), None)
-                    if lc:
-                        cx, cy, cz = lc.x, lc.y, lc.z
-
+                cx, cy, cz = c.x, c.y, c.z
                 # check if this specific chest is the tracked target
-                is_tracked = self._is_tracked("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
+                is_tracked = self._is_tracked(kind, f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}") or \
+                             self._is_tracked("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
 
                 sub_bits = []
                 sub_bits.append((c.state or ("OPENED" if done else "CLOSED")).upper())
@@ -984,7 +1005,7 @@ class EntityOverlay(OverlayWindow):
                     None, None, accent, label, color,
                     sub="  ·  ".join(sub_bits), value=f"{c.dist:>6.0f}m",
                     bold=sel, highlight=sel,
-                    cb=(lambda cid=c.chest_id: self._select("chest", cid)),
+                    cb=(lambda k=(kind, c.chest_id): self._select(*k)),
                     marker=marker))
             self.chest_box.fill(specs, isz)
             self.chest_box.header.set_tag("")

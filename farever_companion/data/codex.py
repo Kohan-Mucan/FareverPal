@@ -36,11 +36,15 @@ def unit_regions() -> dict[str, str]:
 
         is_boss = units.is_boss(uid)
         
-        # Priority 1: Real bosses and Dungeon-only mobs go to the Bosses tab
+        # Priority 1: Real bosses and Dungeon-only mobs go to the Bosses tab.
+        # Open-world bosses (with Z1/Z2/Z3 in ID) go to their respective regions.
         r = units._units_by_id().get(uid, {})
         rid = r.get("region")
 
-        if is_boss or rid == "Dungeon" or "_D_" in uid or "_D" in uid or "D_" in uid:
+        is_dungeon = rid == "Dungeon" or "_D_" in uid or uid.endswith("_D") or uid.startswith("D_") or "Z1D" in uid or "Z2D" in uid or "Z3D" in uid
+        is_world_boss = is_boss and ("Z1" in uid or "Z2" in uid or "Z3" in uid) and not is_dungeon
+
+        if (is_boss and not is_world_boss) or is_dungeon:
             out[uid] = "Bosses"
             continue
 
@@ -107,6 +111,7 @@ def units_by_region(region_id: str) -> list[dict]:
                 "icon": info.get("icon"),
                 "type": info.get("type"),
                 "is_boss": units.is_boss(uid),
+                "is_elite": info.get("isElite", False),
                 "is_critter": info.get("isCritter", False) or info.get("type") == "Critter",
             })
             

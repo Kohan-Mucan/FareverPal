@@ -19,30 +19,30 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import theme
+from .. import components as C
 from ...config import config_dir
-from ...data import icons
 
 # ---------------------------------------------------------------------------
 # Region definitions
 # Note: Main 2 (Global Log 1/2) and normal region configs
 # ---------------------------------------------------------------------------
-REGIONS: list[dict] = [
+REGIONS = [
     # --- Main Game Servers ---
     {
         "code": "na",
         "label": "North America",
-        "flag": chr(0x1F1E8) + chr(0x1F1E6),
+        "flag": "🇺🇸",
         "icon": "broadcast",
         "hosts": [
             ("148.113.226.212",    6677),
             ("148.113.228.4",      6389),
-            ("51.83.66.84",        443),
+            ("37.187.157.32",      60442),
         ],
     },
     {
         "code": "eu",
         "label": "Europe",
-        "flag": chr(0x1F1EA) + chr(0x1F1FA),
+        "flag": "🇪🇺",
         "icon": "broadcast",
         "hosts": [
             ("135.125.19.76",      6031),
@@ -51,27 +51,24 @@ REGIONS: list[dict] = [
     {
         "code": "as",
         "label": "Asia",
-        "flag": chr(0x1F1F8) + chr(0x1F1EC),
+        "flag": "🇸🇬",
         "icon": "broadcast",
         "hosts": [
             ("15.235.228.20",       7100),
             ("15.235.228.20",       6768),
-            ("51.83.66.84",        443),
         ],
     },
     {
         "code": "sa",
         "label": "South America",
-        "flag": chr(0x1F1E7) + chr(0x1F1F7),
+        "flag": "🇧🇷",
         "icon": "broadcast",
-        "hosts": [
-            ("51.83.66.84",        443),
-        ],
+        "hosts": [],
     },
     {
         "code": "cn",
         "label": "China",
-        "flag": chr(0x1F1E8) + chr(0x1F1F3),
+        "flag": "🇨🇳",
         "icon": "broadcast",
         "hosts": [
             ("43.135.219.50",      6459),
@@ -83,7 +80,7 @@ REGIONS: list[dict] = [
     {
         "code": "na_test",
         "label": "NA Test",
-        "flag": chr(0x2692) + " " + chr(0x1F1FA) + chr(0x1F1F8),
+        "flag": "⚒️ 🇺🇸",
         "icon": "broadcast",
         "hosts": [
             ("148.113.187.116",    6604),
@@ -93,7 +90,7 @@ REGIONS: list[dict] = [
     {
         "code": "eu_test",
         "label": "EU Test",
-        "flag": chr(0x2692) + " " + chr(0x1F1EA) + chr(0x1F1FA),
+        "flag": "⚒️ 🇪🇺",
         "icon": "broadcast",
         "hosts": [
             ("135.125.19.80",      6244),
@@ -102,7 +99,7 @@ REGIONS: list[dict] = [
     {
         "code": "as_test",
         "label": "Asia Test",
-        "flag": chr(0x2692) + " " + chr(0x1F1F8) + chr(0x1F1EC),
+        "flag": "⚒️ 🇸🇬",
         "icon": "broadcast",
         "hosts": [
             ("15.235.228.20",       7036),
@@ -112,16 +109,14 @@ REGIONS: list[dict] = [
     {
         "code": "sa_test",
         "label": "SA Test",
-        "flag": chr(0x2692) + " " + chr(0x1F1E7) + chr(0x1F1F7),
+        "flag": "⚒️ 🇧🇷",
         "icon": "broadcast",
-        "hosts": [
-            ("51.83.66.84",        443),
-        ],
+        "hosts": [],
     },
     {
         "code": "cn_test",
         "label": "China Test",
-        "flag": chr(0x2692) + " " + chr(0x1F1E8) + chr(0x1F1F3),
+        "flag": "⚒️ 🇨🇳",
         "icon": "broadcast",
         "hosts": [
             ("43.135.219.50",      6443),
@@ -133,7 +128,7 @@ REGIONS: list[dict] = [
     {
         "code": "login_global",
         "label": "Global Login",
-        "flag": chr(0x1F310),
+        "flag": "🌐",
         "icon": "terminal",
         "hosts": [
             ("37.187.157.32",      60442),
@@ -354,6 +349,62 @@ class _ConnectionScanWorker(QtCore.QThread):
         self.new_conn.emit(ip, port, hostname, ms, state)
 
 
+class _TraceWorker(QtCore.QThread):
+    output_ready = QtCore.Signal(str)
+    finished = QtCore.Signal()
+
+    def __init__(self, ip: str, mode: str = "tracert"):
+        super().__init__()
+        self.ip = ip
+        self.mode = mode
+        self._proc = None
+        self._running = True
+
+    def stop(self):
+        self._running = False
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except:
+                pass
+
+    def run(self):
+        import subprocess
+        # Modes:
+        # tracert: standard with hostnames
+        # tracert_fast: tracert -d (no hostnames)
+        # net_info: ipconfig /flushdns + basic info
+        if self.mode == "tracert":
+            cmd = ["tracert", self.ip]
+        elif self.mode == "tracert_fast":
+            cmd = ["tracert", "-d", self.ip]
+        elif self.mode == "net_info":
+            cmd = ["powershell", "-Command", "Write-Host '> Flushing DNS...'; ipconfig /flushdns; Write-Host '`n> Local Network Info:'; ipconfig"]
+        else:
+            cmd = ["tracert", self.ip]
+
+        try:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            )
+
+            while self._running:
+                line = self._proc.stdout.readline()
+                if not line:
+                    break
+                self.output_ready.emit(line)
+
+            self._proc.wait()
+        except Exception as e:
+            self.output_ready.emit(f"\nError: {e}\n")
+        finally:
+            self.finished.emit()
+
+
 # ---------------------------------------------------------------------------
 # Clickable Card Frame
 # Allows toggling selected state to exclude from pings
@@ -401,56 +452,72 @@ class ServerPageMixin:
         return self._build_server_page()
 
     def _build_server_page(self):
-        page = QtWidgets.QWidget()
-        page.setObjectName("Page")
-        root = QtWidgets.QVBoxLayout(page)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(14)
-
+        page, root = self._page_container()
+        
         hdr_lay = QtWidgets.QHBoxLayout()
-        hdr = QtWidgets.QLabel("Server IP (Dynamic — Unreliable)")
+        hdr = QtWidgets.QLabel("Server Diagnostics")
         hdr.setObjectName("H1")
         hdr_lay.addWidget(hdr)
+        
         hdr_lay.addStretch(1)
+        
+        # Tabs for Server Sub-pages
+        self._server_tabs = C.SegmentedControl(["Game Servers", "Live Game IP Scanner", "Network Tracet"],
+                                               current="Game Servers")
+        self._server_tabs.currentChanged.connect(self._on_tab_changed)
+        hdr_lay.addWidget(self._server_tabs)
+        
         root.addLayout(hdr_lay)
-
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(2)
-        root.addWidget(splitter, 1)
 
         self._ping_worker   = None
         self._scan_worker   = None
+        self._trace_worker  = None
+        self._ping_best     = {}
+        self._scan_captured = set()
+        self._ping_cards    = {}
+        
+        self.server_stack = QtWidgets.QStackedWidget()
+        root.addWidget(self.server_stack, 1)
+
+        self._build_integrated_server_page(self.server_stack)
+        
+        return page
+
+    def _on_tab_changed(self, text):
+        mapping = {"Game Servers": 0, "Live Game IP Scanner": 1, "Network Tracet": 2}
+        self.server_stack.setCurrentIndex(mapping.get(text, 0))
+
+    def _build_integrated_server_page(self, stack):
+        self._ping_worker   = None
+        self._scan_worker   = None
+        self._trace_worker  = None
         self._ping_best     = {}
         self._scan_captured = set()
         self._ping_cards    = {}
 
-        splitter.addWidget(self._build_ping_panel())
-        splitter.addWidget(self._build_scanner_panel())
-        
-        # Balance panels 50/50 initially
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        stack.addWidget(self._build_ping_panel())
+        stack.addWidget(self._build_scanner_panel())
+        stack.addWidget(self._build_trace_panel())
 
         self._load_saved_card_states()
 
-        return page
-
     # ===============================================================
-    # LEFT: Ping tester
+    # TOP: Ping tester
     # ===============================================================
     def _build_ping_panel(self):
-        w = QtWidgets.QFrame()
-        w.setObjectName("Card")
+        w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
-        v.setContentsMargins(14, 12, 14, 12)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
 
-        hrow = QtWidgets.QHBoxLayout()
-        lbl = QtWidgets.QLabel("Region Ping Test")
+        top_bar = QtWidgets.QHBoxLayout()
+        lbl = QtWidgets.QLabel("Region Ping Test (Dynamic IPs — May be outdated)")
         lbl.setStyleSheet("font-size:13px;font-weight:700;color:" + theme.TEXT + ";")
-        hrow.addWidget(lbl, 1)
+        top_bar.addWidget(lbl)
         
+        top_bar.addStretch(1)
+        
+        # Global Login card will be placed in the grid, but we need the toggle here
         self._view_toggle_btn = QtWidgets.QPushButton(chr(0x2692))
         self._view_toggle_btn.setObjectName("Outline")
         self._view_toggle_btn.setFixedSize(28, 28)
@@ -458,20 +525,20 @@ class ServerPageMixin:
         self._view_toggle_btn.setCheckable(True)
         self._view_toggle_btn.setToolTip("Toggle Normal/Test Servers")
         self._view_toggle_btn.toggled.connect(self._on_view_toggle)
-        hrow.addWidget(self._view_toggle_btn)
+        top_bar.addWidget(self._view_toggle_btn)
         
         self._reset_ips_btn = QtWidgets.QPushButton("Reset IPs")
         self._reset_ips_btn.setObjectName("Outline")
         self._reset_ips_btn.setFixedHeight(28)
         self._reset_ips_btn.clicked.connect(self._reset_to_default_ips)
-        hrow.addWidget(self._reset_ips_btn)
+        top_bar.addWidget(self._reset_ips_btn)
 
         self._ping_btn = QtWidgets.QPushButton("Test Selected")
         self._ping_btn.setObjectName("Accent")
         self._ping_btn.setFixedHeight(28)
         self._ping_btn.clicked.connect(self._ping_run)
-        hrow.addWidget(self._ping_btn)
-        v.addLayout(hrow)
+        top_bar.addWidget(self._ping_btn)
+        v.addLayout(top_bar)
 
         # Load settings states before rendering cards
         saved_states = getattr(self.s, "server_pings", {})
@@ -530,34 +597,40 @@ class ServerPageMixin:
                 item.widget().hide()
         
         is_test_mode = self._view_toggle_btn.isChecked()
-        
-        to_show = []
+
+        # 1. Gather regions (Normal or Test)
+        regions = []
         for region in REGIONS:
             code = region["code"]
-            if "login" in code:
-                to_show.append(region)
-            elif is_test_mode and "_test" in code:
-                to_show.append(region)
+            if "login" in code: continue
+            if is_test_mode and "_test" in code:
+                regions.append(region)
             elif not is_test_mode and "_test" not in code:
-                to_show.append(region)
+                regions.append(region)
         
-        col_max = 5
-        for idx, region in enumerate(to_show):
+        # 2. Inject Global Login at index 0 (Start of row)
+        global_login = next((r for r in REGIONS if "login" in r["code"]), None)
+        if global_login:
+            regions.insert(0, global_login)
+        
+        # High col_max to ensure all cards fit on a single line
+        col_max = 10
+        for idx, region in enumerate(regions):
             card = self._ping_cards[region["code"]]
             self._ping_grid.addWidget(card["widget"], idx // col_max, idx % col_max)
             card["widget"].show()
 
     def _build_ping_card(self, region):
         card = ClickableCard(region["code"])
-        card.setMinimumWidth(80)
+        card.setMinimumWidth(100)
         card.toggled.connect(self._save_card_states)
         
         vl = QtWidgets.QVBoxLayout(card)
-        vl.setContentsMargins(6, 6, 6, 6)
-        vl.setSpacing(2)
+        vl.setContentsMargins(10, 10, 10, 10)
+        vl.setSpacing(4)
 
         flag = QtWidgets.QLabel(region["flag"])
-        flag.setStyleSheet("font-size:16px;background:transparent;")
+        flag.setStyleSheet("font-size:24px;background:transparent;")
         flag.setAlignment(QtCore.Qt.AlignCenter)
         vl.addWidget(flag)
 
@@ -566,13 +639,13 @@ class ServerPageMixin:
             lbl_text = lbl_text.replace("Login", "Log")
         name = QtWidgets.QLabel(lbl_text)
         name.setAlignment(QtCore.Qt.AlignCenter)
-        name.setStyleSheet("font-size:9px;font-weight:600;background:transparent;")
+        name.setStyleSheet("font-size:12px;font-weight:700;color:" + theme.TEXT + ";background:transparent;")
         name.setWordWrap(True)
         vl.addWidget(name)
 
         status = QtWidgets.QLabel("--")
         status.setAlignment(QtCore.Qt.AlignCenter)
-        status.setStyleSheet("font-size:9px;font-weight:bold;color:" + _STATUS_COLORS["pending"] + ";background:transparent;")
+        status.setStyleSheet("font-size:10px;font-weight:bold;color:" + _STATUS_COLORS["pending"] + ";background:transparent;")
         vl.addWidget(status)
 
         return {"widget": card, "status_lbl": status}
@@ -585,6 +658,8 @@ class ServerPageMixin:
         if not ip_item or not ip_item.text() or ip_item.text() == "--": return
         
         menu = QtWidgets.QMenu(self)
+        menu.addAction(f"Diagnostic Trace", lambda: self._start_trace(ip_item.text(), "tracert"))
+        menu.addSeparator()
         copy_action = menu.addAction(f"Copy IP ({ip_item.text()})")
         selected = menu.exec_(self._ping_table.viewport().mapToGlobal(pos))
         if selected == copy_action:
@@ -621,15 +696,15 @@ class ServerPageMixin:
         
         # Hard reset regions hosts mapping dynamically to defaults
         default_regions = [
-            ("na", [("148.113.226.212", 6677), ("148.113.228.4", 6389), ("51.83.66.84", 443)]),
+            ("na", [("148.113.226.212", 6677), ("148.113.228.4", 6389), ("37.187.157.32", 60442)]),
             ("eu", [("135.125.19.76", 6031)]),
-            ("as", [("15.235.228.20", 7100), ("15.235.228.20", 6768), ("51.83.66.84", 443)]),
-            ("sa", [("51.83.66.84", 443)]),
+            ("as", [("15.235.228.20", 7100), ("15.235.228.20", 6768)]),
+            ("sa", []),
             ("cn", [("43.135.219.50", 6459), ("49.233.72.163", 60442), ("192.144.185.5", 9961)]),
             ("na_test", [("148.113.187.116", 6604), ("148.113.226.212", 6777)]),
             ("eu_test", [("135.125.19.80", 6244)]),
             ("as_test", [("15.235.228.20", 7036), ("15.235.228.20", 7012)]),
-            ("sa_test", [("51.83.66.84", 443)]),
+            ("sa_test", []),
             ("cn_test", [("43.135.219.50", 6443), ("49.233.72.163", 60442), ("192.144.185.5", 9912)]),
             ("login_global", [("37.187.157.32", 60442), ("51.83.66.84", 2003)]),
         ]
@@ -665,14 +740,10 @@ class ServerPageMixin:
             if code in active_codes:
                 card["status_lbl"].setText("...")
                 card["status_lbl"].setStyleSheet(
-                    "font-size:10px;font-weight:bold;color:" + _STATUS_COLORS["pending"] + ";background:transparent;")
+                    "font-size:11px;font-weight:bold;color:" + _STATUS_COLORS["pending"] + ";background:transparent;")
             elif card["widget"].isVisible():
-                # If it's visible but not active (deselected), show as skipped
-                card["status_lbl"].setText("skipped")
-                card["status_lbl"].setStyleSheet(
-                    "font-size:10px;font-weight:normal;color:" + _STATUS_COLORS["pending"] + ";background:transparent;")
-            # If the card is hidden (wrong view mode), we leave it alone entirely
-
+                card["status_lbl"].setText("")
+        
         self._ping_worker = _PingWorker(REGIONS, active_codes)
         self._ping_worker.result.connect(self._ping_on_result)
         self._ping_worker.finished.connect(self._ping_on_finished)
@@ -733,11 +804,11 @@ class ServerPageMixin:
             if best_ok:
                 card["status_lbl"].setText(str(round(best_ms)) + " ms")
                 card["status_lbl"].setStyleSheet(
-                    "font-size:9px;font-weight:bold;color:" + _STATUS_COLORS["ok"] + ";background:transparent;")
+                    "font-size:11px;font-weight:bold;color:" + _STATUS_COLORS["ok"] + ";background:transparent;")
             else:
                 card["status_lbl"].setText("FAIL")
                 card["status_lbl"].setStyleSheet(
-                    "font-size:9px;font-weight:bold;color:" + _STATUS_COLORS["fail"] + ";background:transparent;")
+                    "font-size:11px;font-weight:bold;color:" + _STATUS_COLORS["fail"] + ";background:transparent;")
 
     @QtCore.Slot()
     def _ping_on_finished(self):
@@ -754,17 +825,18 @@ class ServerPageMixin:
     # RIGHT: Live Connection Scanner
     # ===============================================================
     def _build_scanner_panel(self):
-        w = QtWidgets.QFrame()
-        w.setObjectName("Card")
+        w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
-        v.setContentsMargins(14, 12, 14, 12)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
 
         hrow = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Live Connection Scanner")
+        title = QtWidgets.QLabel("Live IP Scanner")
         title.setStyleSheet(
             "font-size:13px;font-weight:700;color:" + theme.TEXT + ";")
-        hrow.addWidget(title, 1)
+        hrow.addWidget(title)
+
+        hrow.addStretch(1)
 
         self._scan_btn = QtWidgets.QPushButton("Start Scanning")
         self._scan_btn.setObjectName("Accent")
@@ -778,8 +850,6 @@ class ServerPageMixin:
         self._vpn_help_btn.setCheckable(True)
         self._vpn_help_btn.toggled.connect(self._vpn_help_toggle)
         hrow.addWidget(self._vpn_help_btn)
-
-        hrow.addStretch(1)
 
         btn_clear = QtWidgets.QPushButton("Clear")
         btn_clear.setObjectName("Outline")
@@ -897,6 +967,8 @@ class ServerPageMixin:
         port = port_item.text()
         
         menu = QtWidgets.QMenu(self)
+        menu.addAction(f"Diagnostic Trace", lambda: self._start_trace(ip, "tracert"))
+        menu.addSeparator()
         copy_action = menu.addAction(f"Copy IP ({ip})")
         
         # Build "Add to Region" submenus dynamically
@@ -1117,6 +1189,124 @@ class ServerPageMixin:
 
         self._scan_table.scrollToBottom()
         self._scan_count_lbl.setText(str(len(self._scan_captured)) + " captured")
+
+    # ===============================================================
+    # Integrated Diagnostic Log
+    # ===============================================================
+    def _build_trace_panel(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
+
+        hrow = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel("Diagnostic Tools")
+        title.setStyleSheet(
+            "font-size:13px;font-weight:700;color:" + theme.TEXT + ";")
+        hrow.addWidget(title)
+        
+        hrow.addStretch(1)
+
+        self._manual_ip_input = QtWidgets.QLineEdit()
+        self._manual_ip_input.setPlaceholderText("Paste IP here...")
+        self._manual_ip_input.setFixedHeight(28)
+        self._manual_ip_input.setMinimumWidth(150)
+        self._manual_ip_input.returnPressed.connect(lambda: self._start_trace(self._manual_ip_input.text(), "tracert"))
+        hrow.addWidget(self._manual_ip_input)
+
+        self._trace_btn = QtWidgets.QPushButton("Trace")
+        self._trace_btn.setObjectName("Accent")
+        self._trace_btn.setFixedHeight(28)
+        self._trace_btn.setToolTip("Full Trace (with Hostnames)")
+        self._trace_btn.clicked.connect(lambda: self._start_trace(self._manual_ip_input.text(), "tracert"))
+        hrow.addWidget(self._trace_btn)
+
+        self._trace_fast_btn = QtWidgets.QPushButton("Fast")
+        self._trace_fast_btn.setObjectName("Outline")
+        self._trace_fast_btn.setFixedHeight(28)
+        self._trace_fast_btn.setToolTip("Fast Trace (No Hostnames)")
+        self._trace_fast_btn.clicked.connect(lambda: self._start_trace(self._manual_ip_input.text(), "tracert_fast"))
+        hrow.addWidget(self._trace_fast_btn)
+
+        self._net_info_btn = QtWidgets.QPushButton("Net Info")
+        self._net_info_btn.setObjectName("Outline")
+        self._net_info_btn.setFixedHeight(28)
+        self._net_info_btn.setToolTip("Flush DNS & Show IP Info")
+        self._net_info_btn.clicked.connect(lambda: self._start_trace("", "net_info"))
+        hrow.addWidget(self._net_info_btn)
+
+        self._trace_stop_btn = QtWidgets.QPushButton("Stop")
+        self._trace_stop_btn.setObjectName("Outline")
+        self._trace_stop_btn.setFixedHeight(28)
+        self._trace_stop_btn.clicked.connect(self._stop_trace)
+        self._trace_stop_btn.setEnabled(False)
+        hrow.addWidget(self._trace_stop_btn)
+
+        btn_clear = QtWidgets.QPushButton("Clear")
+        btn_clear.setObjectName("Outline")
+        btn_clear.setFixedHeight(28)
+        btn_clear.clicked.connect(lambda: self._trace_log.clear())
+        hrow.addWidget(btn_clear)
+        v.addLayout(hrow)
+        
+        self._trace_target_lbl = QtWidgets.QLabel("Select a tool or paste an IP to begin.")
+        self._trace_target_lbl.setObjectName("Mono")
+        v.addWidget(self._trace_target_lbl)
+
+        self._trace_log = QtWidgets.QPlainTextEdit()
+        self._trace_log.setReadOnly(True)
+        self._trace_log.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self._trace_log.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {theme.BG};
+                color: {theme.TEXT};
+                font-family: "{theme.MONO_FONT}", "Consolas", monospace;
+                font-size: 12px;
+                border: 1px solid {theme.BORDER};
+                padding: 10px;
+            }}
+        """)
+        v.addWidget(self._trace_log, 1)
+        return w
+
+    def _start_trace(self, ip: str, mode: str = "tracert"):
+        if self._trace_worker and self._trace_worker.isRunning():
+            self._trace_worker.stop()
+            self._trace_worker.wait()
+
+        # Jump to Trace tab
+        self._server_tabs.setCurrentText("Network Tracet")
+        self._on_tab_changed("Network Tracet")
+        
+        label_text = f"{mode.upper()}"
+        if ip: label_text += f": {ip}"
+        self._trace_target_lbl.setText(label_text)
+        
+        self._trace_log.appendPlainText(f"\n> Starting {mode} {ip if ip else ''}...\n")
+        self._trace_stop_btn.setEnabled(True)
+
+        self._trace_worker = _TraceWorker(ip, mode)
+        self._trace_worker.output_ready.connect(self._on_trace_output)
+        self._trace_worker.finished.connect(self._on_trace_finished)
+        self._trace_worker.start()
+
+    def _stop_trace(self):
+        if self._trace_worker and self._trace_worker.isRunning():
+            self._trace_worker.stop()
+            self._trace_worker.wait()
+            self._trace_log.appendPlainText("\n[Diagnostic Stopped by User]")
+        self._trace_stop_btn.setEnabled(False)
+
+    @QtCore.Slot(str)
+    def _on_trace_output(self, text):
+        self._trace_log.insertPlainText(text)
+        sb = self._trace_log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    @QtCore.Slot()
+    def _on_trace_finished(self):
+        self._trace_log.appendPlainText("\n[Diagnostic Complete]")
+        self._trace_stop_btn.setEnabled(False)
 
     @QtCore.Slot(str)
     def _scan_on_status(self, msg):

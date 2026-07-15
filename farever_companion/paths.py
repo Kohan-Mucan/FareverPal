@@ -40,15 +40,25 @@ def display_data_dir() -> Path:
 
 def icons_dir() -> Path:
     """Folder containing Items/Units/Skills subfolders with PNGs/WebPs."""
-    # Try the local assets/icons folder
-    local = project_root() / "assets" / "icons"
+    # 1 & 2: Handles Bundled (EXE) and Local Project automatically via assets_dir()
+    local = assets_dir() / "icons"
     if local.exists():
         # Health check: do any of our plural folders exist?
         if (local / "Items").exists() or (local / "Units").exists() or (local / "Skills").exists():
             return local
             
-    # Fallback to sibling htdocs
+    # 3. Fallback to sibling htdocs (Legacy / Other Dev)
     return project_root().parent / "htdocs" / "assets" / "icons"
+
+def map_icons_dir() -> Path:
+    """Folder containing map markers (chests, orbs, etc) as SVGs/WebPs."""
+    # 1 & 2: Bundled (EXE) and Local Project
+    local = assets_dir() / "map_icons"
+    if local.exists():
+        return local
+
+    # 3. Fallback to sibling htdocs (External)
+    return project_root().parent / "htdocs" / "assets" / "map_icons"
 
 def atlas_dir() -> Path:
     """Folder containing the atlas sprite-sheets and index."""

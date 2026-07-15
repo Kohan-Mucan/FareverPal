@@ -37,6 +37,7 @@ ACCENT_DIM = "#13384a"  # cyan tint for selection backgrounds
 _DESIGN_ACCENT = (ACCENT, ACCENT_LIGHT, ACCENT_DIM, ON_ACCENT, TOGGLE_THUMB_ON)
 
 GOLD = "#eac331"        # secondary
+SILVER = "#c0c0c0"      # elite
 ORANGE = "#f1a02b"      # tertiary-container
 NEUTRAL = DIM
 DANGER = "#ffb4ab"      # error - enemy / big DPS number

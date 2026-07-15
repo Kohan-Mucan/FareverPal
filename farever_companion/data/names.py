@@ -176,13 +176,24 @@ def chest_label(chest_id: str | None, loot_table: str | None = None) -> str:
     # 2. Humanize
     label = humanize(clean_raw)
     
-    # 3. Clean up redundant "Chest" words
-    # If the label has "Chest", strip all instances and put one at the start
-    if re.search(r"(?i)\bChest\b", label):
-        label = re.sub(r"(?i)\bChest\b", "", label).strip()
+    # 3. Handle Recipes and Chests specially
+    if re.search(r"(?i)\bRecipe\b", label):
+        # For recipes, strip technical "noise" words
+        label = re.sub(r"(?i)\b(Chest|World|Root|Stem|Leaf|Activity)\b", "", label).strip()
+        if not label.lower().startswith("recipe"):
+            label = f"Recipe {label}"
+    elif re.search(r"(?i)\bChest\b", label):
+        # For normal chests, strip noise and ensure "Chest" is at the start
+        label = re.sub(r"(?i)\b(Chest|World|Root|Stem|Leaf|Activity)\b", "", label).strip()
         label = f"Chest {label}"
     
-    # 4. Final formatting
+    # 4. Append numeric suffix from chest_id if missing (e.g. "Chest 53")
+    if chest_id:
+        m = re.search(r"(\d+)$", chest_id)
+        if m and not re.search(rf"\b{m.group(1)}\b", label):
+            label = f"{label} {m.group(1)}"
+
+    # 5. Final formatting
     label = re.sub(r"\s+", " ", label).strip()
     
     if not label:

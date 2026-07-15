@@ -169,14 +169,14 @@ class TrackController(QtCore.QObject):
                 return None
             return (o.x, o.y, o.z,
                     f"{geo_orbs.orb_label(key)} · {geo_orbs.orb_region_name(o)}")
-        if kind in ("pos", "gather"):
+        if kind in ("pos", "chest", "gather", "recipe"):
             # fixed waypoint: "x,y,z|label" (any minimap marker)
             try:
                 coords, _, label = key.partition("|")
                 x, y, z = (float(v) for v in coords.split(","))
             except ValueError:
                 return None
-            return (x, y, z, label or ("Gatherable" if kind == "gather" else "Waypoint"))
+            return (x, y, z, label or "Waypoint")
         if kind in ("unit", "hero"):
             label = names.unit_name(key) or key
             xyz = self.model.player_xyz()
@@ -193,21 +193,11 @@ class TrackController(QtCore.QObject):
                 # hysteresis: stay locked on the current instance unless a
                 # clearly closer one appears, so near-ties don't flip the needle
                 cur = next((c for c in cands if c.addr == self._lock_addr), None)
-                if cur is not None:
-                    if self._hard_lock:
-                        e = cur
-                    elif cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
-                        e = cur
+                if cur is not None and cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
+                    e = cur
             self._lock_addr = e.addr
             return (e.x, e.y, e.z, label)
-        
-        # All other kinds (chest, enemy, gather, pos) are coordinate-based
-        try:
-            coords, _, label = key.partition("|")
-            x, y, z = (float(v) for v in coords.split(","))
-            return (x, y, z, label or "Waypoint")
-        except ValueError:
-            return None
+        return None
 
     def _game_rect(self):
         now = time.monotonic()
@@ -220,8 +210,13 @@ class TrackController(QtCore.QObject):
         return self._rect
 
     def _tick(self) -> None:
+        if self._needle is None or not self._needle.isVisible():
+            return
         m = self.model
-        if m is None or self._needle is None:
+        if m is None:
+            return
+        if m.player_addr is None:
+            self.clear()
             return
         if m.player_addr is None:
             self.clear()

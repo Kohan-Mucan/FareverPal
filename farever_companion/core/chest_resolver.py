@@ -22,6 +22,9 @@ class ChestRow:
     level: int | None
     state: str | None
     live: bool
+    x: float
+    y: float
+    z: float
     anomaly: bool = False
 
 
@@ -69,35 +72,40 @@ class ChestResolver:
                        else chestdb.nearest(self.chests, *xyz, n=10 ** 6)
         
         for c, d in static_ranks:
-            # Exclude BossChests, Activity triggers, and Camps
+            # Exclude BossChests, Camps
             if (c.chest_id.startswith("BossChest") or
-                "activity" in c.chest_id.lower() or
                 "camp" in c.chest_id.lower() or
-                (c.loot_table and "activity" in c.loot_table.lower())):
+                "levelup" in c.chest_id.lower()):
                 continue
             if player_zone:
                 from ..geo import zones as geo_zones
                 czone = geo_zones.chest_zone(c.chest_id)
-                if czone != player_zone:
+                if czone and geo_zones.get_area_id(czone) != geo_zones.get_area_id(player_zone):
                     continue
             tbl = self.chest_table(c.chest_id, dungeon_boss, c.loot_table)
             # drop a static boss chest belonging to a different boss
             if (tbl and dungeon_boss and tbl != dungeon_boss
                     and udata.is_boss(tbl)):
                 continue
-            rows[c.chest_id] = ChestRow(c.chest_id, d, tbl, c.level, None, False)
+            rows[c.chest_id] = ChestRow(c.chest_id, d, tbl, c.level, None, False, c.x, c.y, c.z)
         for e in live_chests:
             if not e.elem_id:
                 continue
-            # Exclude BossChests, checkpoints and Activity triggers from live scan
+            # Exclude BossChests and checkpoints from live scan
             elem_id_lower = e.elem_id.lower()
-            if "activity" in elem_id_lower or "checkpoint" in elem_id_lower or e.elem_id.startswith("BossChest"):
+            if "checkpoint" in elem_id_lower or "levelup" in elem_id_lower or e.elem_id.startswith("BossChest"):
                 continue
             d = e.dist2d(px, py) if use_2d else e.dist(*xyz)
             rows[e.elem_id] = ChestRow(
                 e.elem_id, d, self.chest_table(e.elem_id, dungeon_boss),
-                None, e.state, True, anomaly=(e.elem_id not in self._static_ids))
-        out = sorted(rows.values(), key=lambda r: r.dist)
+                None, e.state, True, e.x, e.y, e.z,
+                anomaly=(e.elem_id not in self._static_ids))
+        def chest_priority(r: ChestRow) -> int:
+            # Anomalies are prioritized so they aren't crowded out by generic crates;
+            # recipes are now sorted by distance like normal chests.
+            return 0 if r.anomaly else 1
+
+        out = sorted(rows.values(), key=lambda r: (chest_priority(r), r.dist))
         if max_dist > 0:
             out = [r for r in out if r.dist <= max_dist]
         return out[:n]
