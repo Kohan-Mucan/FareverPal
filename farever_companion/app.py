@@ -29,7 +29,7 @@ def _app_icon() -> QtGui.QIcon:
 def main() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Farever Pal")
-    app.setOrganizationName("Escanor")
+    app.setOrganizationName("FareverPal")
     theme.apply(app)                 # loads bundled fonts + installs QSS
     app.setWindowIcon(_app_icon())
 

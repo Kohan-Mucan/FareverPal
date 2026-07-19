@@ -58,6 +58,19 @@ def is_boss(unit_id: str | None) -> bool:
     return False
 
 
+@lru_cache(maxsize=1)
+def _is_elite_map() -> dict[str, bool]:
+    """Map of unit_id -> isElite flag from the enemy display data."""
+    return {r["id"]: r.get("isElite", False) for r in cdb.display_data("enemies")}
+
+
+def is_elite(unit_id: str | None) -> bool:
+    """True if the unit is flagged as an Elite in the display metadata."""
+    if not unit_id:
+        return False
+    return _is_elite_map().get(unit_id, False)
+
+
 def is_unique(unit_id: str | None) -> bool:
     """True if the unit is marked with the UNIQUE_FLAG_BIT (0x80), identifying
     it as a named/special unit that should typically bypass filters."""
@@ -115,6 +128,17 @@ def codex_types() -> tuple[tuple[str, str], ...]:
     return tuple(sorted(out, key=lambda t: t[1]))
 
 
+def is_codex_type(type_id: str | None) -> bool:
+    """True if the type is recognized as a valid mob category in the Codex."""
+    if not type_id:
+        return False
+    # Use a loop instead of any() to avoid unresolved reference issues in some linters
+    for tid, _ in codex_types():
+        if tid == type_id:
+            return True
+    return False
+
+
 def type_name(type_id: str | None) -> str:
     for tid, name in codex_types():
         if tid == type_id:
@@ -126,16 +150,35 @@ def type_name(type_id: str | None) -> str:
 def codex_unit_ids() -> tuple[str, ...]:
     """All concrete enemy unit ids whose type is a Codex type, excluding
     templates and internals. Bosses and Unique units are always included."""
-    ctypes = {tid for tid, _ in codex_types()}
     return tuple(sorted(
         u for u, r in _units_by_id().items()
-        if (r.get("type") in ctypes or is_boss(u) or is_unique(u))
-        and u not in _TEMPLATE_IDS
-        and not u.endswith("_Base")
-        and (is_boss(u) or is_unique(u) or not ("patrol" in u.lower() or "spawn" in u.lower() or
-                 "trigger" in u.lower() or "marker" in u.lower() or
-                 "bumper" in u.lower() or "idle" in u.lower()))
+        if is_codex_unit(u)
     ))
+
+
+def is_codex_unit(unit_id: str | None) -> bool:
+    """True if the unit is a 'real' mob: recognized codex type, boss, or unique,
+    and not an internal engine object."""
+    if not unit_id:
+        return False
+    # Bosses and uniques (like RamPatrol dogs) always bypass keyword filters
+    if is_boss(unit_id) or is_unique(unit_id):
+        return True
+    # Check if the type is allowed (excludes Mounts, Totems, etc.)
+    if not is_codex_type(unit_type(unit_id)):
+        return False
+    # Check templates
+    if unit_id in _TEMPLATE_IDS or unit_id.endswith("_Base"):
+        return False
+    # Check internal keywords
+    uid_l = unit_id.lower()
+    for s in ("spawn", "trigger", "marker", "point", "target", "area", "path",
+              "route", "bumper", "idle", "portal", "cannon", "totem", "shield",
+              "wall", "gate", "platform", "volume", "camera", "light", "effect",
+              "visual", "patrol", "partol", "patrole"):
+        if s in uid_l:
+            return False
+    return True
 
 
 def unit_type(unit_id: str | None) -> str | None:

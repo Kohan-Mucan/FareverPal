@@ -8,8 +8,7 @@ between machines. Build with:
 
 Key properties:
   - one-file, windowed, branded with assets/app_icon.ico.
-  - In-repo assets are always bundled. Optional sibling game-data dirs
-    (../data/sheets, ../htdocs/assets/...) are added ONLY if present, so a full
+  - In-repo assets are always bundled. A full
     local build ships the data while a bare checkout (e.g. CI) still builds a
     verification artifact.
   - Unused Qt modules are excluded to trim the bundle; only QtCore/QtGui/
@@ -61,42 +60,19 @@ for f in essential_data:
     if os.path.exists(src):
         datas.append((src, "assets/data"))
 
-# --- Atlas vs Individual Icons ---------------------------------------------
-# If the Atlas system is present, we bundle it and SKIP the 1800+ individual
-# icons to keep the EXE small (~50MB vs ~100MB).
 atlas_src = os.path.join(SPECPATH, "assets", "atlas")
-using_atlas = os.path.exists(atlas_src) and os.path.exists(os.path.join(atlas_src, "atlas_map.json"))
+using_atlas = os.path.exists(atlas_src) and any(f.startswith("atlas_") and f.endswith(".json") for f in os.listdir(atlas_src))
 
 if using_atlas:
     datas.append(("assets/atlas", "assets/atlas"))
 else:
-    datas.append(("assets/icons", "assets/icons"))
-    datas.append(("assets/map_icons", "assets/map_icons"))
+    for folder in ["icons", "map_icons"]:
+        src_path = os.path.join(SPECPATH, "assets", folder)
+        if os.path.exists(src_path):
+            datas.append((f"assets/{folder}", f"assets/{folder}"))
 
-# --- data: optional sibling/local game-data dirs ---------------------------
-# Added only if they exist and aren't already covered by the repo assets.
-# We skip these in production builds if raw_data.py is in place.
-optional_siblings = []
-
-if not has_raw_data:
-    optional_siblings.extend([
-        (os.path.join("..", "htdocs", "data", "sheets"), "data/sheets"),
-        (os.path.join("..", "htdocs", "assets", "data"), "assets/data"),
-    ])
-
-if not using_atlas:
-    optional_siblings.append((os.path.join("..", "htdocs", "assets", "icons"), "assets/icons"))
-
-for _rel, dst in optional_siblings:
-    src = os.path.normpath(os.path.join(SPECPATH, _rel))
-    if os.path.exists(src):
-        # Avoid bundling large htdocs versions if we have local ones
-        local_src = os.path.join(SPECPATH, dst)
-        if not os.path.exists(local_src):
-            datas.append((src, dst))
-        elif dst == "data/sheets":
-            # Always bundle sheets if found in htdocs, as they might be newer
-            datas.append((src, dst))
+# --- data: optional local game-data dirs -----------------------------------
+# (Optional sibling htdocs fallback removed)
 
 # --- excludes: Qt modules the app never uses (trim the bundle) -------------
 # Keep only QtCore, QtGui, QtWidgets, QtSvg and the windows platform plugin
@@ -166,7 +142,13 @@ a = Analysis(
     pathex=[],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["farever_native"],
+    hiddenimports=[
+        "farever_native",
+        "farever_companion.data.raw_data",
+        "farever_companion.data.raw_units",
+        "farever_companion.data.raw_items",
+        "farever_companion.data.raw_skills",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

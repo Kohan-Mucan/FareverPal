@@ -32,7 +32,7 @@ def _skills() -> dict[str, str]:
 
 def skill_name(skill_id: str | None) -> str | None:
     """Internal skill id (BaseSkill.kind, e.g. 'Priest_Prayer_Smite') -> the
-    game's readable name ('Prayer: Smite'), via htdocs/assets/data/skills.json.
+    game's readable name ('Prayer: Smite'), via assets/data/skills.json.
     Falls back to a humanized id ('Mace_Base_Attack' -> 'Mace Base Attack')."""
     if not skill_id:
         return skill_id
@@ -116,6 +116,26 @@ def humanize(raw: str | None) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def poi_label(raw: str | None) -> str:
+    """Clean name for a POI (Obelisk, Respawn, etc). Strips Z#/W# prefixes."""
+    if not raw:
+        return ""
+    
+    # 1. Strip technical prefixes
+    # Pattern: Z1_World_Greenlands_... -> ...
+    res = re.sub(r"(?i)^[ZW]\d+_World_[^_]+_", "", raw)
+    # Pattern: W1_Siagarta_... -> ...
+    res = re.sub(r"(?i)^W\d+_Siagarta_", "", res)
+    
+    # 2. Humanize
+    res = humanize(res)
+    
+    # 3. Strip remaining Z 1, W 2, etc. (humanize might have space-separated them)
+    res = re.sub(r"(?i)\b[ZW]\s?\d+\b", "", res).strip()
+    
+    return res
+
+
 @lru_cache(maxsize=1)
 def _zone_region_names() -> dict[str, str]:
     """Zone-tier code digit -> region display name, e.g. {'1': 'Skover Island',
@@ -137,6 +157,29 @@ def _zone_region_names() -> dict[str, str]:
     except Exception:
         pass
     return out
+
+
+@lru_cache(maxsize=1)
+def _all_zone_names() -> dict[str, str]:
+    """Full mapping of zone ID -> display name from the zone sheet."""
+    out: dict[str, str] = {}
+    try:
+        for r in cdb.lines("zone"):
+            zid = r.get("id")
+            if zid:
+                nm = r.get("name") or (r.get("texts") or {}).get("name")
+                if nm:
+                    out[zid.lower()] = nm
+    except Exception:
+        pass
+    return out
+
+
+def zone_name(zone_id: str | None) -> str | None:
+    """Technical zone ID -> readable name (e.g. 'Z1_Enripit_Falls' -> 'Talitha Falls')."""
+    if not zone_id:
+        return None
+    return _all_zone_names().get(zone_id.lower()) or humanize(zone_id)
 
 
 def loot_table_label(tid: str | None) -> str:

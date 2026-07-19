@@ -26,8 +26,9 @@ def test_rows_have_required_fields():
 
 
 def test_icon_sheet_mapping():
-    assert col.icon_sheet("companions") == "Units"
-    assert col.icon_sheet("mounts") == "Items"
+    assert col.icon_sheet("companions") == "collection"
+    assert col.icon_sheet("mounts") == "collection"
+    assert col.icon_sheet("gliders") == "collection"
     assert col.icon_sheet("nonsense") == "item"
 
 
@@ -50,11 +51,6 @@ def test_icons_exist_for_nearly_all_items():
                 pass
                 
     base_dirs = [paths.icons_dir()]
-    local_path = paths.project_root() / "assets" / "icons"
-    sibling_path = paths.project_root().parent / "htdocs" / "assets" / "icons"
-    for path in (local_path, sibling_path):
-        if path not in base_dirs and path.exists():
-            base_dirs.append(path)
             
     missing = []
     for r in col.items():

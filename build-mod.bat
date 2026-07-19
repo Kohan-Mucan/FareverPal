@@ -6,6 +6,11 @@ call build.bat
 if errorlevel 1 goto err
 
 echo.
+echo [1.5/3] Compiling raw_data.py database...
+.venv\Scripts\python.exe compiler.py
+if errorlevel 1 goto err
+
+echo.
 echo [2/3] Packaging executable...
 
 :: Extract Version-like info from the latest Git commit message
@@ -39,7 +44,6 @@ if exist "dist\FareverPal.exe" (
 echo.
 echo [3/3] Validating Build Integrity...
 set "VERIFY_SCRIPT=packaging\verify_assets.py"
-if not exist "%VERIFY_SCRIPT%" set "VERIFY_SCRIPT=..\htdocs\tools\Verification Script.py"
 
 .venv\Scripts\python.exe "%VERIFY_SCRIPT%"
 if errorlevel 1 (

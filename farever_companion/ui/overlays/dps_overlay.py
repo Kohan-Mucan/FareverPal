@@ -18,7 +18,7 @@ from ..overlay_base import OverlayWindow
 from ..widgets import Sparkline, Bar
 from ..components import SectionHeader
 from ..skill_table import abbr as _abbr, SkillRow
-from ...data import names, icons
+from ...data import names, icons, units as udata
 from ...combat import encounter as enc_mod
 
 POLL_MS = 400
@@ -280,8 +280,9 @@ class DpsOverlay(OverlayWindow):
         for i, r in enumerate(self._tgt_rows):
             if i < len(top):
                 uid, dmg = top[i]
+                sheet = "collection" if udata.is_companion(uid) else "Units"
                 r.set_row(names.any_name(uid) or uid, dmg / mx if mx else 0, {},
-                          bar_label=_abbr(dmg), sheet="Units", id_=uid, accent=accent)
+                          bar_label=_abbr(dmg), sheet=sheet, id_=uid, accent=accent)
                 r.show()
             else:
                 r.hide()

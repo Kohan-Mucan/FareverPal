@@ -1,11 +1,8 @@
 """Static gatherable node positions (Ores, Plants)."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from functools import lru_cache
-
-from .. import paths
 
 @dataclass(frozen=True)
 class GatherableNode:
@@ -85,22 +82,15 @@ def get_setting_attr(label: str) -> str | None:
 
 @lru_cache(maxsize=1)
 def load_nodes() -> list[GatherableNode]:
-    """Load all static nodes from gatherable_locs.json."""
-    path = paths.gatherable_locs_path()
-    if not path.exists():
-        return []
-            
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        nodes = []
-        for entry in data.get("gatherables", []):
-            nodes.append(GatherableNode(
-                name=entry["name"],
-                x=float(entry["x"]),
-                y=float(entry["y"]),
-                z=float(entry["z"]),
-                world=entry.get("world", "W1_Siagarta")
-            ))
-        return nodes
-    except (json.JSONDecodeError, KeyError, Exception):
-        return []
+    """Load all static nodes from compiled raw data."""
+    from ..data import cdb
+    nodes = []
+    for entry in cdb.lines("gatherable_locs"):
+        nodes.append(GatherableNode(
+            name=entry["name"],
+            x=float(entry["x"]),
+            y=float(entry["y"]),
+            z=float(entry["z"]),
+            world=entry.get("world", "W1_Siagarta")
+        ))
+    return nodes

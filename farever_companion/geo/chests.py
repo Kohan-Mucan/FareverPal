@@ -1,21 +1,18 @@
 """Static chest index: id -> world position + loot table.
 
-Reads from `htdocs/assets/data/map_markers.json` — the unified scan-generated
-file that contains both chests (kind="chest") and POIs (kind="poi") with full
-world positions and loot table assignments.
+Reads from scan-generated chest and POI manifests in assets/data/ that
+contain full world positions and loot table assignments.
 
 Coordinates are global world XYZ, 1:1 with the runtime player struct.
 Pure data, no attached process.
 """
 from __future__ import annotations
 
-import json
 import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .. import paths
 from ..data import cdb
 
 
@@ -40,20 +37,16 @@ class Chest:
 
 @lru_cache(maxsize=1)
 def _chest_markers() -> list[dict]:
-    """Raw chest entries from chest_locs.json."""
-    try:
-        return json.loads(paths.chest_locs_path().read_text(encoding="utf-8")).get("chests", [])
-    except (OSError, json.JSONDecodeError):
-        return []
+    """Raw chest entries from compiled raw data."""
+    from ..data import cdb
+    return cdb.lines("chest_locs")
 
 
 @lru_cache(maxsize=1)
 def _poi_markers() -> list[dict]:
-    """Raw POI entries from poi_locs.json."""
-    try:
-        return json.loads(paths.poi_locs_path().read_text(encoding="utf-8")).get("pois", [])
-    except (OSError, json.JSONDecodeError):
-        return []
+    """Raw POI entries from compiled raw data."""
+    from ..data import cdb
+    return cdb.lines("poi_locs")
 
 
 @lru_cache(maxsize=1)

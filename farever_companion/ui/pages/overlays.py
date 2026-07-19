@@ -154,14 +154,6 @@ class OverlaysPageMixin:
                 t.setChecked(on)
                 t.blockSignals(False)
 
-
-    def _set_entity_scale(self, v):
-        sc = v / 100.0
-        self._set("entity_scale", sc)
-        ov = self.overlays.get("entity")
-        if ov is not None and hasattr(ov, "set_scale"):
-            ov.set_scale(sc)
-
     def _set_dps_scale(self, v):
         sc = v / 100.0
         self._set("dps_scale", sc)

@@ -7,13 +7,13 @@ try:
     atlas_dir = paths.atlas_dir()
     
     has_icons = icons_dir.exists() and (icons_dir / "Items").exists() and (icons_dir / "Units").exists() and (icons_dir / "Skills").exists()
-    has_atlas = atlas_dir.exists() and (atlas_dir / "atlas_map.json").exists()
+    has_atlas = atlas_dir.exists() and any(atlas_dir.glob("*.json"))
     
     if not (has_icons or has_atlas):
         msg = (
             f"ERROR: missing atlas/icon folder\n\n"
             f"Icons folder: {icons_dir} ({'Found' if has_icons else 'Missing/Incomplete Items, Units, or Skills subfolders'})\n"
-            f"Atlas folder: {atlas_dir} ({'Found' if has_atlas else 'Missing atlas_map.json'})"
+            f"Atlas folder: {atlas_dir} ({'Found' if has_atlas else 'Missing atlas *.json files'})"
         )
         raise RuntimeError(msg)
 

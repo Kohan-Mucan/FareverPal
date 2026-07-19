@@ -63,16 +63,37 @@ class OverlayManager(QtCore.QObject):
             self._combat_timer.start(rate)
 
     def set_model(self, model) -> None:
-        # Check for character change to clear the compass tracker
+        # Check for character change to clear compass tracker, selection, and hidden mob undo buffer
         if model:
             prof = model.player_profile()
             if self._last_prof and prof and prof != self._last_prof:
                 self.tracker.clear()
+                entity_ov = getattr(self, "overlays", {}).get("entity")
+                if entity_ov:
+                    entity_ov._sel = None
+                map_ov = getattr(self, "overlays", {}).get("map")
+                if map_ov and hasattr(map_ov, "canvas"):
+                    map_ov.canvas._pan_x = map_ov.canvas._pan_y = 0.0
+                    map_ov.canvas.update()
+                panel = self.parent() if hasattr(self, "parent") else None
+                if panel:
+                    if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
+                    if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
             self._last_prof = prof
 
         self.model = model
         self.tracker.set_model(model)
+
         if model is None:
+            self.tracker.clear()
+            map_ov = getattr(self, "overlays", {}).get("map")
+            if map_ov and hasattr(map_ov, "canvas"):
+                map_ov.canvas._pan_x = map_ov.canvas._pan_y = 0.0
+                map_ov.canvas.update()
+            panel = self.parent() if hasattr(self, "parent") else None
+            if panel:
+                if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
+                if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
             self._orb_timer.stop()
             self._combat_timer.stop()
             if self._combat_lock_active:
@@ -137,7 +158,8 @@ class OverlayManager(QtCore.QObject):
 
     # --- open / close ----------------------------------------------------
     def _make(self, key: str):
-        ov = _OVERLAY_CLASSES[key](self.model, self.s)
+        panel = self.parent()  # The ControlPanel QWidget
+        ov = _OVERLAY_CLASSES[key](self.model, self.s, parent=panel)
         if hasattr(ov, "request_page"):
             ov.request_page.connect(self.request_page)
         elif hasattr(ov, "request_config"):
@@ -313,6 +335,28 @@ class OverlayManager(QtCore.QObject):
                 ctypes.windll.user32.ClientToScreen(active_hwnd, ctypes.byref(pt))
                 ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
 
+        # 3.5 Character/Profile change detection
+        try:
+            curr_prof = m.player_profile()
+        except Exception:
+            curr_prof = None
+
+        if curr_prof and self._last_prof and curr_prof != self._last_prof:
+            self.tracker.clear()
+            panel = self.parent() if hasattr(self, "parent") else None
+            if panel:
+                if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
+                if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
+        elif not curr_prof and self._last_prof:
+            # Player logged out to menu/relog — clear active tracking and hidden undo buffers
+            self.tracker.clear()
+            panel = self.parent() if hasattr(self, "parent") else None
+            if panel:
+                if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
+                if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
+        
+        self._last_prof = curr_prof
+
         # 4. Dungeon/Rift detection
         in_dungeon = False
         in_rift = False
@@ -330,6 +374,8 @@ class OverlayManager(QtCore.QObject):
 
         if curr_map:
             if self._last_map_id and curr_map != self._last_map_id:
+                # Clear active compass tracking on map/zone/dungeon/rift swap
+                self.tracker.clear()
                 # Reset combat session data
                 try:
                     m.reset_combat()

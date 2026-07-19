@@ -25,7 +25,8 @@ def test_codex_unit_ids():
     assert len(ids) == len(set(ids))
     ctypes = {tid for tid, _ in units.codex_types()}
     for u in ids:
-        assert units.unit_type(u) in ctypes, u
+        # Bosses and uniques are allowed even if their type is internal/nameless
+        assert units.unit_type(u) in ctypes or units.is_boss(u) or units.is_unique(u), u
     # templates are excluded, real (even TODO_-prefixed) enemies are not
     assert "BaseMob" not in ids
     assert "Base_Critter" not in ids

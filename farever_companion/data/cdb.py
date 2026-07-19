@@ -11,17 +11,57 @@ from functools import lru_cache
 from .. import paths
 from . import raw_data
 
+try:
+    from . import raw_units
+except ImportError:
+    raw_units = None
+
+try:
+    from . import raw_items
+except ImportError:
+    raw_items = None
+
+try:
+    from . import raw_skills
+except ImportError:
+    raw_skills = None
+
 
 @lru_cache(maxsize=None)
 def sheet(name: str) -> dict:
     """Raw sheet dict for `name`, e.g. sheet("item")."""
-    # Try singular (CDB style) first, then plural (Icon folder / Manifest style)
+    # Unified atlas access
+    if name == "atlas":
+        from . import atlas
+        all_atlas = atlas.data()
+        flattened = []
+        for cat, entries in all_atlas.items():
+            for eid, entry in entries.items():
+                row = entry.copy()
+                row["id"] = eid
+                row["category"] = cat
+                flattened.append(row)
+        return {"lines": flattened}
+
+    # Try core raw_data first
     data = raw_data.DATA.get(name)
     if data is None:
         plural = f"{name}s"
         data = raw_data.DATA.get(plural)
 
+    # If not in core, try lazy-loading from split modules
+    if data is None:
+        if name in ("unit", "units", "lootTable") and raw_units:
+            data = raw_units.DATA.get("units" if name != "lootTable" else "lootTable")
+        elif name in ("item", "items") and raw_items:
+            data = raw_items.DATA.get("items")
+        elif name in ("skill", "skills") and raw_skills:
+            data = raw_skills.DATA.get("skills")
+
     if data is not None:
+        if isinstance(data, dict) and name == "ATLAS_DATA":
+            # Flatten dictionary into lines for consistency
+            return {"lines": [{"id": k, **v} for k, v in data.items()]}
         return {"lines": data}
 
     # Fallback to JSON if not found in pre-compiled data
@@ -45,16 +85,32 @@ def by_id(name: str, key: str = "id") -> dict[str, dict]:
 
 @lru_cache(maxsize=None)
 def display_data(name: str) -> list[dict]:
-    """A data manifest file (items / enemies) as a flat list of rows.
-    Falls back to raw game sheets if the display file is missing."""
-    d = raw_data.DATA.get(f"info_{name}")
+    """A data manifest file (items / enemies / skills) as a flat list of rows.
+    Unified data now prefers the base sheet keys (units, items, skills)."""
+    # Map display names to their unified sheet keys
+    key_map = {
+        "enemies": "units",
+        "items": "items",
+        "skills": "skills"
+    }
+
+    target = key_map.get(name, name)
+    
+    # Try core raw_data first
+    d = raw_data.DATA.get(target)
+
+    # Check for lazy-loaded split modules
     if d is None:
-        try:
-            # Fallback to JSON
-            path = paths.display_data_dir() / f"{name}.json"
-            d = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            d = None
+        if target == "units" and raw_units:
+            d = raw_units.DATA.get("units")
+        elif target == "items" and raw_items:
+            d = raw_items.DATA.get("items")
+        elif target == "skills" and raw_skills:
+            d = raw_skills.DATA.get("skills")
+
+    # Check for legacy info_ prefix if target not found
+    if d is None:
+        d = raw_data.DATA.get(f"info_{name}")
 
     if d:
         if isinstance(d, list):
@@ -64,24 +120,36 @@ def display_data(name: str) -> list[dict]:
             if isinstance(v, list):
                 return v
 
+    # Fallback to JSON if not found in pre-compiled data
+    try:
+        path = paths.display_data_dir() / f"{name}.json"
+        d = json.loads(path.read_text(encoding="utf-8"))
+        if d:
+            if isinstance(d, list):
+                return d
+            for v in d.values():
+                if isinstance(v, list):
+                    return v
+    except (OSError, json.JSONDecodeError):
+        pass
+
     # Final fallback: map raw game sheets to a display format
     if name == "items":
         return [{
             "id": r["id"],
-            "name": (r.get("texts") or {}).get("name") or r["id"],
+            "name": r.get("name") or r["id"],
             "rarity": r.get("rarity", "Common"),
             "type": r.get("type", "Unknown")
         } for r in lines("item")]
-    
+
     if name == "enemies":
-        # unitType has the fallback names; unit.texts.name has specific ones
-        utypes = by_id("unitType")
         return [{
             "id": r["id"],
-            "name": (r.get("texts") or {}).get("name") 
-                    or utypes.get(r.get("type", ""), {}).get("name") 
-                    or r["id"],
-            "type": r.get("type", "Unknown")
+            "name": r.get("name") or r["id"],
+            "type": r.get("type", "Unknown"),
+            "isElite": r.get("isElite", False),
+            "isBoss": r.get("isBoss", False),
+            "isCritter": r.get("isCritter", False)
         } for r in lines("unit")]
 
     return []

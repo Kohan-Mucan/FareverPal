@@ -21,8 +21,8 @@ fonts; Qt selects weights from the `wght` axis via QSS `font-weight`.
 Monochrome stroke glyphs for UI chrome (nav rail, buttons, brand). 24×24
 viewBox, `stroke="currentColor"`; `data/icons.ui_icon(name, color, size)`
 substitutes the color and renders via QtSvg, cached by (name, color, size).
-Glyph set follows Lucide (MIT, lucide.dev). Game content icons are NOT here —
-those come from `htdocs/assets/icons` via `data/icons.pixmap`/`tile`.
+Glyph set follows Lucide (MIT, lucide.dev). Game content icons (items, units) are 
+located in `assets/icons/` and `assets/atlas/`.
 
 ## Optional
 - `app_icon.ico` / `app_icon.png` — a Farever logo mark for the window/taskbar

@@ -32,7 +32,7 @@ from .pages.server_page import ServerPageMixin
 from ..config import Settings
 from ..core.proc import backend_name
 from ..core import updater
-from ..data import icons
+from ..data import icons, names, units
 from .. import __version__
 from .. import paths
 from ..api import FareverAPI
@@ -53,10 +53,8 @@ NAV = [
 ]
 
 def filtered_nav(settings: Settings) -> list:
-    # Always show friends and collection, even if disable_web_features is True in saved settings.
-    # Speedrun uploads are handled by disable_speedrun_upload separately.
-    hidden = set()
-    return [item for item in NAV if item[0] not in hidden]
+    # Navigation items are filtered by visibility in ControlPanel based on login state.
+    return NAV[:]
 
 CLASSES = ["Auto", "Warrior", "Rogue", "Mage", "Priest", "Off"]
 
@@ -90,8 +88,10 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         self._col_pending_add: set = set()
         self._col_pending_remove: set = set()
         self._col_worker: CallWorker | None = None
+        self._last_hidden_unit: tuple[str, str] | None = None  # (uid, name)
+        self._last_hidden_comp: tuple[str, str] | None = None  # (uid, name)
 
-        self.setWindowTitle("Farever Pal — by Escanor")
+        self.setWindowTitle("Farever Pal")
         self.setMinimumSize(1000, 640)
         self.resize(1180, 740)
 
@@ -119,6 +119,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         self._friends_timer.timeout.connect(self._friends_poll)
         # Always enable friend gating logic regardless of disable_web_features
         self._refresh_friends_gating()
+        self._refresh_nav_visibility()
 
         # Auto-attach watcher (in the controller): a cheap 2 s poll that attaches
         # when Farever opens, keeps trying to locate the player until they're
@@ -230,6 +231,22 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
                     out.setPixelColor(x, y, QtGui.QColor(ar, ag, ab, a))
         return QtGui.QPixmap.fromImage(out)
 
+    def _refresh_nav_visibility(self):
+        """Show/hide nav items that require being signed in."""
+        signed_in = bool(self.s.account_token)
+        for key in ("friends", "collection"):
+            if key in self._nav_items:
+                self._nav_items[key].setVisible(signed_in)
+        # If the current page was hidden, jump back to overlays
+        if not hasattr(self, "stack"):
+            return
+        idx = self.stack.currentIndex()
+        order = [k for k, _, _ in NAV]
+        if 0 <= idx < len(order):
+            current_key = order[idx]
+            if current_key in ("friends", "collection") and not signed_in:
+                self._select_nav("overlays")
+
     # --- sidebar ---------------------------------------------------------
     def _build_sidebar(self):
         bar = QtWidgets.QFrame()
@@ -241,7 +258,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
         brand = QtWidgets.QLabel("FAREVER PAL")
         brand.setObjectName("Brand")
-        ver = QtWidgets.QLabel(f"by Escanor · v{__version__}")
+        ver = QtWidgets.QLabel(f'<a href="https://kohan-mucan.github.io/FareverPal/" style="color:#bdc8d1; text-decoration:none;">Git Version v{__version__}</a>')
+        ver.setOpenExternalLinks(True)
         ver.setObjectName("Mono")
         lay.addWidget(brand)
         lay.addWidget(ver)
@@ -384,6 +402,8 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         if key == "entity" and hasattr(self, "_refresh_entity_page"):
             self._refresh_entity_page()
         if key == "codex" and hasattr(self, "_refresh_codex_grid"):
+            if hasattr(self, "_sync_codex_to_current_zone"):
+                self._sync_codex_to_current_zone()
             self._refresh_codex_grid()
 
     # ====================================================================
@@ -433,7 +453,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         if ov is None:
             self.log(f"Hotkey '{action}' — open the Entity overlay first.")
             return
-        n = len(getattr(ov, "_enemies", [])) + len(getattr(ov, "_chests", []))
+        n = len(ov._targets()) if hasattr(ov, "_targets") else 0
         self.log(f"Hotkey '{action}' ({n} targets)")
         if action == "prev":
             ov.select_prev()
@@ -600,20 +620,36 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         """Tear down the live session. The controller closes overlays (via its
         `detaching` signal) before stopping the model + closing the handle.
         """
+        self._last_hidden_unit = None
+        self._last_hidden_comp = None
         self.attach_ctl.detach()
 
     # ====================================================================
     #  Loot prediction
     # ====================================================================
 
-    def _set_unit_hidden(self, uid: str, hidden: bool) -> None:
+    def _set_unit_hidden(self, uid_or_uids, hidden: bool) -> None:
         profile = self.model.player_profile() if self.model else None
-        self.s.toggle_unit_hidden(uid, hidden, profile)
+        uids = [uid_or_uids] if isinstance(uid_or_uids, str) else uid_or_uids
+        for u in uids:
+            self.s.toggle_unit_hidden(u, hidden, profile)
+
+        if hidden:
+            tr = getattr(self, "tracker", None) or getattr(self, "_tracker", None)
+            if tr and self.s.track_kind == "unit":
+                tid = self.s.track_id
+                if any(u == tid for u in uids):
+                    tr.clear()
+
+        if hidden and len(uids) == 1:
+            self._last_hidden_unit = (uids[0], names.unit_name(uids[0]) or uids[0])
+        elif not hidden and self._last_hidden_unit and self._last_hidden_unit[0] in uids:
+            self._last_hidden_unit = None
 
         # 1. Sync Entity tab chips
-        if hasattr(self, "_unit_chips"):
-            for u, _n, chip in self._unit_chips:
-                if u == uid:
+        if hasattr(self, "_unit_chips") and self._unit_chips:
+            for us, _n, chip in self._unit_chips:
+                if (isinstance(us, list) and uids == us) or (not isinstance(us, list) and us in uids):
                     chip.blockSignals(True)
                     chip.setChecked(not hidden)
                     chip.blockSignals(False)
@@ -630,13 +666,25 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
     def _set_all_units_hidden(self, hidden: bool) -> None:
         profile = self.model.player_profile() if self.model else None
         
+        if hidden:
+            tr = getattr(self, "tracker", None) or getattr(self, "_tracker", None)
+            if tr and self.s.track_kind == "unit":
+                tr.clear()
+
         # 1. Update Settings
-        if hasattr(self, "_unit_chips"):
-            uids = [u for u, _n, _c in self._unit_chips]
-            self.s.set_all_units_hidden(uids, hidden, profile)
+        if hasattr(self, "_unit_chips") and self._unit_chips:
+            all_uids = []
+            for item in self._unit_chips:
+                uids = item[0]
+                if isinstance(uids, list):
+                    all_uids.extend(uids)
+                else:
+                    all_uids.append(uids)
+            
+            self.s.set_all_units_hidden(all_uids, hidden, profile)
             
             # 2. Sync Entity chips
-            for _uid, _name, chip in self._unit_chips:
+            for _, _, chip in self._unit_chips:
                 chip.blockSignals(True)
                 chip.setChecked(not hidden)
                 chip.blockSignals(False)
@@ -648,6 +696,51 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
         if hasattr(self, "_update_unit_tag"):
             self._update_unit_tag()
+
+    def _set_companion_hidden(self, uid: str, hidden: bool) -> None:
+        profile = self.model.player_profile() if self.model else None
+        self.s.toggle_companion_hidden(uid, hidden, profile)
+
+        if hidden:
+            tr = getattr(self, "tracker", None) or getattr(self, "_tracker", None)
+            if tr and self.s.track_kind == "unit":
+                tid = self.s.track_id
+                if uid == tid:
+                    tr.clear()
+            self._last_hidden_comp = (uid, names.unit_name(uid) or uid)
+        elif not hidden and self._last_hidden_comp and self._last_hidden_comp[0] == uid:
+            self._last_hidden_comp = None
+
+        # 1. Sync Entity tab chips
+        if hasattr(self, "_companion_chips") and self._companion_chips:
+            for u, _n, chip in self._companion_chips:
+                if u == uid:
+                    chip.blockSignals(True)
+                    chip.setChecked(not hidden)
+                    chip.blockSignals(False)
+                    chip.restyle()
+                    break
+
+        # 2. Sync Codex tab cards
+        if hasattr(self, "_refresh_codex_sync"):
+            self._refresh_codex_sync()
+
+        if hasattr(self, "_update_companion_tag"):
+            self._update_companion_tag()
+
+    def _unhide_last_unit(self) -> None:
+        if not self._last_hidden_unit:
+            return
+        uid, _name = self._last_hidden_unit
+        self._set_unit_hidden(uid, False)
+        self._last_hidden_unit = None
+
+    def _unhide_last_comp(self) -> None:
+        if not self._last_hidden_comp:
+            return
+        uid, _name = self._last_hidden_comp
+        self._set_companion_hidden(uid, False)
+        self._last_hidden_comp = None
 
     def _center(self, widget):
         w = QtWidgets.QWidget()
@@ -688,13 +781,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
         # Stop Server Diagnostics workers
         try:
-            if hasattr(self, "_scan_worker") and self._scan_worker:
-                self._scan_worker.stop()
-                self._scan_worker.wait(1000)
-            if hasattr(self, "_ping_worker") and self._ping_worker:
-                if hasattr(self._ping_worker, "stop"):
-                    self._ping_worker.stop()
-                self._ping_worker.wait(1000)
+            self._server_cleanup()
         except Exception:
             pass
 

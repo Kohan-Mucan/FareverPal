@@ -42,7 +42,15 @@ ORANGE = "#f1a02b"      # tertiary-container
 NEUTRAL = DIM
 DANGER = "#ffb4ab"      # error - enemy / big DPS number
 GOOD = "#4ade80"        # success
+LIME = "#facc15"        # tracked large gatherables
 CHEST = GOLD
+
+HERO = {
+    "warrior": ORANGE,
+    "rogue": GOOD,
+    "mage": ACCENT,
+    "priest": GOLD,
+}
 
 # fonts
 UI_FONT = "Inter"

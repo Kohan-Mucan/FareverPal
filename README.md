@@ -62,21 +62,13 @@ companion/
   CREDITS.md         third-party attribution
 ```
 
-Data (CDB sheets, icons, names, chest positions) is reused from the sibling
-`htdocs/` workspace via `paths.py`.
+Data (CDB sheets, icons, names, chest positions) is stored in the `assets/`
+directory and consolidated into the app during build.
 
 ## Utility Scripts
 
-The `htdocs/tools/` directory contains several helper scripts and batch files for
-data management and asset extraction:
-
-- `htdocs/tools/Run_Scripts.bat` — Launches `script_runner.py` for general tasks.
-- `htdocs/tools/run_sync_data.bat` — Launches `sync_data.py` to synchronize collected
-  collectibles.
-- `htdocs/tools/extract_assets.bat` — Helper for extracting game assets (sheets, icons)
-  from the game files.
-- `htdocs/tools/extract_critters.py` — Generates `critters.json` from the game's unit
-  data.
+The `farever_companion/data/tools/` directory contains helper scripts for
+data management and asset extraction.
 
 ## Run from source
 

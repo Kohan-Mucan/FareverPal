@@ -12,9 +12,11 @@ from .proc import Proc, ProcError
 from .hl import Hl
 from .scene import Scene, Entity, Element
 from .player import PlayerLocator
+from .announcement_reader import AnnouncementReader
 from .camera import ViewCamera
 from .chest_resolver import ChestResolver, ChestRow
 from .damage_source import DamageSourceManager
+from .rift_tracker import RiftTracker, RiftStatus
 from . import attributes
 from ..combat.dps import DpsMeter
 from ..constants import OFF_HERO_OWNERPLAYER
@@ -42,8 +44,10 @@ class LiveModel:
         self.hl = Hl(proc)
         self.scene = Scene(proc, self.hl)
         self.locator = PlayerLocator(proc, self.hl)
+        self.announcements = AnnouncementReader(proc, self.hl, self.locator)
         self.view = ViewCamera(proc, self.hl, self.locator.app)
         self.chests_resolver = ChestResolver()
+        self.rift_tracker = RiftTracker(self)
         self._units_cache: list[Entity] = []
         self._units_at = 0.0
         self.dungeon_boss: str | None = None
@@ -203,29 +207,19 @@ class LiveModel:
                 
             if not (e.is_enemy or (enemies_only and e.is_hero)):
                 continue
-            if udata.is_companion(e.unit_id):
-                continue
             if e.addr == p_addr:
                 continue
             
-            # Filter out internal engine objects (Spawners, Patrol paths, triggers, Bumpers, Portals)
-            uid_l = (e.unit_id or "").lower()
-            found_internal = False
-            if not udata.is_unique(e.unit_id):
-                for s in ("patrol", "partol", "patrole", "spawn", "trigger", "marker", "point", "target", "area", "path", "route", "bumper", "idle", "portal"):
-                    if s in uid_l:
-                        found_internal = True
-                        break
-            if found_internal:
+            # Use unified codex unit filtering to exclude internal engine objects, templates,
+            # and non-combat types like Mounts or Critters (companions).
+            if not udata.is_codex_unit(e.unit_id):
                 continue
                 
             pool.append(e)
         if hide_types:
             pool = [e for e in pool if udata.unit_type(e.unit_id) not in hide_types]
         if hide_units:
-            from ..data import names
-            hidden_names = {names.unit_name(uid) for uid in hide_units if uid}
-            pool = [e for e in pool if e.unit_id not in hide_units and names.unit_name(e.unit_id) not in hidden_names]
+            pool = [e for e in pool if e.unit_id not in hide_units]
         if player_zone:
             from ..geo import zones as geo_zones
             pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
@@ -252,9 +246,7 @@ class LiveModel:
                 if e.is_player_owned:
                     continue
                 if hide_units:
-                    from ..data import names
-                    hidden_names = {names.unit_name(uid) for uid in hide_units if uid}
-                    if e.unit_id in hide_units or names.unit_name(e.unit_id) in hidden_names:
+                    if e.unit_id in hide_units:
                         continue
                 pool.append(e)
 
@@ -341,9 +333,14 @@ class LiveModel:
                               use_2d: bool = False):
         pool = [e for e in self.units()
                 if e.is_hero and e.addr != self.player_addr]
-        if player_zone:
+        # For group members, we ignore player_zone filtering if they are close enough (within max_dist)
+        # as zone boundaries shouldn't hide teammates.
+        if player_zone and max_dist > 0:
             from ..geo import zones as geo_zones
-            pool = [e for e in pool if geo_zones.resolve_zone(e.x, e.y, e.z) == player_zone]
+            # Keep them if they are in the same zone OR within the distance limit
+            # (which _ranked will filter anyway).
+            # Actually, just removing the zone filter for group members is better.
+            pass
         return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
     def live_chests(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
@@ -589,6 +586,9 @@ class LiveModel:
             return self.scene.is_rift(self.player_addr)
         except ProcError:
             return False
+
+    def rift_status(self) -> RiftStatus:
+        return self.rift_tracker.get_status()
 
 
     def detected_mode(self) -> str | None:

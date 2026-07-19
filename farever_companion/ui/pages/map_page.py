@@ -64,10 +64,10 @@ class MapPageMixin:
         hide_coll = C.LabeledToggle("Hide collected", self.s.minimap_hide_collected)
         hide_coll.toggled.connect(self._set_minimap_hide_collected)
         self._hide_collected_toggle = hide_coll
-        
+
         limit_range = C.LabeledToggle("Limit by range (400m)", self.s.minimap_limit_by_zone)
         limit_range.toggled.connect(lambda on: (self._set("minimap_limit_by_zone", on), self._touch_minimap()))
-        
+
         n = len(layer_items)
         grid.addWidget(hide_coll, n // 3, n % 3)
         grid.addWidget(limit_range, (n + 1) // 3, (n + 1) % 3)

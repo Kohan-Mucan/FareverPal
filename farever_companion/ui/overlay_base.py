@@ -84,7 +84,10 @@ class OverlayWindow(QtWidgets.QWidget):
     request_page = QtCore.Signal(str)
 
     def __init__(self, title: str, settings=None, geo_key: str = "", parent=None):
-        super().__init__(parent)
+        # Decouple from main window Z-order/Ownership to prevent clicking the HUD 
+        # from pulling the Control Panel to the front.
+        super().__init__(None)
+        self._main_win = parent
         self._settings = settings
         self._geo_key = geo_key or title
         self._locked = False

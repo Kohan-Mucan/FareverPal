@@ -1,7 +1,7 @@
 """Real game icons -> QPixmap, cached.
 
 Resolves item/unit/skill ids to the extracted PNGs under
-htdocs/assets/icons/<sheet>/<id>.png (the same set the game uses). Scaled
+assets/icons/<sheet>/<id>.png (the same set the game uses). Scaled
 smoothly and cached by (sheet, id, size). Missing icons fall back to a small
 flat placeholder so the UI never breaks on a gap.
 
@@ -54,8 +54,13 @@ def _crop_atlas(atlas_path, x: int, y: int, src_size: int, dst_size: int):
 
 _SHEET_MAP = {
     "units": "units",
+    "unit": "units",
+    "enemies": "units",
+    "enemy": "units",
     "items": "items",
+    "item": "items",
     "skills": "skills",
+    "skill": "skills",
 }
 
 
@@ -70,11 +75,6 @@ def _icon_path(sheet: str, id_: str):
     unique_sheets = [x for x in sheets_to_try if x and not (x in seen or seen.add(x))]
     
     base_dirs = [paths.icons_dir()]
-    local_path = paths.project_root() / "assets" / "icons"
-    sibling_path = paths.project_root().parent / "htdocs" / "assets" / "icons"
-    for path in (local_path, sibling_path):
-        if path not in base_dirs and path.exists():
-            base_dirs.append(path)
             
     for base in base_dirs:
         for s in unique_sheets:
@@ -160,11 +160,14 @@ def tile(sheet: str | None, id_: str | None, size: int, accent: str):
     return pm
 
 
-@lru_cache(maxsize=1024)
-def tile_marker(name: str, size: int, accent: str):
+@lru_cache(maxsize=4096)
+def tile_marker(name: str, size: int, accent: str, outlined: bool = False):
     """Map-marker PNG (assets/map_icons/<name>.png) on the standard accent-
     tinted square tile - the entity-HUD row icon for chests / orbs / world
-    activities, matching the minimap's marker art."""
+    activities, matching the minimap's marker art.
+    If `outlined` is True, uses the organic glow style instead of a square tile."""
+    if outlined:
+        return marker(name, size, accent)
     QtGui, QtCore = _qt()
     pm = QtGui.QPixmap(size, size)
     pm.fill(QtGui.QColor(0, 0, 0, 0))
@@ -204,38 +207,26 @@ def _disk_offsets(r: int):
 @lru_cache(maxsize=4096)
 def outlined(sheet: str | None, id_: str | None, size: int, accent: str,
              border: int = 2):
-    """Game icon drawn as itself with an accent border hugging the PNG's
-    *organic* alpha shape, no square tile. For map markers that should read as
-    the item/enemy art. Built by dilating the icon's silhouette (a thin dark
-    keyline for legibility over the map, then the accent border) and drawing the
-    full-colour icon on top. Missing PNG -> a plain accent dot."""
+    """Game icon drawn as itself with an accent border."""
     QtGui, QtCore = _qt()
     out = QtGui.QPixmap(size, size)
     out.fill(QtGui.QColor(0, 0, 0, 0))
     if not (sheet and id_ and has_icon(sheet, id_)):
-        p = QtGui.QPainter(out)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.setPen(QtCore.Qt.NoPen)
-        p.setBrush(QtGui.QColor(accent))
+        p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.setPen(QtCore.Qt.NoPen); p.setBrush(QtGui.QColor(accent))
         r = size / 2 - border
-        p.drawEllipse(QtCore.QPointF(size / 2, size / 2), r, r)
-        p.end()
+        p.drawEllipse(QtCore.QPointF(size / 2, size / 2), r, r); p.end()
         return out
 
-    g = pixmap(sheet, id_, size - 2 * border)        # room for the border ring
-    keyline = _silhouette(g, "#0b0e14")              # dark, for contrast on art
-    ring = _silhouette(g, accent)
-    ox = (size - g.width()) // 2
-    oy = (size - g.height()) // 2
+    g = pixmap(sheet, id_, size - 2 * (border + 1))
+    keyline, ring = _silhouette(g, "#0b0e14"), _silhouette(g, accent)
+    ox, oy = (size - g.width()) // 2, (size - g.height()) // 2
+    p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+    
+    for dx, dy in _disk_offsets(border + 1): p.drawPixmap(ox + dx, oy + dy, keyline)
 
-    p = QtGui.QPainter(out)
-    p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
-    for dx, dy in _disk_offsets(border + 1):         # outer dark keyline
-        p.drawPixmap(ox + dx, oy + dy, keyline)
-    for dx, dy in _disk_offsets(border):             # accent border
-        p.drawPixmap(ox + dx, oy + dy, ring)
-    p.drawPixmap(ox, oy, g)                           # full-colour icon on top
-    p.end()
+    for dx, dy in _disk_offsets(border): p.drawPixmap(ox + dx, oy + dy, ring)
+    p.drawPixmap(ox, oy, g); p.end()
     return out
 
 
@@ -286,29 +277,34 @@ def asset_icon(sheet_name: str, size: int):
         if not pm.isNull():
             return pm.scaled(size, size, QtCore.Qt.KeepAspectRatio,
                              QtCore.Qt.SmoothTransformation)
+
     return None
 
 
-@lru_cache(maxsize=512)
-def marker(name: str, size: int, border: int = 2):
-    """A colored map-marker PNG (assets/map_icons/<name>.png) drawn with a thin
-    dark organic keyline so it stays legible over the map texture. The icon is
-    already colored, so it is NOT tinted. None if the asset is missing."""
+@lru_cache(maxsize=4096)
+def marker(name: str, size: int, accent: str | None = None, border: int = 2):
+    """A map-marker with optional accent outline."""
     QtGui, QtCore = _qt()
-    g = asset_icon(name, max(1, size - 2 * border))
+    g = asset_icon(name, max(1, size - 2 * (border + 1)))
     if g is None:
-        return None
-    keyline = _silhouette(g, "#0b0e14")
-    out = QtGui.QPixmap(size, size)
-    out.fill(QtGui.QColor(0, 0, 0, 0))
-    ox = (size - g.width()) // 2
-    oy = (size - g.height()) // 2
-    p = QtGui.QPainter(out)
-    p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
-    for dx, dy in _disk_offsets(border):
-        p.drawPixmap(ox + dx, oy + dy, keyline)
-    p.drawPixmap(ox, oy, g)
-    p.end()
+        out = QtGui.QPixmap(size, size); out.fill(QtGui.QColor(0, 0, 0, 0))
+        p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.Antialiasing); p.setPen(QtCore.Qt.NoPen)
+        if accent:
+            p.setBrush(QtGui.QColor(accent)); p.drawEllipse(QtCore.QRectF(border, border, size-2*border, size-2*border))
+        p.end(); return out if accent else None
+
+    keyline, ox, oy = _silhouette(g, "#0b0e14"), (size - g.width()) // 2, (size - g.height()) // 2
+    out = QtGui.QPixmap(size, size); out.fill(QtGui.QColor(0, 0, 0, 0))
+    p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+
+    if accent:
+        ring = _silhouette(g, accent)
+        for dx, dy in _disk_offsets(border + 1): p.drawPixmap(ox + dx, oy + dy, keyline)
+        for dx, dy in _disk_offsets(border): p.drawPixmap(ox + dx, oy + dy, ring)
+    else:
+        for dx, dy in _disk_offsets(1): p.drawPixmap(ox + dx, oy + dy, keyline)
+
+    p.drawPixmap(ox, oy, g); p.end()
     return out
 
 

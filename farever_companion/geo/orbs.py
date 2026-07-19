@@ -7,12 +7,9 @@ attached process.
 """
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
 from functools import lru_cache
-
-from .. import paths
 
 
 @dataclass(frozen=True)
@@ -40,13 +37,15 @@ REGION_NAMES = {
 
 @lru_cache(maxsize=1)
 def load_orbs() -> list[Orb]:
-    try:
-        payload = json.loads(paths.orb_positions_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    from ..data import cdb
+    raw = cdb.lines("orb_positions")
+    # Handle the case where the data is wrapped in a dict {'orbs': [...]}
+    if isinstance(raw, dict):
+        raw = raw.get("orbs", [])
+        
     out = []
-    for o in payload.get("orbs", []):
-        if not o.get("id"):
+    for o in raw:
+        if not isinstance(o, dict) or not o.get("id"):
             continue
         out.append(Orb(
             orb_id=o["id"], x=o["x"], y=o["y"], z=o["z"],

@@ -24,7 +24,7 @@ from ..constants import (   # offsets live in one place; re-exported for callers
     OFF_UNITID, OFF_ELEMID, OFF_ELEMSTATE, UNIT_BLOCK,
     OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
     OFF_MAIN_ACTIVITY, OFF_UATTR, OFF_LEVEL_UNIT, OFF_HEALTH,
-    OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_RIFT_BOOL, OFF_WORLD_MAPID,
+    OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_RIFT_BOOL, OFF_WORLD_MAPID, OFF_WORLDEVENTS_ARR,
     OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES
 )
 
@@ -371,7 +371,57 @@ class Scene:
             if off_sn:
                 sptr = self.hl.ptr(gl + off_sn)
                 if sptr:
-                    return self.hl.hl_string(sptr)
+                    return self.hl.hl_string(sptr) if sptr else None
+
+    def get_live_worldevent_rift_zone(self, pbase: int | None) -> str | None:
+        """Reads active Rift zone from GameLayer.worldEvents -> currentEvents -> activeRift."""
+        gl = self.gamelayer(pbase)
+        if not gl:
+            return None
+        try:
+            we = self.hl.ptr(gl + OFF_WORLDEVENTS_ARR)
+            if not is_ptr(we):
+                return None
+            
+            # st.event.WorldEvents.currentEvents (+0x0098)
+            ce_proxy = self.hl.ptr(we + 0x0098)
+            if not is_ptr(ce_proxy):
+                return None
+            
+            # hxbit.ArrayProxyData.array (+0x0028) -> ArrayDyn
+            arr_dyn = self.hl.ptr(ce_proxy + 0x0028)
+            if not is_ptr(arr_dyn):
+                return None
+            
+            # ArrayDyn.array (+0x0008) -> ArrayObj
+            arr_obj = self.hl.ptr(arr_dyn + 0x0008)
+            if not is_ptr(arr_obj):
+                return None
+            
+            # ArrayObj length (+0x08) & array pointer (+0x10) -> NativeArray
+            length = self.proc.read_i32(arr_obj + 0x08)
+            if length <= 0 or length > 100:
+                return None
+            
+            na_ptr = self.hl.ptr(arr_obj + 0x10) or self.hl.ptr(arr_obj + 0x0C)
+            if not is_ptr(na_ptr):
+                return None
+            
+            # NativeArray elements start at +0x18
+            for i in range(min(length, 10)):
+                evt_ptr = self.hl.ptr(na_ptr + 0x18 + (i * 8))
+                if is_ptr(evt_ptr):
+                    cls_name = self.hl.class_of(evt_ptr) or ""
+                    if "Rift" in cls_name or "WorldEvent" in cls_name:
+                        for str_off in (0x0100, 0x00F4, 0x00EC, 0x00B0):
+                            active_rift_ptr = self.hl.ptr(evt_ptr + str_off)
+                            if is_ptr(active_rift_ptr):
+                                s = self.hl.hl_string(active_rift_ptr)
+                                if s and ("POI" in s or "Rift" in s or "Z1" in s or "Z2" in s):
+                                    return s
+        except Exception:
+            pass
+        return None
 
         # 2. Try Config.shardId / lobbyId
         self.difficulty(pbase)

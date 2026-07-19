@@ -40,6 +40,8 @@ def items(category: str | None = None) -> list[dict]:
 
 
 def icon_sheet(category: str) -> str:
+    if category in ("mounts", "gliders", "companions"):
+        return "collection"
     for c in categories():
         if c.get("key") == category:
             return c.get("icon_sheet") or "item"

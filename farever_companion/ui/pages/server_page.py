@@ -14,6 +14,7 @@ import struct
 import time
 import threading
 import json
+import urllib.request
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -32,36 +33,31 @@ REGIONS = [
         "code": "na",
         "label": "North America",
         "flag": "🇺🇸",
+        "iso": "us",
         "icon": "broadcast",
-        "hosts": [
-            ("148.113.226.212",    6677),
-            ("148.113.228.4",      6389),
-            ("37.187.157.32",      60442),
-        ],
+        "hosts": [],
     },
     {
         "code": "eu",
         "label": "Europe",
         "flag": "🇪🇺",
+        "iso": "eu",
         "icon": "broadcast",
-        "hosts": [
-            ("135.125.19.76",      6031),
-        ],
+        "hosts": [],
     },
     {
         "code": "as",
         "label": "Asia",
         "flag": "🇸🇬",
+        "iso": "sg",
         "icon": "broadcast",
-        "hosts": [
-            ("15.235.228.20",       7100),
-            ("15.235.228.20",       6768),
-        ],
+        "hosts": [],
     },
     {
         "code": "sa",
         "label": "South America",
         "flag": "🇧🇷",
+        "iso": "br",
         "icon": "broadcast",
         "hosts": [],
     },
@@ -69,47 +65,40 @@ REGIONS = [
         "code": "cn",
         "label": "China",
         "flag": "🇨🇳",
+        "iso": "cn",
         "icon": "broadcast",
-        "hosts": [
-            ("43.135.219.50",      6459),
-            ("49.233.72.163",      60442),
-            ("192.144.185.5",      9961),
-        ],
+        "hosts": [],
     },
     # --- Test Servers ---
     {
         "code": "na_test",
         "label": "NA Test",
         "flag": "⚒️ 🇺🇸",
+        "iso": "us",
         "icon": "broadcast",
-        "hosts": [
-            ("148.113.187.116",    6604),
-            ("148.113.226.212",    6777),
-        ],
+        "hosts": [],
     },
     {
         "code": "eu_test",
         "label": "EU Test",
         "flag": "⚒️ 🇪🇺",
+        "iso": "eu",
         "icon": "broadcast",
-        "hosts": [
-            ("135.125.19.80",      6244),
-        ],
+        "hosts": [],
     },
     {
         "code": "as_test",
         "label": "Asia Test",
         "flag": "⚒️ 🇸🇬",
+        "iso": "sg",
         "icon": "broadcast",
-        "hosts": [
-            ("15.235.228.20",       7036),
-            ("15.235.228.20",       7012),
-        ],
+        "hosts": [],
     },
     {
         "code": "sa_test",
         "label": "SA Test",
         "flag": "⚒️ 🇧🇷",
+        "iso": "br",
         "icon": "broadcast",
         "hosts": [],
     },
@@ -117,22 +106,21 @@ REGIONS = [
         "code": "cn_test",
         "label": "China Test",
         "flag": "⚒️ 🇨🇳",
+        "iso": "cn",
         "icon": "broadcast",
-        "hosts": [
-            ("43.135.219.50",      6443),
-            ("49.233.72.163",      60442),
-            ("192.144.185.5",      9912),
-        ],
+        "hosts": [],
     },
     # --- Login Gateways ---
     {
         "code": "login_global",
         "label": "Global Login",
         "flag": "🌐",
+        "iso": "fr",
         "icon": "terminal",
         "hosts": [
             ("37.187.157.32",      60442),
             ("51.83.66.84",        2003),
+            ("51.178.64.48",       60442),
         ],
     },
 ]
@@ -239,12 +227,72 @@ def _reverse_dns(ip: str) -> str:
         return ip
 
 
+_COUNTRY_CACHE = {}
+FLAGS_DIR = Path(config_dir()) / "cache" / "flags"
+FLAGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _download_flag(code: str) -> Path | None:
+    if not code or len(code) != 2:
+        return None
+    code = code.lower()
+    path = FLAGS_DIR / f"{code}.png"
+    if path.exists():
+        return path
+    try:
+        # Using flagcdn.com for high quality small flags
+        url = f"https://flagcdn.com/w40/{code}.png"
+        req = urllib.request.Request(url, headers={"User-Agent": "FareverPal/1.0"})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            path.write_bytes(response.read())
+        return path
+    except Exception:
+        return None
+
+
+def _get_ip_country(ip: str) -> tuple[str, str]:
+    """Returns (country_name, iso_code)"""
+    if ip in _COUNTRY_CACHE:
+        return _COUNTRY_CACHE[ip]
+
+    # Quick check for private/local IPs
+    if ip.startswith(("127.", "192.168.", "10.", "172.16.")):
+        return "LAN", "lan"
+
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,country,countryCode"
+        with urllib.request.urlopen(url, timeout=1.5) as response:
+            data = json.loads(response.read().decode())
+            if data.get("status") == "success":
+                code = data.get("countryCode", "").lower()
+                name = data.get("country", "Unknown")
+                _download_flag(code)
+                res = (name, code)
+                _COUNTRY_CACHE[ip] = res
+                return res
+    except Exception:
+        pass
+
+    return "Unknown", ""
+
+
+def _get_flag_pixmap(code: str, size: int = 24):
+    if not code:
+        return None
+    p = FLAGS_DIR / f"{code.lower()}.png"
+    if p.exists():
+        pm = QtGui.QPixmap(str(p))
+        if not pm.isNull():
+            return pm.scaled(size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Background workers
 # ---------------------------------------------------------------------------
 
 class _PingWorker(QtCore.QThread):
-    result   = QtCore.Signal(str, str, bool, float, str)
+    result   = QtCore.Signal(str, str, bool, float, str, str, str)
     finished = QtCore.Signal()
 
     def __init__(self, regions, active_codes):
@@ -257,34 +305,64 @@ class _PingWorker(QtCore.QThread):
         self._running = False
 
     def run(self):
+        targets = []
         for r in self._regions:
-            if not self._running:
-                break
-            if r["code"] not in self._active_codes:
-                continue
-            for host, port in r["hosts"]:
-                if not self._running:
-                    break
+            if r["code"] in self._active_codes:
+                for host, port in r["hosts"]:
+                    targets.append((r["code"], host, port))
+        
+        if not targets:
+            self.finished.emit()
+            return
+
+        def do_ping(code, host, port):
+            if not self._running: return
+            try:
+                ip = socket.gethostbyname(host)
+                country_name, country_code = _get_ip_country(ip)
+            except OSError:
+                if self._running:
+                    self.result.emit(code, host + ":" + str(port), False, 0.0, "DNS failed", "Unknown", "")
+                return
+            
+            if not self._running: return
+            
+            start = time.perf_counter()
+            ok = False
+            # Try multiple ports for "Black Box" gateways (Shard Port, then common router ports)
+            for test_port in [port, 80, 443]:
                 try:
-                    ip = socket.gethostbyname(host)
-                except OSError:
-                    self.result.emit(r["code"], host + ":" + str(port), False, 0.0, "DNS failed")
-                    continue
-                start = time.perf_counter()
-                try:
-                    with socket.create_connection((host, port), timeout=2.5):
+                    with socket.create_connection((ip, test_port), timeout=1.5):
                         pass
                     ok = True
-                except (socket.timeout, ConnectionRefusedError, OSError):
-                    ok = False
-                ms = (time.perf_counter() - start) * 1000
-                self.result.emit(r["code"], host + ":" + str(port), ok, ms, ip)
-                time.sleep(0.05)
+                    break
+                except (ConnectionRefusedError, OSError) as e:
+                    import socket as s
+                    if not isinstance(e, s.timeout):
+                        ok = True # Refused means the host is alive!
+                        break
+                except Exception:
+                    pass
+            
+            ms = (time.perf_counter() - start) * 1000
+            if self._running:
+                self.result.emit(code, host + ":" + str(port), ok, ms, ip, country_name, country_code)
+
+        threads = []
+        for t in targets:
+            th = threading.Thread(target=do_ping, args=t, daemon=True)
+            th.start()
+            threads.append(th)
+            time.sleep(0.01) # Tiny stagger
+
+        for th in threads:
+            th.join()
+
         self.finished.emit()
 
 
 class _ConnectionScanWorker(QtCore.QThread):
-    new_conn  = QtCore.Signal(str, int, str, float, str)
+    new_conn  = QtCore.Signal(str, int, str, float, str, str, str)
     status    = QtCore.Signal(str)
     pid_found = QtCore.Signal(int)
     pid_lost  = QtCore.Signal()
@@ -339,6 +417,7 @@ class _ConnectionScanWorker(QtCore.QThread):
 
     def _emit_with_metrics(self, ip, port, state):
         hostname = _reverse_dns(ip)
+        country_name, country_code = _get_ip_country(ip)
         start = time.perf_counter()
         try:
             with socket.create_connection((ip, port), timeout=1.5):
@@ -346,7 +425,7 @@ class _ConnectionScanWorker(QtCore.QThread):
             ms = (time.perf_counter() - start) * 1000
         except Exception:
             ms = -1.0
-        self.new_conn.emit(ip, port, hostname, ms, state)
+        self.new_conn.emit(ip, port, hostname, ms, state, country_name, country_code)
 
 
 class _TraceWorker(QtCore.QThread):
@@ -370,13 +449,19 @@ class _TraceWorker(QtCore.QThread):
 
     def run(self):
         import subprocess
+        import re
+        ip_regex = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})")
+
         # Modes:
         # tracert: standard with hostnames
         # tracert_fast: tracert -d (no hostnames)
+        # tracert_geo: tracert -d + GeoIP lookup
         # net_info: ipconfig /flushdns + basic info
         if self.mode == "tracert":
             cmd = ["tracert", self.ip]
         elif self.mode == "tracert_fast":
+            cmd = ["tracert", "-d", self.ip]
+        elif self.mode == "tracert_geo":
             cmd = ["tracert", "-d", self.ip]
         elif self.mode == "net_info":
             cmd = ["powershell", "-Command", "Write-Host '> Flushing DNS...'; ipconfig /flushdns; Write-Host '`n> Local Network Info:'; ipconfig"]
@@ -396,6 +481,18 @@ class _TraceWorker(QtCore.QThread):
                 line = self._proc.stdout.readline()
                 if not line:
                     break
+                
+                # If we are in a traceroute mode, decorate with country info
+                if "tracert" in self.mode:
+                    match = ip_regex.search(line)
+                    if match:
+                        hop_ip = match.group(1)
+                        country_name, country_code = _get_ip_country(hop_ip)
+                        if country_name != "Unknown":
+                            # Use text emoji for text logs
+                            flag = "".join(chr(127397 + ord(c)) for c in country_code.upper()) if country_code else ""
+                            line = line.rstrip() + f"  ({flag} {country_name})\n"
+
                 self.output_ready.emit(line)
 
             self._proc.wait()
@@ -462,9 +559,11 @@ class ServerPageMixin:
         hdr_lay.addStretch(1)
         
         # Tabs for Server Sub-pages
-        self._server_tabs = C.SegmentedControl(["Game Servers", "Live Game IP Scanner", "Network Tracet"],
+        self._server_tabs = C.SegmentedControl(["Game Servers", "Live Game IP Scanner", "Network Trace"],
                                                current="Game Servers")
         self._server_tabs.currentChanged.connect(self._on_tab_changed)
+        for opt_text, btn in self._server_tabs._btns.items():
+            btn.clicked.connect(lambda _, t=opt_text: self.server_stack.setCurrentIndex({"Game Servers": 0, "Live Game IP Scanner": 1, "Network Trace": 2}.get(t, 0)))
         hdr_lay.addWidget(self._server_tabs)
         
         root.addLayout(hdr_lay)
@@ -479,27 +578,16 @@ class ServerPageMixin:
         self.server_stack = QtWidgets.QStackedWidget()
         root.addWidget(self.server_stack, 1)
 
-        self._build_integrated_server_page(self.server_stack)
-        
+        self.server_stack.addWidget(self._build_ping_panel())
+        self.server_stack.addWidget(self._build_scanner_panel())
+        self.server_stack.addWidget(self._build_trace_panel())
+
+        self._load_saved_card_states()
         return page
 
     def _on_tab_changed(self, text):
-        mapping = {"Game Servers": 0, "Live Game IP Scanner": 1, "Network Tracet": 2}
+        mapping = {"Game Servers": 0, "Live Game IP Scanner": 1, "Network Trace": 2}
         self.server_stack.setCurrentIndex(mapping.get(text, 0))
-
-    def _build_integrated_server_page(self, stack):
-        self._ping_worker   = None
-        self._scan_worker   = None
-        self._trace_worker  = None
-        self._ping_best     = {}
-        self._scan_captured = set()
-        self._ping_cards    = {}
-
-        stack.addWidget(self._build_ping_panel())
-        stack.addWidget(self._build_scanner_panel())
-        stack.addWidget(self._build_trace_panel())
-
-        self._load_saved_card_states()
 
     # ===============================================================
     # TOP: Ping tester
@@ -511,7 +599,7 @@ class ServerPageMixin:
         v.setSpacing(10)
 
         top_bar = QtWidgets.QHBoxLayout()
-        lbl = QtWidgets.QLabel("Region Ping Test (Dynamic IPs — May be outdated)")
+        lbl = QtWidgets.QLabel("Region Ping Test (Dynamic IPs — Per Shard. Use IP Scanner then right-click to add IPs here)")
         lbl.setStyleSheet("font-size:13px;font-weight:700;color:" + theme.TEXT + ";")
         top_bar.addWidget(lbl)
         
@@ -536,6 +624,7 @@ class ServerPageMixin:
         self._ping_btn = QtWidgets.QPushButton("Test Selected")
         self._ping_btn.setObjectName("Accent")
         self._ping_btn.setFixedHeight(28)
+        self._ping_btn.setMinimumWidth(110)
         self._ping_btn.clicked.connect(self._ping_run)
         top_bar.addWidget(self._ping_btn)
         v.addLayout(top_bar)
@@ -561,15 +650,22 @@ class ServerPageMixin:
         self._refresh_ping_grid()
         v.addWidget(self._ping_grid_widget)
 
-        self._ping_table = QtWidgets.QTableWidget(0, 5)
+        self._ping_table = QtWidgets.QTableWidget(0, 7)
         self._ping_table.setHorizontalHeaderLabels(
-            ["Location", "IP", "Port", "Status", "Latency"])
+            ["#", "Location", "Country", "IP", "Port", "Status", "Latency"])
         hdr = self._ping_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(6, QtWidgets.QHeaderView.Interactive)
+        self._ping_table.setColumnWidth(1, 200) # Loc
+        self._ping_table.setColumnWidth(2, 160) # Country
+        self._ping_table.setColumnWidth(4, 80)  # Port
+        self._ping_table.setColumnWidth(5, 200) # Status
+        self._ping_table.setColumnWidth(6, 110) # Latency
         self._ping_table.verticalHeader().setVisible(False)
         self._ping_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._ping_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -629,14 +725,23 @@ class ServerPageMixin:
         vl.setContentsMargins(10, 10, 10, 10)
         vl.setSpacing(4)
 
-        flag = QtWidgets.QLabel(region["flag"])
-        flag.setStyleSheet("font-size:24px;background:transparent;")
-        flag.setAlignment(QtCore.Qt.AlignCenter)
-        vl.addWidget(flag)
+        flag_container = QtWidgets.QLabel()
+        flag_container.setAlignment(QtCore.Qt.AlignCenter)
+        flag_container.setMinimumHeight(24)
+        
+        # Try loading PNG, fallback to emoji
+        iso = region.get("iso", "")
+        _download_flag(iso)
+        pm = _get_flag_pixmap(iso, 32)
+        if pm:
+            flag_container.setPixmap(pm)
+        else:
+            flag_container.setText(region["flag"])
+            flag_container.setStyleSheet("font-size:24px;background:transparent;")
+            
+        vl.addWidget(flag_container)
 
         lbl_text = region["label"]
-        if "Login" in lbl_text:
-            lbl_text = lbl_text.replace("Login", "Log")
         name = QtWidgets.QLabel(lbl_text)
         name.setAlignment(QtCore.Qt.AlignCenter)
         name.setStyleSheet("font-size:12px;font-weight:700;color:" + theme.TEXT + ";background:transparent;")
@@ -694,30 +799,25 @@ class ServerPageMixin:
         self.s.server_custom_hosts = {}
         self.s.save()
         
-        # Hard reset regions hosts mapping dynamically to defaults
-        default_regions = [
-            ("na", [("148.113.226.212", 6677), ("148.113.228.4", 6389), ("37.187.157.32", 60442)]),
-            ("eu", [("135.125.19.76", 6031)]),
-            ("as", [("15.235.228.20", 7100), ("15.235.228.20", 6768)]),
-            ("sa", []),
-            ("cn", [("43.135.219.50", 6459), ("49.233.72.163", 60442), ("192.144.185.5", 9961)]),
-            ("na_test", [("148.113.187.116", 6604), ("148.113.226.212", 6777)]),
-            ("eu_test", [("135.125.19.80", 6244)]),
-            ("as_test", [("15.235.228.20", 7036), ("15.235.228.20", 7012)]),
-            ("sa_test", []),
-            ("cn_test", [("43.135.219.50", 6443), ("49.233.72.163", 60442), ("192.144.185.5", 9912)]),
-            ("login_global", [("37.187.157.32", 60442), ("51.83.66.84", 2003)]),
-        ]
-        for code, hosts in default_regions:
-            for region in REGIONS:
-                if region["code"] == code:
-                    region["hosts"] = hosts
+        # Hard reset regions hosts mapping to empty, except for Global Login
+        for region in REGIONS:
+            if region["code"] == "login_global":
+                region["hosts"] = [
+                    ("37.187.157.32", 60442),
+                    ("51.83.66.84", 2003),
+                    ("51.178.64.48", 60442)
+                ]
+            else:
+                region["hosts"] = []
                     
-        self._ping_status.setText("All server IPs have been reset to factory defaults.")
+        self._ping_status.setText("All server IPs have been reset (Login servers kept).")
+        self._ping_status.setStyleSheet("")
         self._ping_table.setRowCount(0)
 
     def _ping_run(self):
         if self._ping_worker and self._ping_worker.isRunning():
+            self._ping_worker.stop()
+            self._ping_status.setText("Stopping test...")
             return
             
         # Only ping cards that are both visible in the current view and active (selected)
@@ -732,9 +832,16 @@ class ServerPageMixin:
 
         self._ping_table.setRowCount(0)
         self._ping_best = {}
-        self._ping_btn.setEnabled(False)
-        self._ping_btn.setText("Testing...")
-        self._ping_status.setText("Probing selected servers...")
+        self._ping_btn.setText("Stop")
+
+        # Count total hosts to be tested
+        total_hosts = 0
+        for r in REGIONS:
+            if r["code"] in active_codes:
+                total_hosts += len(r["hosts"])
+
+        self._ping_status.setText(f"Probing {total_hosts} selected servers...")
+        self._ping_status.setStyleSheet("color: " + _STATUS_COLORS["ok"] + "; font-weight: bold;")
         
         for code, card in self._ping_cards.items():
             if code in active_codes:
@@ -749,49 +856,9 @@ class ServerPageMixin:
         self._ping_worker.finished.connect(self._ping_on_finished)
         self._ping_worker.start()
 
-    @QtCore.Slot(str, str, bool, float, str)
-    def _ping_on_result(self, code, host_port, ok, ms, ip):
-        row = self._ping_table.rowCount()
-        self._ping_table.insertRow(row)
-
-        def cell(txt, color=None, bold=False):
-            it = QtWidgets.QTableWidgetItem(txt)
-            it.setTextAlignment(QtCore.Qt.AlignCenter)
-            if color:
-                it.setForeground(QtGui.QColor(color))
-            if bold:
-                f = it.font()
-                f.setBold(True)
-                it.setFont(f)
-            return it
-
-        region = next((r for r in REGIONS if r["code"] == code), None)
-        lbl = region["label"] if region else code
-        if "Login" in lbl:
-            lbl = lbl.replace("Login", "").strip()
-        
-        parts = host_port.split(":")
-        port_txt = parts[1] if len(parts) > 1 else ""
-
-        self._ping_table.setItem(row, 0, cell(lbl))
-        self._ping_table.setItem(row, 1, cell(ip if ip != "DNS failed" else "--"))
-        self._ping_table.setItem(row, 2, cell(port_txt))
-
-        if ip == "DNS failed":
-            sc, st = _STATUS_COLORS["dns_fail"], "DNS FAIL"
-        elif ok:
-            sc, st = _STATUS_COLORS["ok"], "OK"
-        else:
-            sc, st = _STATUS_COLORS["fail"], "TIMEOUT"
-        self._ping_table.setItem(row, 3, cell(st, sc, bold=True))
-
-        ms_txt = str(round(ms)) + " ms" if ms > 0 else "--"
-        ms_c = (_STATUS_COLORS["ok"] if ok and ms < 150
-                else _STATUS_COLORS["warn"] if ok and ms < 350
-                else _STATUS_COLORS["fail"] if ok
-                else _STATUS_COLORS["pending"])
-        self._ping_table.setItem(row, 4, cell(ms_txt, ms_c))
-
+    @QtCore.Slot(str, str, bool, float, str, str, str)
+    def _ping_on_result(self, code, host_port, ok, ms, ip, country_name, country_code):
+        # 1. Update best metrics and Card UI regardless of success (so card shows FAIL if all fail)
         prev_ok, prev_ms = self._ping_best.get(code, (False, float("inf")))
         if ok and (not prev_ok or ms < prev_ms):
             self._ping_best[code] = (True, ms)
@@ -810,10 +877,59 @@ class ServerPageMixin:
                 card["status_lbl"].setStyleSheet(
                     "font-size:11px;font-weight:bold;color:" + _STATUS_COLORS["fail"] + ";background:transparent;")
 
+        # 2. Only show successful connections in the results table
+        if not ok:
+            return
+
+        row = self._ping_table.rowCount()
+        self._ping_table.insertRow(row)
+
+        def cell(txt, color=None, bold=False, icon_code=None):
+            it = QtWidgets.QTableWidgetItem(txt)
+            it.setTextAlignment(QtCore.Qt.AlignCenter)
+            if color:
+                it.setForeground(QtGui.QColor(color))
+            if bold:
+                f = it.font()
+                f.setBold(True)
+                it.setFont(f)
+            if icon_code:
+                pm = _get_flag_pixmap(icon_code, 16)
+                if pm:
+                    it.setIcon(QtGui.QIcon(pm))
+            return it
+
+        region = next((r for r in REGIONS if r["code"] == code), None)
+        lbl = region["label"] if region else code
+        
+        parts = host_port.split(":")
+        port_txt = parts[1] if len(parts) > 1 else ""
+
+        self._ping_table.setItem(row, 0, cell(str(row + 1), _STATUS_COLORS["ok"], bold=True))
+        self._ping_table.setItem(row, 1, cell(lbl))
+        self._ping_table.setItem(row, 2, cell(country_name, icon_code=country_code))
+        self._ping_table.setItem(row, 3, cell(ip if ip != "DNS failed" else "--"))
+        self._ping_table.setItem(row, 4, cell(port_txt))
+
+        sc, st = _STATUS_COLORS["ok"], "ESTABLISHED"
+        self._ping_table.setItem(row, 5, cell(st, sc, bold=True))
+
+        ms_txt = str(round(ms)) + " ms"
+        ms_c = (_STATUS_COLORS["ok"] if ms < 150
+                else _STATUS_COLORS["warn"] if ms < 350
+                else _STATUS_COLORS["fail"])
+        self._ping_table.setItem(row, 6, cell(ms_txt, ms_c))
+
     @QtCore.Slot()
     def _ping_on_finished(self):
         self._ping_btn.setEnabled(True)
         self._ping_btn.setText("Test Selected")
+        self._ping_status.setStyleSheet("")
+        
+        if not self._ping_best:
+            self._ping_status.setText("Test stopped or no results.")
+            return
+
         ok_r   = [c for c, (ok, _) in self._ping_best.items() if ok]
         fail_r = [c for c, (ok, _) in self._ping_best.items() if not ok]
         ok_s   = ", ".join(r.upper() for r in ok_r) or "none"
@@ -902,22 +1018,30 @@ class ServerPageMixin:
         self._scan_status_lbl = QtWidgets.QLabel("")
         self._scan_status_lbl.setObjectName("Muted")
         srow.addWidget(self._scan_status_lbl)
+        
         srow.addSpacing(10)
         self._scan_count_lbl = QtWidgets.QLabel("0 captured")
         self._scan_count_lbl.setObjectName("Muted")
         srow.addWidget(self._scan_count_lbl)
         v.addLayout(srow)
 
-        self._scan_table = QtWidgets.QTableWidget(0, 6)
+        self._scan_table = QtWidgets.QTableWidget(0, 8)
         self._scan_table.setHorizontalHeaderLabels(
-            ["#", "Remote IP", "Port", "Hostname", "State", "Ping"])
-        self._scan_table.setColumnHidden(3, True)
+            ["#", "Location", "Country", "IP", "Port", "Status", "Latency", "Hostname"])
+        self._scan_table.setColumnHidden(7, True)
         hdr = self._scan_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
-        hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.Interactive)
+        hdr.setSectionResizeMode(6, QtWidgets.QHeaderView.Interactive)
+        self._scan_table.setColumnWidth(1, 200) # Loc
+        self._scan_table.setColumnWidth(2, 160) # Country
+        self._scan_table.setColumnWidth(4, 80)  # Port
+        self._scan_table.setColumnWidth(5, 200) # Status
+        self._scan_table.setColumnWidth(6, 110) # Latency
         self._scan_table.verticalHeader().setVisible(False)
         self._scan_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._scan_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -960,8 +1084,8 @@ class ServerPageMixin:
         item = self._scan_table.itemAt(pos)
         if not item: return
         row = item.row()
-        ip_item = self._scan_table.item(row, 1)
-        port_item = self._scan_table.item(row, 2)
+        ip_item = self._scan_table.item(row, 3)
+        port_item = self._scan_table.item(row, 4)
         if not ip_item or not ip_item.text() or not port_item: return
         ip = ip_item.text()
         port = port_item.text()
@@ -973,9 +1097,27 @@ class ServerPageMixin:
         
         # Build "Add to Region" submenus dynamically
         add_menu = menu.addMenu("Add IP to Region")
+        
+        # 1. Main Game Servers
         for region in REGIONS:
+            if "_test" in region["code"] or "login" in region["code"]: continue
             act = add_menu.addAction(region["label"])
-            # Bind parameters inside lambda closure
+            act.triggered.connect(lambda checked=False, r_code=region["code"], r_ip=ip, r_port=port: self._manual_add_ip(r_code, r_ip, r_port))
+        
+        add_menu.addSeparator()
+        
+        # 2. Test Servers
+        for region in REGIONS:
+            if "_test" not in region["code"]: continue
+            act = add_menu.addAction(region["label"])
+            act.triggered.connect(lambda checked=False, r_code=region["code"], r_ip=ip, r_port=port: self._manual_add_ip(r_code, r_ip, r_port))
+            
+        add_menu.addSeparator()
+        
+        # 3. Login Gateways
+        for region in REGIONS:
+            if "login" not in region["code"]: continue
+            act = add_menu.addAction(region["label"])
             act.triggered.connect(lambda checked=False, r_code=region["code"], r_ip=ip, r_port=port: self._manual_add_ip(r_code, r_ip, r_port))
             
         selected = menu.exec_(self._scan_table.viewport().mapToGlobal(pos))
@@ -993,8 +1135,10 @@ class ServerPageMixin:
         
         # Update active in-memory table and get new list
         new_hosts = []
+        region_label = ""
         for region in REGIONS:
             if region["code"] == code:
+                region_label = region["label"]
                 # Add to existing hosts if not duplicate
                 new_entry = (ip, port)
                 if new_entry not in region["hosts"]:
@@ -1007,6 +1151,14 @@ class ServerPageMixin:
         self.s.server_custom_hosts = custom_hosts
         self.s.save()
         
+        # Update UI table immediately to show the new location
+        for row in range(self._scan_table.rowCount()):
+            ip_item = self._scan_table.item(row, 3)
+            if ip_item and ip_item.text() == ip:
+                loc_item = self._scan_table.item(row, 1)
+                if loc_item:
+                    loc_item.setText(region_label)
+
         self._scan_status_lbl.setText(f"Added {ip}:{port} to {code.upper()} targets.")
         self._ping_status.setText(f"{code.upper()} targets updated. Ready to re-test.")
 
@@ -1074,24 +1226,23 @@ class ServerPageMixin:
     def _scan_copy_ips(self):
         lines = []
         for row in range(self._scan_table.rowCount()):
-            ip    = self._scan_table.item(row, 1)
-            port  = self._scan_table.item(row, 2)
-            host  = self._scan_table.item(row, 3)
-            state = self._scan_table.item(row, 4)
-            ping  = self._scan_table.item(row, 5)
+            loc     = self._scan_table.item(row, 1)
+            country = self._scan_table.item(row, 2)
+            ip      = self._scan_table.item(row, 3)
+            port    = self._scan_table.item(row, 4)
+            state   = self._scan_table.item(row, 5)
+            ping    = self._scan_table.item(row, 6)
+            host    = self._scan_table.item(row, 7)
             if ip and port:
                 ip_txt = ip.text()
                 port_val = port.text()
+                loc_txt = loc.text() if loc else "Unassigned"
+                country_txt = country.text() if country else ""
                 host_txt = host.text() if host else ""
                 state_txt = state.text() if state else "UNKNOWN"
                 ping_txt = ping.text() if ping else "--"
                 
-                # Classify type
-                t_label = "Game Server"
-                if port_val == "60442" or port_val == "2003":
-                    t_label = "Login Gateway"
-                
-                suffix = f"  # {t_label} | State: {state_txt} | Ping: {ping_txt} | Host: {host_txt}"
+                suffix = f"  # {loc_txt} | {country_txt} | State: {state_txt} | Latency: {ping_txt} | Host: {host_txt}"
                 lines.append(ip_txt + ":" + port_val + suffix)
         if lines:
             QtWidgets.QApplication.clipboard().setText("\n".join(lines))
@@ -1103,7 +1254,7 @@ class ServerPageMixin:
     def _scan_copy_unique_ips(self):
         ips = set()
         for row in range(self._scan_table.rowCount()):
-            ip_item = self._scan_table.item(row, 1)
+            ip_item = self._scan_table.item(row, 3)
             if ip_item and ip_item.text():
                 ips.add(ip_item.text())
         
@@ -1144,8 +1295,8 @@ class ServerPageMixin:
         else:
             self._scan_status_lbl.setText("No IPs found for those regions.")
 
-    @QtCore.Slot(str, int, str, float, str)
-    def _scan_on_new_conn(self, remote_ip, port, hostname, ping_ms, state):
+    @QtCore.Slot(str, int, str, float, str, str, str)
+    def _scan_on_new_conn(self, remote_ip, port, hostname, ping_ms, state, country_name, country_code):
         key = remote_ip + ":" + str(port)
         if key in self._scan_captured:
             return
@@ -1154,8 +1305,8 @@ class ServerPageMixin:
         row = self._scan_table.rowCount()
         self._scan_table.insertRow(row)
 
-        def cell(txt, color=None, bold=False):
-            it = QtWidgets.QTableWidgetItem(txt)
+        def cell(txt, color=None, bold=False, icon_code=None):
+            it = QtWidgets.QTableWidgetItem(str(txt))
             it.setTextAlignment(QtCore.Qt.AlignCenter)
             if color:
                 it.setForeground(QtGui.QColor(color))
@@ -1163,21 +1314,44 @@ class ServerPageMixin:
                 f = it.font()
                 f.setBold(True)
                 it.setFont(f)
+            if icon_code:
+                pm = _get_flag_pixmap(icon_code, 16)
+                if pm:
+                    it.setIcon(QtGui.QIcon(pm))
             return it
 
         self._scan_table.setItem(row, 0, cell(str(row + 1), theme.ACCENT, bold=True))
-        self._scan_table.setItem(row, 1, cell(remote_ip))
+        
+        # Determine Location Label
+        loc_label = "Unassigned"
+        for r in REGIONS:
+            found = False
+            for h, _ in r.get("hosts", []):
+                if h == remote_ip:
+                    found = True
+                    break
+            if found:
+                loc_label = r["label"]
+                break
+            
+        self._scan_table.setItem(row, 1, cell(loc_label))
+
+        # Country
+        self._scan_table.setItem(row, 2, cell(country_name, icon_code=country_code))
+
+        # IP
+        self._scan_table.setItem(row, 3, cell(remote_ip))
+
+        # Port
         port_color = (_STATUS_COLORS["ok"]
                       if port in (443, 7777, 7778, 80) else None)
-        self._scan_table.setItem(row, 2, cell(str(port), port_color))
+        self._scan_table.setItem(row, 4, cell(str(port), port_color))
 
-        # Hostname (hidden column)
-        self._scan_table.setItem(row, 3, cell(hostname))
-
+        # Status (State)
         state_color = (_STATUS_COLORS["ok"]   if state == "ESTABLISHED"
                        else _STATUS_COLORS["warn"] if state == "SYN_SENT"
                        else _STATUS_COLORS["pending"])
-        self._scan_table.setItem(row, 4, cell(state, state_color))
+        self._scan_table.setItem(row, 5, cell(state, state_color))
 
         # Ping column
         ms_txt = f"{round(ping_ms)} ms" if ping_ms >= 0 else "--"
@@ -1185,7 +1359,10 @@ class ServerPageMixin:
                     else _STATUS_COLORS["warn"] if ping_ms >= 0 and ping_ms < 350
                     else _STATUS_COLORS["fail"] if ping_ms >= 0
                     else _STATUS_COLORS["pending"])
-        self._scan_table.setItem(row, 5, cell(ms_txt, ms_color, bold=(ping_ms >= 0)))
+        self._scan_table.setItem(row, 6, cell(ms_txt, ms_color, bold=(ping_ms >= 0)))
+
+        # Hostname (hidden column)
+        self._scan_table.setItem(row, 7, cell(hostname))
 
         self._scan_table.scrollToBottom()
         self._scan_count_lbl.setText(str(len(self._scan_captured)) + " captured")
@@ -1227,6 +1404,13 @@ class ServerPageMixin:
         self._trace_fast_btn.setToolTip("Fast Trace (No Hostnames)")
         self._trace_fast_btn.clicked.connect(lambda: self._start_trace(self._manual_ip_input.text(), "tracert_fast"))
         hrow.addWidget(self._trace_fast_btn)
+
+        self._trace_geo_btn = QtWidgets.QPushButton("Geo")
+        self._trace_geo_btn.setObjectName("Accent")
+        self._trace_geo_btn.setFixedHeight(28)
+        self._trace_geo_btn.setToolTip("Fast Trace + Country Lookup")
+        self._trace_geo_btn.clicked.connect(lambda: self._start_trace(self._manual_ip_input.text(), "tracert_geo"))
+        hrow.addWidget(self._trace_geo_btn)
 
         self._net_info_btn = QtWidgets.QPushButton("Net Info")
         self._net_info_btn.setObjectName("Outline")
@@ -1270,19 +1454,21 @@ class ServerPageMixin:
         return w
 
     def _start_trace(self, ip: str, mode: str = "tracert"):
+        # Stop any existing worker before starting a new one
         if self._trace_worker and self._trace_worker.isRunning():
             self._trace_worker.stop()
-            self._trace_worker.wait()
+            self._trace_worker.wait(1000) # Give it a second to die
 
         # Jump to Trace tab
-        self._server_tabs.setCurrentText("Network Tracet")
-        self._on_tab_changed("Network Tracet")
+        self._server_tabs.setCurrentText("Network Trace")
+        self.server_stack.setCurrentIndex(2)
         
         label_text = f"{mode.upper()}"
         if ip: label_text += f": {ip}"
         self._trace_target_lbl.setText(label_text)
         
-        self._trace_log.appendPlainText(f"\n> Starting {mode} {ip if ip else ''}...\n")
+        # Use append with clear line breaks to prevent jumbled logs
+        self._trace_log.appendPlainText(f"\n[ --- Starting {mode} {ip if ip else ''} --- ]")
         self._trace_stop_btn.setEnabled(True)
 
         self._trace_worker = _TraceWorker(ip, mode)
@@ -1293,22 +1479,20 @@ class ServerPageMixin:
     def _stop_trace(self):
         if self._trace_worker and self._trace_worker.isRunning():
             self._trace_worker.stop()
-            self._trace_worker.wait()
+            self._trace_worker.wait(500)
             self._trace_log.appendPlainText("\n[Diagnostic Stopped by User]")
         self._trace_stop_btn.setEnabled(False)
 
     @QtCore.Slot(str)
     def _on_trace_output(self, text):
-        self._trace_log.insertPlainText(text)
-        sb = self._trace_log.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        # Use appendPlainText for thread-safe sequential logging
+        self._trace_log.appendPlainText(text.strip())
 
     @QtCore.Slot()
     def _on_trace_finished(self):
         self._trace_log.appendPlainText("\n[Diagnostic Complete]")
         self._trace_stop_btn.setEnabled(False)
 
-    @QtCore.Slot(str)
     def _scan_on_status(self, msg):
         self._scan_status_lbl.setText(msg)
 
@@ -1319,3 +1503,26 @@ class ServerPageMixin:
     @QtCore.Slot()
     def _scan_on_pid_lost(self):
         self._scan_pid_lbl.setText("Farever.exe not running")
+
+    def _server_cleanup(self):
+        """Force-stop all background diagnostic workers to prevent shutdown crashes."""
+        workers = []
+        if hasattr(self, "_ping_worker") and self._ping_worker:
+            workers.append(self._ping_worker)
+        if hasattr(self, "_scan_worker") and self._scan_worker:
+            workers.append(self._scan_worker)
+        if hasattr(self, "_trace_worker") and self._trace_worker:
+            workers.append(self._trace_worker)
+
+        for w in workers:
+            if w.isRunning():
+                w.stop()
+                # Wait up to 2s for graceful exit
+                if not w.wait(2000):
+                    w.terminate()
+                    w.wait()
+
+        # Only clear references after we are sure threads are joined
+        self._ping_worker = None
+        self._scan_worker = None
+        self._trace_worker = None

@@ -5,12 +5,9 @@ Computes the active zone dynamically based on the closest static anchor
 """
 from __future__ import annotations
 
-import math
-import json
 from functools import lru_cache
 from . import orbs as geo_orbs
 from . import chests as geo_chests
-from .. import paths
 
 @lru_cache(maxsize=1)
 def zone_parent_map() -> dict[str, str]:
@@ -42,6 +39,7 @@ def get_area_id(zone_id: str | None) -> str | None:
 @lru_cache(maxsize=1)
 def load_anchors() -> list[tuple[float, float, float, str]]:
     """Combined list of (x, y, z, zone_id) from orbs and POIs for zone resolution."""
+    from ..data import cdb
     anchors = []
     
     # 1. Add Orbs
@@ -50,17 +48,11 @@ def load_anchors() -> list[tuple[float, float, float, str]]:
             anchors.append((o.x, o.y, o.z, o.zone))
             
     # 2. Add POIs (Obelisks, Respawn Points, Dungeons)
-    try:
-        path = paths.poi_locs_path()
-        if path.exists():
-            poi_data = json.loads(path.read_text(encoding="utf-8"))
-            for p in poi_data.get("pois", []):
-                zid = p.get("zone")
-                wp = p.get("world_pos")
-                if zid and wp:
-                    anchors.append((float(wp["x"]), float(wp["y"]), float(p.get("z", 0)), zid))
-    except Exception:
-        pass
+    for p in cdb.lines("poi_locs"):
+        zid = p.get("zone")
+        wp = p.get("world_pos")
+        if zid and wp:
+            anchors.append((float(wp["x"]), float(wp["y"]), float(p.get("z", 0)), zid))
         
     return anchors
 

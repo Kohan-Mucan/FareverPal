@@ -15,7 +15,7 @@ data_path = ROOT_DIR / "assets" / "data"
 # Core database files that are baked into raw_data.py
 logic_sheets = [
     "items", "enemies", "loot_tables", "loot_table_contents", 
-    "skills", "collection_catalog", "items_manifest", "lootTable"
+    "skills", "collection_catalog", "items_manifest", "lootTable", "dungeons"
 ]
 
 # Files that are ALWAYS required at runtime for world markers

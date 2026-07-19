@@ -38,10 +38,11 @@ assets/data/
 assets/map_icons/
 /farever_companion/assets/icons/
 
-# --- generated game data (compiled from .pak) ---
-farever_companion/data/raw_data.py
+# --- generated game data (compiled from jsons ) ---
+farever_companion/data/raw_*.py
 
 # --- Secrets / credentials (none expected, but never commit these) ---
+# git ls-files -v | findstr "^S"
 .env
 .env.*
 *.pem
@@ -62,13 +63,8 @@ _scratch*.py
 _tmp*.py
 *_dump.txt
 *.txt.tmp
-farever_companion/constants.py
 *PLAN.md
 docs/*
-!docs/index.md
-!docs/robots.txt
-!docs/google*.html
-!docs/images/
 !docs/setup.md
 !docs/_config.yml
 !docs/CREDITS.md

@@ -227,9 +227,16 @@ class SegmentedControl(QtWidgets.QFrame):
             f"color:{theme.ACCENT};}}")
 
     def setCurrentText(self, text: str) -> None:
-        b = self._btns.get(text)
-        if b:
-            b.setChecked(True)
+        if not text:
+            return
+        target_b = self._btns.get(text)
+        if not target_b:
+            for opt, b in self._btns.items():
+                if opt.lower() == str(text).lower():
+                    target_b = b
+                    break
+        if target_b:
+            target_b.setChecked(True)
 
     def currentText(self) -> str:
         b = self._group.checkedButton()
@@ -366,14 +373,15 @@ class IconTile(QtWidgets.QLabel):
     def set(self, sheet: str | None, id_: str | None, accent: str = theme.ACCENT) -> None:
         self.setPixmap(icons.tile(sheet, id_, self._size, accent))
 
-    def set_outlined(self, sheet: str | None, id_: str | None, accent: str = theme.ACCENT) -> None:
+    def set_outlined(self, sheet: str | None, id_: str | None, accent: str = theme.ACCENT, border: int = 2) -> None:
         """Set a game icon with an accent border hugging the icon's organic shape.
         Matches the minimap style."""
-        self.setPixmap(icons.outlined(sheet, id_, self._size, accent))
+        self.setPixmap(icons.outlined(sheet, id_, self._size, accent, border=border))
 
-    def set_marker(self, name: str, accent: str = theme.ACCENT) -> None:
+    def set_marker(self, name: str, accent: str | None = None, outlined: bool = False) -> None:
         """A map-marker icon (assets/map_icons) instead of a game-sheet icon."""
-        self.setPixmap(icons.tile_marker(name, self._size, accent))
+        acc = accent if outlined else (accent or theme.ACCENT)
+        self.setPixmap(icons.tile_marker(name, self._size, acc, outlined=outlined))
 
     def set_ui_icon(self, name: str, accent: str = theme.ACCENT) -> None:
         """A UI SVG icon (assets/icons_ui) instead of a game-sheet icon."""

@@ -1,26 +1,18 @@
 """Static companion/critter index to resolve spawner elements to unit IDs."""
-import json
 from functools import lru_cache
-from .. import paths
 
 @lru_cache(maxsize=1)
 def _critter_spawners() -> dict[str, str]:
     """Map spawner ID (e.g. 'Critters_Patrol_World_Rabbit_2') to unit ID (e.g. 'Rabbit')."""
-    try:
-        path = paths.critter_locs_path()
-        if not path.exists():
-            return {}
-        data = json.loads(path.read_text(encoding="utf-8"))
-        mapping = {}
-        for c in data.get("critters", []):
-            cid = c.get("id")
-            if cid:
-                units = c.get("units") or []
-                unit = units[0] if units else (c.get("unit") or cid)
-                mapping[cid] = unit
-        return mapping
-    except Exception:
-        return {}
+    from ..data import cdb
+    mapping = {}
+    for c in cdb.lines("critter_locs"):
+        cid = c.get("id")
+        if cid:
+            units = c.get("units") or []
+            unit = units[0] if units else (c.get("unit") or cid)
+            mapping[cid] = unit
+    return mapping
 
 def resolve_spawner_unit(spawner_id: str | None) -> str | None:
     if not spawner_id:

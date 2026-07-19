@@ -35,11 +35,13 @@ def _settings_path() -> Path:
 class Settings:
     # --- Core Application Settings ---
     auto_attach: bool = True
-    auto_check_updates: bool = False
+    auto_check_updates: bool = False  # Disabled automatic update checks on launch
     ui_scale: float = 1.0
     opacity: float = 0.9
     hud_accent: str = "#38bdf8"
     icon_size: int = 28
+    codex_compact: bool = False
+    codex_pets_compact: bool = True
     click_through: bool = False
     lock_overlays: bool = False
     auto_hide_menus: bool = True
@@ -54,7 +56,7 @@ class Settings:
 
     gatherable_count: int = 4
     show_companions: bool = True
-    companion_count: int = 4
+    companion_count: int = 2
     show_companions_debug: bool | int = False
     show_orbs: bool = True
     orb_count: int = 4
@@ -63,10 +65,12 @@ class Settings:
     max_dist: float = 0.0
     limit_by_zone: bool = True
     entity_hide_collected: bool = True
-    entity_scale: float = 1.0
+    entity_width: int = 350
+    entity_font_size: int = 15
     entity_bare: bool = False
     PlayerNames: bool = False
     show_group_members: bool = False
+    group_count: int = 5
     show_gatherables: bool = True
     # --- Specific Entity Toggles ---
     show_lavendula: bool = True
@@ -91,6 +95,7 @@ class Settings:
     skills_bare: bool = False
     dps_columns: list = field(default_factory=lambda: ["pct", "dps", "hits", "crit", "max"])
     show_drop_window: bool = False
+    show_rift_timer: str = "Always"
     combat_click_through: bool = False
     rows_per_rarity: int = 6
 

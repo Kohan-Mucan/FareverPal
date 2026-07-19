@@ -102,7 +102,41 @@ class TrackController(QtCore.QObject):
 
     # --- target ------------------------------------------------------------
     def is_tracked(self, kind: str, key: str) -> bool:
-        return bool(key) and self.s.track_kind == kind and self.s.track_id == key
+        if not key or not self.s.track_id: return False
+        s_key = str(key)
+        
+        # Normalize kinds (HUD often treats 'enemy' as kind, tracker uses 'unit')
+        tk = "unit" if kind == "enemy" else kind
+        curr_tk = self.s.track_kind
+        
+        # If kinds don't match, it's not the same target (e.g. tracking orb while selecting chest)
+        if curr_tk != tk:
+            # Fallback for chest/recipe ambiguity
+            if tk in ("chest", "recipe") and curr_tk in ("chest", "recipe"):
+                pass
+            # Fallback for 'static' HUD kind matching specific sub-kinds
+            elif tk == "static" and curr_tk in ("dungeon", "rift", "obelisk", "pos", "respawn"):
+                pass
+            else:
+                return False
+        
+        if self.s.track_id == s_key: return True
+        # Match against technical ID at the end of a coordinate string (x,y,z|Label|ID)
+        if self.s.track_id.endswith(f"|{s_key}"): return True
+        # Match against Label in coordinate string (x,y,z|Label|ID)
+        if "|" in self.s.track_id:
+            parts = self.s.track_id.split("|")
+            if len(parts) >= 2 and parts[1] == s_key: return True
+            # Also check display name for gatherables
+            if tk == "gather":
+                from ..geo import gatherables as geo_gatherables
+                if geo_gatherables.get_display_name(parts[1]) == s_key: return True
+
+        # Match against coordinates if 'key' is also a coordinate string
+        if "|" in s_key:
+            return s_key.split("|")[0] == self.s.track_id.split("|")[0]
+            
+        return False
 
     def toggle(self, kind: str, key: str, addr=None) -> None:
         if self.is_tracked(kind, key) and (addr is None or self._lock_addr == addr):
@@ -116,6 +150,10 @@ class TrackController(QtCore.QObject):
                 self._hard_lock = True
 
     def track(self, kind: str, key: str, addr=None) -> None:
+        if kind in ("respawn", "checkpoint"):
+            return
+        if kind == "chest_orb":
+            kind = "chest"
         if kind == "orb" and key not in geo_orbs.by_id():
             return
         self.s.track_kind, self.s.track_id = kind, key
@@ -169,15 +207,100 @@ class TrackController(QtCore.QObject):
                 return None
             return (o.x, o.y, o.z,
                     f"{geo_orbs.orb_label(key)} · {geo_orbs.orb_region_name(o)}")
-        if kind in ("pos", "chest", "gather", "recipe"):
-            # fixed waypoint: "x,y,z|label" (any minimap marker)
+        if kind in ("pos", "chest", "chest_orb", "gather", "recipe", "dungeon", "rift", "obelisk", "respawn"):
+            # fixed waypoint: "x,y,z|label[|id]" (any minimap marker)
+            if kind == "gather" and "|" not in key:
+                # Dynamic gatherable tracking by type: find nearest matching instance
+                from ..geo import gatherables as geo_gatherables
+                xyz = self.model.player_xyz()
+                if xyz is None: return ("searching", key)
+
+                # Check live memory first
+                cands = []
+                for g in self.model.gatherables(max_dist=1000.0, use_2d=True):
+                    if geo_gatherables.get_display_name(g.elem_id or "") == key:
+                        cands.append((g.x, g.y, g.z, g.dist2d(*xyz[:2])))
+
+                # Check static nodes
+                for node in geo_gatherables.load_nodes():
+                    if geo_gatherables.get_display_name(node.name) == key:
+                        # Avoid duplicates if already in live list (approximate)
+                        if not any(math.hypot(node.x - cx, node.y - cy) < 2.0 for cx, cy, cz, cd in cands):
+                            d = math.hypot(node.x - xyz[0], node.y - xyz[1])
+                            # If we are close to where a node SHOULD be, but it's not in memory, skip it
+                            if d < 25.0:
+                                continue
+                            cands.append((node.x, node.y, node.z, d))
+
+                if not cands: return ("searching", key)
+                tx, ty, tz, _td = min(cands, key=lambda t: t[3])
+                return (tx, ty, tz, key)
+
             try:
-                coords, _, label = key.partition("|")
+                parts = key.split("|")
+                coords = parts[0]
+                label = parts[1] if len(parts) > 1 else kind.capitalize()
                 x, y, z = (float(v) for v in coords.split(","))
-            except ValueError:
+
+                # Auto-clear tracking for live gatherables once picked up
+                if kind == "gather" and len(parts) >= 3:
+                    target_id = parts[2]
+                    pxyz = self.model.player_xyz()
+                    # Only clear if we are close enough that it SHOULD be in memory (e.g. < 30m)
+                    if pxyz and math.hypot(x - pxyz[0], y - pxyz[1]) < 25.0:
+                        is_there = False
+                        live_g = self.model.gatherables(max_dist=60.0)
+                        if target_id.startswith("gl"):
+                            addr = int(target_id[2:])
+                            is_there = any(g.addr == addr for g in live_g)
+                        else:
+                            # Static node: check if any live node of same type is near its spot
+                            from ..geo import gatherables as geo_gatherables
+                            base_type = geo_gatherables.get_display_name(label)
+                            is_there = any(geo_gatherables.get_display_name(g.elem_id or "") == base_type
+                                           and math.hypot(g.x - x, g.y - y) < 2.0 for g in live_g)
+
+                        if not is_there:
+                            # If we are basically standing on it (< 5m) and it's not in memory, it's definitely gone
+                            if math.hypot(x - pxyz[0], y - pxyz[1]) < 5.0:
+                                return None
+                            # Otherwise, if it's not in the wider 60m live scan, it's also gone
+                            if not any(math.hypot(g.x - x, g.y - y) < 5.0 for g in live_g):
+                                return None
+            except Exception:
                 return None
+
+            if kind == "rift":
+                from ..data import dungeons
+                d_info = dungeons.get_dungeon_info(label)
+                if d_info:
+                    label = d_info['name']
+                    if not label.lower().startswith("rift"):
+                        label = f"Rift {label}"
+                elif label and label.lower() != "rift":
+                    label = label if label.lower().startswith("rift") else f"Rift {label}"
+                else:
+                    label = "Rift"
+            elif kind == "respawn":
+                label = "Respawn"
+            elif kind == "dungeon":
+                from ..data import dungeons
+                d_info = dungeons.get_dungeon_info(label)
+                if d_info:
+                    label = f"{d_info['boss_name']} · Level {d_info['level']} ({d_info['name']})"
+                elif label:
+                    label = names.poi_label(label)
+            elif label:
+                label = names.poi_label(label)
+
             return (x, y, z, label or "Waypoint")
         if kind in ("unit", "hero"):
+            if kind == "unit":
+                profile = self.model.player_profile() if (hasattr(self.model, "player_profile") and callable(self.model.player_profile)) else None
+                hidden_units = set(self.s.get_entity_hidden_units(profile)) | set(self.s.get_companion_hidden_units(profile))
+                if key in hidden_units:
+                    self.clear()
+                    return None
             label = names.unit_name(key) or key
             xyz = self.model.player_xyz()
             cands = [e for e in self.model.units()
@@ -185,16 +308,28 @@ class TrackController(QtCore.QObject):
                      and (kind != "hero" or e.addr != self.model.player_addr)]
             if not cands:
                 self._lock_addr = None
+                # If this was a tracked companion/pet unit that despawned/captured, clear tracking instead of switching/staying in invalid state
+                if kind == "unit":
+                    from ..data import collections as col
+                    comp_ids = set(r["id"] for r in col.items("companions"))
+                    if key in comp_ids:
+                        self.clear()
+                        return None
                 return ("searching", label)
             if xyz is None:
                 e = cands[0]
             else:
-                e = min(cands, key=lambda e: e.dist(*xyz))
-                # hysteresis: stay locked on the current instance unless a
-                # clearly closer one appears, so near-ties don't flip the needle
-                cur = next((c for c in cands if c.addr == self._lock_addr), None)
-                if cur is not None and cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
-                    e = cur
+                # If explicit unit instance was clicked (hard lock), stay locked on it
+                hard_locked = next((c for c in cands if c.addr == self._lock_addr), None) if self._hard_lock else None
+                if hard_locked is not None:
+                    e = hard_locked
+                else:
+                    e = min(cands, key=lambda e: e.dist(*xyz))
+                    # hysteresis: stay locked on the current instance unless a
+                    # clearly closer one appears, so near-ties don't flip the needle
+                    cur = next((c for c in cands if c.addr == self._lock_addr), None)
+                    if cur is not None and cur.dist(*xyz) <= e.dist(*xyz) * 1.25:
+                        e = cur
             self._lock_addr = e.addr
             return (e.x, e.y, e.z, label)
         return None
