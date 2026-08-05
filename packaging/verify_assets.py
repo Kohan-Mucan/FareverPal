@@ -12,10 +12,10 @@ RESET = "\033[0m"
 ROOT_DIR = Path(__file__).parent.parent
 data_path = ROOT_DIR / "assets" / "data"
 
-# Core database files that are baked into raw_data.py
+# Core database files that are baked into the embedded raw_data.py shim
 logic_sheets = [
     "items", "enemies", "loot_tables", "loot_table_contents", 
-    "skills", "collection_catalog", "items_manifest", "lootTable", "dungeons"
+    "skills", "items_manifest", "lootTable", "dungeons"
 ]
 
 # Files that are ALWAYS required at runtime for world markers
@@ -54,16 +54,21 @@ else:
         else:
             print(f"Data  {s:20}: {status_text(True, f'{p.stat().st_size / 1024:.1f} KB')}")
 
-# 2. Essential Location Data (Always Required)
+# 2. Essential Location Data (Included in raw_data.py when active)
 print(f"\n--- {YELLOW}World Location Data Check{RESET} ---")
 for f in essential_location_data:
     p = data_path / f
     exists = p.exists()
-    if not exists:
-        missing_count += 1
-        print(f"Loc   {f:20}: {RED}MISSING{RESET}")
+    if has_raw_data:
+        size_msg = f"{p.stat().st_size / 1024:.1f} KB" if exists else "N/A"
+        status = f"{GREEN}OK{RESET}" if exists else f"{YELLOW}SKIPPED{RESET}"
+        print(f"Loc   {f:20}: {status:18} ({size_msg:8}) -> {YELLOW}SKIPPED (RAW_DATA ACTIVE){RESET}")
     else:
-        print(f"Loc   {f:20}: {status_text(True, f'{p.stat().st_size / 1024:.1f} KB')}")
+        if not exists:
+            missing_count += 1
+            print(f"Loc   {f:20}: {RED}MISSING{RESET}")
+        else:
+            print(f"Loc   {f:20}: {status_text(True, f'{p.stat().st_size / 1024:.1f} KB')}")
 
 # 3. Icon System Check
 print(f"\n--- {YELLOW}Icon System Check{RESET} ---")
@@ -71,8 +76,8 @@ atlas_dir = ROOT_DIR / "assets" / "atlas"
 using_atlas = False
 if atlas_dir.exists():
     json_files = list(atlas_dir.glob("*.json"))
-    # Match icons.py: merge all JSON except index
-    atlas_jsons = [f for f in json_files if f.name != "atlas_index.json"]
+    # Match icons.py: merge all JSON except index and atlas_map
+    atlas_jsons = [f for f in json_files if f.name not in ("atlas_index.json", "atlas_map.json")]
     
     if atlas_jsons:
         total_entries = 0

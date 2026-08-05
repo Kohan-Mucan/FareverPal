@@ -22,7 +22,7 @@ from .pages.speedrun_page import SpeedrunPageMixin
 from .pages.friends_page import FriendsPageMixin
 from .pages.overlays import OverlaysPageMixin
 from .pages.entity import EntityPageMixin
-from .pages.codex import CodexPageMixin
+from .pages.codex import CodexPageMixin  # composed from page/grid/map_ui/settings mixins
 from .pages.combat import CombatPageMixin
 from .pages.loot import LootPageMixin
 from .pages.map_page import MapPageMixin
@@ -41,7 +41,7 @@ from ..api import FareverAPI
 NAV = [
     ("overlays", "layers", "Overlays"),
     ("entity", "search", "Entity"),
-    ("codex", "layout", "Bestiary"),
+    ("codex", "layout", "Codex"),
     ("combat", "swords", "Combat / DPS"),
     ("speedrun", "timer", "Speedrun"),
     ("loot", "box", "Loot"),
@@ -622,6 +622,7 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         """
         self._last_hidden_unit = None
         self._last_hidden_comp = None
+        self._last_hidden_chest_orb = None
         self.attach_ctl.detach()
 
     # ====================================================================
@@ -630,6 +631,10 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
 
     def _set_unit_hidden(self, uid_or_uids, hidden: bool) -> None:
         profile = self.model.player_profile() if self.model else None
+        if not profile:
+            if hasattr(self, "_refresh_codex_sync"):
+                self._refresh_codex_sync()
+            return
         uids = [uid_or_uids] if isinstance(uid_or_uids, str) else uid_or_uids
         for u in uids:
             self.s.toggle_unit_hidden(u, hidden, profile)
@@ -707,7 +712,14 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
                 tid = self.s.track_id
                 if uid == tid:
                     tr.clear()
-            self._last_hidden_comp = (uid, names.unit_name(uid) or uid)
+
+            nm = names.unit_name(uid)
+            if not nm or nm == uid:
+                from .data import codex
+                info = codex.enemies_data().get(uid, {})
+                nm = info.get("name") or uid
+
+            self._last_hidden_comp = (uid, nm or uid)
         elif not hidden and self._last_hidden_comp and self._last_hidden_comp[0] == uid:
             self._last_hidden_comp = None
 
@@ -761,23 +773,21 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
             self._friends_timer.stop()
         except Exception:
             pass
-        # Wait for CallWorkers to finish
-        try:
-            if self._friends_worker is not None and self._friends_worker.isRunning():
-                self._friends_worker.wait(1500)
-        except Exception:
-            pass
-        try:
-            if self._col_worker is not None and self._col_worker.isRunning():
-                self._col_worker.wait(1500)   # let a final collection push land
-        except Exception:
-            pass
-        try:
-            if self._update_check_worker is not None and self._update_check_worker.isRunning():
-                self._update_check_worker.wait(1500)
-            # the download worker is left to finish if a swap is mid-flight
-        except Exception:
-            pass
+
+        # Stop and wait for all background CallWorker instances
+        for attr in ("_friends_worker", "_col_worker", "_update_check_worker", "_update_dl_worker"):
+            worker = getattr(self, attr, None)
+            if worker is not None:
+                try:
+                    if hasattr(worker, "stop"):
+                        worker.stop(800)
+                    else:
+                        worker.requestInterruption()
+                        worker.quit()
+                        worker.wait(800)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
 
         # Stop Server Diagnostics workers
         try:
@@ -785,6 +795,6 @@ class ControlPanel(AccountMixin, SpeedrunPageMixin, FriendsPageMixin,
         except Exception:
             pass
 
-        # Detach from the game (this now waits for the locate worker internally)
+        # Detach from the game (stops locate worker and model background threads)
         self.detach()
         super().closeEvent(e)

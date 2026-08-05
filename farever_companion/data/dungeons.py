@@ -21,6 +21,64 @@ def by_id() -> dict[str, dict]:
 def by_entrance_zone() -> dict[str, dict]:
     return {d["entrance_zone"]: d for d in load_dungeons()}
 
+@lru_cache(maxsize=1)
+def dungeon_unit_ids() -> set[str]:
+    """Returns a set of all unit IDs (bosses and mobs) that appear in dungeons."""
+    ids = set()
+    for d in load_dungeons():
+        bid = d.get("boss_id")
+        if bid: ids.add(bid)
+        for mid in d.get("mobs", []): ids.add(mid)
+    return ids
+
+@lru_cache(maxsize=1)
+def unit_to_dungeon_map() -> dict[str, dict]:
+    """Returns a mapping of unit ID -> dungeon dict for all dungeon bosses and mobs."""
+    mapping = {}
+    for d in load_dungeons():
+        bid = d.get("boss_id")
+        if bid:
+            mapping[bid] = d
+        for mid in d.get("mobs", []):
+            mapping[mid] = d
+    return mapping
+
+# The two Rift bosses each spawn at a fixed spot — one in Z1 (Enripit Falls),
+# one in Z2 (Krisomal North) — but the compiled data carries no boss -> spot
+# mapping (both rift POIs are named 'POI Rift 01' and every rift mob resolves
+# to both). These come from the known in-game spawn points; flip if the game
+# changes them.
+_RIFT_ZONE_BY_ID = {
+    "rift_maat": "Z1",        # Rift Nightking Maat Demon
+    "rift_shaarlize": "Z2",   # Rift Nightqueen Shaarlize Te'ror
+}
+
+
+def zone_tag_from_zone_id(zone_id: str) -> str | None:
+    """'Z1_Enripit_Falls' -> 'Z1' (Crimson -> Z3), or None."""
+    if not zone_id:
+        return None
+    if "Crimson" in zone_id:
+        return "Z3"
+    for prefix in ("Z1_", "Z2_", "Z3_"):
+        if zone_id.startswith(prefix):
+            return prefix[:2]
+    return None
+
+
+def zone_tag(d: dict) -> str | None:
+    """Zone filter tag for a dungeon ('Z1'/'Z2'/'Z3'), or None.
+
+    Crimson entrances map to Z3 — the codex treats Crimson Island as Z3 even
+    though its metadata entrance zones are Z2_CrimsonIsland_*. Rifts resolve
+    by their fixed spawn point (one in Z1, one in Z2).
+    """
+    ez = d.get("entrance_zone") or ""
+    if ez == "Rifts":
+        return _RIFT_ZONE_BY_ID.get(d.get("id"))
+    return zone_tag_from_zone_id(ez)
+
+
 def get_dungeon_info(activity_id_or_name: str | None) -> dict | None:
     if not activity_id_or_name:
         return None

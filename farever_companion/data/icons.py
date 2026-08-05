@@ -308,6 +308,38 @@ def marker(name: str, size: int, accent: str | None = None, border: int = 2):
     return out
 
 
+@lru_cache(maxsize=64)
+def achievement_marker(size: int, accent: str = "#fbbf24"):
+    """A trophy glyph for achievement-sourced items.
+
+    Renders the bundled `assets/map_icons/trophy.svg` (crisp vector at any
+    size), tinted to `accent` like the other markers. Once a `trophy` entry is
+    added to the minimap atlas, `asset_icon` picks up the atlas texture
+    automatically (it checks the atlas before the SVG file) — no code change
+    needed. Falls back to a painted silhouette if the asset is missing.
+    Cached by (size, accent)."""
+    QtGui, QtCore = _qt()
+    g = asset_icon("trophy", size)
+    if g is not None:
+        return _silhouette(g, accent)
+    # Fallback (missing asset): painted silhouette — handles + cup bowl + stem + base
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtGui.QColor(0, 0, 0, 0))
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing)
+    p.setPen(QtCore.Qt.NoPen)
+    p.setBrush(QtGui.QColor(accent))
+    w = float(size)
+    p.drawEllipse(QtCore.QRectF(0.10 * w, 0.30 * w, 0.26 * w, 0.22 * w))
+    p.drawEllipse(QtCore.QRectF(0.64 * w, 0.30 * w, 0.26 * w, 0.22 * w))
+    p.drawRoundedRect(QtCore.QRectF(0.30 * w, 0.12 * w, 0.40 * w, 0.42 * w),
+                      0.06 * w, 0.06 * w)
+    p.drawRect(QtCore.QRectF(0.46 * w, 0.52 * w, 0.08 * w, 0.12 * w))
+    p.drawRect(QtCore.QRectF(0.34 * w, 0.64 * w, 0.32 * w, 0.10 * w))
+    p.end()
+    return pm
+
+
 @lru_cache(maxsize=1024)
 def ui_icon(name: str, color: str, size: int):
     """A theme-tinted UI-chrome glyph from assets/icons_ui/<name>.svg.

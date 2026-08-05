@@ -7,7 +7,7 @@ from farever_companion.data import collections as col
 
 def test_catalog_loads_with_expected_categories():
     cat = col.catalog()
-    assert cat, "collection_catalog.json missing from the wiki data layer"
+    assert cat, "collection catalog missing (compiler derives it from codex.json)"
     keys = [c["key"] for c in col.categories()]
     assert keys == ["mounts", "gliders", "companions"]
 
@@ -70,6 +70,92 @@ def test_icons_exist_for_nearly_all_items():
             missing.append(r["id"])
     # the known atlas gaps are a couple of unreleased armor pieces
     assert len(missing) <= 5, f"too many missing icons: {missing[:10]}"
+
+
+def test_obtainable_views_agree_with_codex():
+    """Achievement-reward and cash-shop mounts/gliders (e.g. Crimson Goat,
+    SparkHorse_01) are obtainable in-game — the catalog must agree with the
+    Codex UI, which treats them as obtainable instead of 'unreleased'."""
+    from farever_companion.data import raw_codex, codex
+
+    by_id = {r["id"]: r for r in col.items()}
+
+    # every codex row reflagged 'achievement' is obtainable in the catalog
+    ach_rows = []
+    for zone in ("Mounts", "Gliders"):
+        for e in raw_codex.DATA.get(zone, []):
+            if (e.get("kind") or "").lower() != "achievement":
+                continue
+            ach_rows.append(e["id"])
+            assert by_id[e["id"]]["obtainable"], e["id"]
+    assert len(ach_rows) >= 5, ach_rows
+    assert by_id["Mount_Goat_04"]["obtainable"]  # Crimson Goat
+
+    # every cash-shop item the runtime flags is obtainable in the catalog
+    shop_rows = [r for r in col.items() if codex.is_shop_item(r)]
+    assert len(shop_rows) >= 2, shop_rows
+    for r in shop_rows:
+        assert r["obtainable"], r["id"]
+    assert by_id["SparkHorse_01"]["obtainable"]
+    assert by_id["Glider_Butterfly_EA_Spark"]["obtainable"]
+
+    # ...and every catalog row still marked not-obtainable is a genuine
+    # unreleased item: the codex agrees (kind unreleased, never achievement
+    # or a shop id)
+    codex_kinds = {}
+    for zone in ("Mounts", "Gliders"):
+        for e in raw_codex.DATA.get(zone, []):
+            codex_kinds[e["id"]] = (e.get("kind") or "").lower()
+    for r in col.items():
+        if r.get("obtainable"):
+            continue
+        assert not codex.is_shop_item(r), r["id"]
+        k = codex_kinds.get(r["id"])
+        assert k in ("unreleased", "todo"), (r["id"], k)
+
+
+def test_catalog_derivation_marks_achievement_and_shop_obtainable(tmp_path):
+    """The compiler derives the catalog from codex.json, which flags
+    achievement-only rewards AND cash-shop items as 'unreleased' (its scanner
+    doesn't know about either). The derivation must reflag both obtainable,
+    mirroring the codex payload and the runtime's is_shop_item."""
+    import json
+    from compiler import _collection_catalog_from_codex, _load_shop_ids
+
+    codex = {"codex": {
+        "Mount_Goat_04": {"id": "Mount_Goat_04", "name": "Crimson Goat",
+                          "type": "Mount", "kind": "unreleased"},
+        "SparkHorse_01": {"id": "SparkHorse_01", "name": "Sparkling Horsean",
+                          "type": "Mount", "kind": "unreleased"},
+        "ShopOnly_01": {"id": "ShopOnly_01", "name": "Shop Pet",
+                        "type": "Glider", "kind": "unreleased"},
+        "Mount_Wolf_01": {"id": "Mount_Wolf_01", "name": "Enripian Wolf",
+                          "type": "Mount", "kind": "unreleased"},
+        "Mount_Boar_03": {"id": "Mount_Boar_03", "name": "Alandian Hog",
+                          "type": "Mount", "kind": "drop",
+                          "coords": [{"x": 1.0, "y": 2.0}]},
+    }}
+    (tmp_path / "codex.json").write_text(json.dumps(codex), encoding="utf-8")
+    # shop.json (canonical shop list once the scanner ships it) written in
+    # the game's native sheet shape ({"lines": [...]}) — the compiler must
+    # accept it alongside the plain {"shop": [...]} wrapper
+    (tmp_path / "shop.json").write_text(json.dumps({"lines": [{"id": "ShopOnly_01"}]}),
+                                        encoding="utf-8")
+    ach = {"Mount_Goat_04": {"name": "Savior of Skover"}}
+    shop_ids = _load_shop_ids(tmp_path, tmp_path)
+    assert shop_ids == {"ShopOnly_01"}
+
+    m = _collection_catalog_from_codex(tmp_path, tmp_path, [], ach, shop_ids)
+    rows = {r["id"]: r for r in m["items"]}
+    # achievement reward (no coords) -> obtainable
+    assert rows["Mount_Goat_04"]["obtainable"] is True
+    # cash-shop items: pattern-matched id and shop.json id -> obtainable
+    assert rows["SparkHorse_01"]["obtainable"] is True
+    assert rows["ShopOnly_01"]["obtainable"] is True
+    # genuinely unreleased (no achievement, no shop) -> not obtainable
+    assert rows["Mount_Wolf_01"]["obtainable"] is False
+    # world-drop mount keeps its obtainable status
+    assert rows["Mount_Boar_03"]["obtainable"] is True
 
 
 def test_summary_counts_obtainable_only():

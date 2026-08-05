@@ -33,18 +33,22 @@ class _LocateWorker(QtCore.QThread):
         try:
             # Check periodically if we should stop
             addr = self.model.locate_player()
-            if not self._stop_requested:
+            if not self._stop_requested and not self.isInterruptionRequested():
                 self.done.emit(addr)
         except Exception as e:
-            if not self._stop_requested:
+            if not self._stop_requested and not self.isInterruptionRequested():
                 self.done.emit(e)
 
-    def stop(self):
-        """Request the thread to stop and wait for it to finish."""
+    def stop(self, timeout: int = 1500):
+        """Request the thread to stop and wait for it to finish cleanly."""
         self._stop_requested = True
-        # For threads with custom run(), quit() has no effect - wait for natural completion
+        self.requestInterruption()
         if self.isRunning():
-            self.wait(30000)  # Generous timeout for long scans (30 seconds)
+            self.quit()
+            self.wait(timeout)
+            if self.isRunning():
+                self.terminate()
+                self.wait(200)
 
 
 class GameAttachmentController(QtCore.QObject):

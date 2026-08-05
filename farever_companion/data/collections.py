@@ -1,35 +1,65 @@
 """Collection-tracker catalog.
 
-Loads the collection catalog (extracted from game files) and provides the
-category list, item rows, and progress math.
+Loads the compiled collection catalog (derived from codex.json by the
+compiler, never from the game dump's raw collection_catalog.json) and
+provides the category list, item rows, and progress math.
 """
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 
-from .. import paths
 from . import raw_data
+
+
+# Fields every catalog row must carry for the Collection page to render it
+# (account sync keys by id; the tooltip reads name/subtype/source; summary
+# counts only obtainable rows). Newer game dumps ship a lore 'Collection' list
+# of {name, category, description, unlocked} that maps to NONE of these — the
+# compiler derives the real catalog from codex.json, and this validation keeps
+# a stale/mismatched payload from ever reaching the UI (it would crash on
+# `it['subtype']` / `it['id']`).
+_REQUIRED_ROW_FIELDS = ("id", "name", "category", "subtype", "obtainable", "source")
+
+
+def _usable_catalog(data) -> bool:
+    """True when `data` is the {version?, categories?, items} shape the page
+    actually renders: a dict whose rows all carry the fields the UI reads."""
+    if not isinstance(data, dict):
+        return False
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    return all(isinstance(r, dict) and all(k in r for k in _REQUIRED_ROW_FIELDS)
+               for r in items)
 
 
 @lru_cache(maxsize=1)
 def catalog() -> dict:
     """{version, categories:[{key,label,icon_sheet}], items:[...]}; {} if absent."""
     data = raw_data.DATA.get("info_collection_catalog")
-    if data:
-        return data
+    return data if _usable_catalog(data) else {}
 
-    # Fallback to JSON
-    path = paths.display_data_dir() / "collection_catalog.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) and data.get("items") else {}
-    except (OSError, ValueError):
-        return {}
+
+# Canonical category order (the game's tab order). Used both to sort the
+# derived categories and as a stable fallback when a source catalog omits
+# its `categories` array (items carry `category` either way).
+_CATEGORY_ORDER = ("mounts", "gliders", "companions")
 
 
 def categories() -> list[dict]:
-    return list(catalog().get("categories") or [])
+    cats = list(catalog().get("categories") or [])
+    if cats:
+        return cats
+    # Derive from the items so the page keeps its tabs/progress even when a
+    # source catalog ships only {version, items}.
+    seen = []
+    for r in catalog().get("items") or []:
+        k = r.get("category")
+        if k and k not in seen:
+            seen.append(k)
+    ordered = [k for k in _CATEGORY_ORDER if k in seen] + [k for k in seen if k not in _CATEGORY_ORDER]
+    return [{"key": k, "label": k.capitalize(), "icon_sheet": "collection"}
+            for k in ordered]
 
 
 def items(category: str | None = None) -> list[dict]:

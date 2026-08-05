@@ -5,8 +5,9 @@ import sys
 
 from PySide6 import QtWidgets, QtGui
 
-from .config import Settings
+from .config import Settings, find_backup_files
 from .ui import theme
+from .ui.backup_scan import BackupScanDialog
 from .ui.control_panel import ControlPanel
 from .data import icons
 from . import paths
@@ -32,6 +33,13 @@ def main() -> int:
     app.setOrganizationName("FareverPal")
     theme.apply(app)                 # loads bundled fonts + installs QSS
     app.setWindowIcon(_app_icon())
+
+    # Startup scan: files moved aside to *.bak after a corrupt read are listed
+    # here BEFORE settings load, so a restored settings.json / collection.json
+    # is picked up by the normal load path — no restart needed.
+    baks = find_backup_files()
+    if baks:
+        BackupScanDialog(baks).exec()
 
     settings = Settings.load()
     # apply the saved Highlight color app-wide before building the UI

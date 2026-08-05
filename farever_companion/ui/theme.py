@@ -39,6 +39,8 @@ _DESIGN_ACCENT = (ACCENT, ACCENT_LIGHT, ACCENT_DIM, ON_ACCENT, TOGGLE_THUMB_ON)
 GOLD = "#eac331"        # secondary
 SILVER = "#c0c0c0"      # elite
 ORANGE = "#f1a02b"      # tertiary-container
+BROWN = "#b45309"       # mob-drop sword key (Mob Drop source)
+BLUE = "#3b82f6"        # achievement key
 NEUTRAL = DIM
 DANGER = "#ffb4ab"      # error - enemy / big DPS number
 GOOD = "#4ade80"        # success
@@ -75,6 +77,9 @@ KIND_COLOR = {
     "chest_orb": GOLD,
     "activity": "#8fa395",   # world-activity loot drops (grey-green marker)
     "dungeon": "#7c3aed",    # dungeon entrances / teleporters
+    "petshop": GOLD,          # pet shop vendors (Demon Huntress pet sellers)
+    "mountshop": GOLD,        # mount shop vendors (MountTamer NPCs)
+    "vendor": GOLD,           # generic shop vendor NPCs
     "pos": ACCENT,
 }
 

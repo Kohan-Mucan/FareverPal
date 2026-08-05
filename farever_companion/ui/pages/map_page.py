@@ -50,12 +50,14 @@ class MapPageMixin:
         grid.setHorizontalSpacing(12)
         layer_items = [
                 ("minimap_enemies", "Enemies"),
+                ("minimap_spark_mobs", "Spark Mobs"),
                 ("minimap_companions", "Companions"),
                 ("minimap_chests", "Chests"),
                 ("minimap_gatherables", "Gatherables"),
                 ("minimap_obelisks", "Obelisks / Respawn"),
                 ("minimap_orbs", "Secret orbs"),
-                ("minimap_dungeons", "Dungeons")]
+                ("minimap_dungeons", "Dungeons"),
+                ("minimap_vendors", "Vendors")]
         for i, (attr, label) in enumerate(layer_items):
             t = C.LabeledToggle(label, getattr(self.s, attr))
             t.toggled.connect(lambda on, a=attr: self._set_minimap_layer(a, on))

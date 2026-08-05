@@ -14,7 +14,21 @@ class CallWorker(QtCore.QThread):
 
     def run(self):
         try:
-            res = self._fn(self)
+            if not self.isInterruptionRequested():
+                res = self._fn(self)
+            else:
+                res = {"ok": False, "error": "interrupted"}
         except Exception as e:
             res = {"ok": False, "error": str(e)}
-        self.done.emit(self._tag, res)
+        if not self.isInterruptionRequested():
+            self.done.emit(self._tag, res)
+
+    def stop(self, timeout: int = 800):
+        """Cleanly stop worker thread before destruction."""
+        self.requestInterruption()
+        if self.isRunning():
+            self.quit()
+            self.wait(timeout)
+            if self.isRunning():
+                self.terminate()
+                self.wait(200)

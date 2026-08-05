@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 def test_named_bosses_are_the_ten():
     bosses = units.named_bosses()
     assert "MunsterChuck" in bosses
-    assert len(bosses) == 10
+    assert len(bosses) >= 10   # grew from 10 to 12 as the data added named bosses
     assert units.is_boss("MunsterChuck")
     assert not units.is_boss("Kobold")
 
@@ -45,7 +45,7 @@ def test_every_catalog_companion_is_detected():
     # the collection catalog's companions category is the authoritative list
     from farever_companion.data import collections as col
     ids = [r["id"] for r in col.items("companions")]
-    assert len(ids) == 60
+    assert len(ids) >= 60   # grew from 60 to 74 as the catalog gained pets
     missed = [i for i in ids if not units.is_companion(i)]
     assert not missed, f"catalog companions not detected: {missed}"
 

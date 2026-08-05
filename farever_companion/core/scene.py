@@ -25,7 +25,8 @@ from ..constants import (   # offsets live in one place; re-exported for callers
     OFF_BOX_VALUE, CONFIG_SCAN_BYTES,
     OFF_MAIN_ACTIVITY, OFF_UATTR, OFF_LEVEL_UNIT, OFF_HEALTH,
     OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_RIFT_BOOL, OFF_WORLD_MAPID, OFF_WORLDEVENTS_ARR,
-    OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES
+    OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES,
+    OFF_CONFIG_MAPID, OFF_CONFIG_DIFFICULTY,
 )
 
 _ELEM_KINDS = {
@@ -105,6 +106,8 @@ class Element:
             if self.is_chest:
                 return "chest"
             if self.is_orb:
+                if "chestorb" in eid_l or "chest_orb" in eid_l or "timercollectrun" in eid_l:
+                    return "chest_orb"
                 return "orb"
             if self.is_obelisk:
                 if "checkpoint" in eid_l or "finish_" in eid_l or "start_" in eid_l:
@@ -231,8 +234,9 @@ class Scene:
 
     def _is_config_struct(self, cfg: int) -> bool:
         """Validates that cfg points to a st.Config-like struct."""
-        # Try mapId candidates from constants.py
-        for off in OFF_CONFIG_MAPID_CANDIDATES:
+        # Check the current candidate offsets first, then the documented classic
+        # layout (mapId at +0x10) so both the live build and older builds scan.
+        for off in (*OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_MAPID):
             try:
                 mp = self.hl.ptr(cfg + off)
                 if is_ptr(mp) and self.hl.class_of(mp) == "String":
@@ -244,30 +248,24 @@ class Scene:
         return False
 
     def _difficulty_at(self, cfg: int | None) -> int | None:
-        """Read difficulty from a candidate config struct."""
+        """Read difficulty from a candidate config struct.
+
+        Difficulty is a boxed Null<Int>: box+0x08 -> i32 (0=Normal, 1=Hard),
+        and a null box means "outside an instance". Tried at the current
+        candidate offsets first, then the classic +0x08 layout. A raw i32 read
+        is deliberately NOT used here: an unset slot reads as 0 and would fake
+        "Normal" outside an instance (the old fallback did exactly that)."""
         if not cfg:
             return None
-            
-        # Try difficulty candidates from constants.py
-        for off in OFF_CONFIG_DIFF_CANDIDATES:
-            # 1. Try as boxed Null<Int>
+
+        for off in (*OFF_CONFIG_DIFF_CANDIDATES, OFF_CONFIG_DIFFICULTY):
             box = self.hl.ptr(cfg + off)
             if is_ptr(box):
-                try:
-                    raw = self.proc.try_read(box + OFF_BOX_VALUE, 4)
-                    if raw:
-                        v = struct.unpack("<i", raw)[0]
-                        if v in (0, 1): return v
-                except: pass
-            
-            # 2. Try as raw i32
-            try:
-                raw = self.proc.try_read(cfg + off, 4)
+                raw = self.proc.try_read(box + OFF_BOX_VALUE, 4)
                 if raw:
                     v = struct.unpack("<i", raw)[0]
-                    if v in (0, 1): return v
-            except: pass
-            
+                    if v in (0, 1):
+                        return v
         return None
 
     def map_id(self, pbase: int | None) -> str | None:

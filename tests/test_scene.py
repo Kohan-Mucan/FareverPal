@@ -14,8 +14,8 @@ hl_mod = pytest.importorskip("farever_companion.core.hl")
 scene_mod = pytest.importorskip("farever_companion.core.scene")
 from farever_companion.core.hl import Hl
 from farever_companion.core.scene import (
-    Scene, OFF_GAMELAYER, OFF_UNITS_ARR, OFF_ELEMS_ARR, OFF_OWNER, OFF_POS,
-    OFF_UNITID, OFF_ELEMSTATE,
+    Scene, OFF_GAMELAYER, OFF_UNITS_ARR, OFF_ELEMS_ARR, OFF_FOE_OWNER, OFF_POS,
+    OFF_UNITID, OFF_ELEMID, OFF_ELEMSTATE,
 )
 
 
@@ -35,7 +35,9 @@ def _build():
 
     def unit(type_name, owner, uid, xyz):
         u = hb.make_instance(type_name)
-        proc.put_u64(u + OFF_OWNER, owner)
+        # Current calibration: foe/pet owner lives at OFF_FOE_OWNER (0x78);
+        # the reader resolves a hero-owner at +0x498 via OFF_HERO_OWNERPLAYER.
+        proc.put_u64(u + OFF_FOE_OWNER, owner)
         proc.put_f64(u + OFF_POS, xyz[0])
         proc.put_f64(u + OFF_POS + 8, xyz[1])
         proc.put_f64(u + OFF_POS + 16, xyz[2])
@@ -51,7 +53,7 @@ def _build():
     proc.put_f64(chest + OFF_POS, 7.0)
     proc.put_f64(chest + OFF_POS + 8, 8.0)
     proc.put_f64(chest + OFF_POS + 16, 9.0)
-    proc.put_u64(chest + 0x268, hb.make_string("WorldChest_1"))
+    proc.put_u64(chest + OFF_ELEMID, hb.make_string("WorldChest_1"))
     proc.put_u64(chest + OFF_ELEMSTATE, hb.make_string("Closed"))
     gatherable = hb.make_instance("ent.interactible.Gatherable")
 

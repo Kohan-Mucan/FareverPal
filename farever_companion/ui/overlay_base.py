@@ -36,7 +36,7 @@ class _TitleBar(QtWidgets.QFrame):
         self.codex_btn = QtWidgets.QPushButton()
         self.codex_btn.setObjectName("Icon")
         self.codex_btn.setIcon(icons.ui_qicon("layout", theme.MUTED, 16))
-        self.codex_btn.setToolTip("Open Bestiary (Codex)")
+        self.codex_btn.setToolTip("Open Codex")
         self.codex_btn.clicked.connect(window._on_codex_clicked)
         self.codex_btn.setVisible(False)
         lay.addWidget(self.codex_btn, 0, QtCore.Qt.AlignVCenter)

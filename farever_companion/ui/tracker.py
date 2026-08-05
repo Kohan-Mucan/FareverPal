@@ -111,8 +111,8 @@ class TrackController(QtCore.QObject):
         
         # If kinds don't match, it's not the same target (e.g. tracking orb while selecting chest)
         if curr_tk != tk:
-            # Fallback for chest/recipe ambiguity
-            if tk in ("chest", "recipe") and curr_tk in ("chest", "recipe"):
+            # Fallback for chest/recipe/chest_orb ambiguity
+            if tk in ("chest", "recipe", "chest_orb") and curr_tk in ("chest", "recipe", "chest_orb"):
                 pass
             # Fallback for 'static' HUD kind matching specific sub-kinds
             elif tk == "static" and curr_tk in ("dungeon", "rift", "obelisk", "pos", "respawn"):
@@ -298,7 +298,13 @@ class TrackController(QtCore.QObject):
             if kind == "unit":
                 profile = self.model.player_profile() if (hasattr(self.model, "player_profile") and callable(self.model.player_profile)) else None
                 hidden_units = set(self.s.get_entity_hidden_units(profile)) | set(self.s.get_companion_hidden_units(profile))
-                if key in hidden_units:
+
+                # Spark mobs bypass hidden status if either global toggle is ON
+                from ..data import units as udata
+                is_spark = udata.drops_spark(key)
+                show_spark = getattr(self.s, "show_spark_mobs", False) or getattr(self.s, "minimap_spark_mobs", False)
+
+                if key in hidden_units and not (is_spark and show_spark):
                     self.clear()
                     return None
             label = names.unit_name(key) or key
@@ -348,13 +354,7 @@ class TrackController(QtCore.QObject):
         if self._needle is None or not self._needle.isVisible():
             return
         m = self.model
-        if m is None:
-            return
-        if m.player_addr is None:
-            self.clear()
-            return
-        if m.player_addr is None:
-            self.clear()
+        if m is None or m.player_addr is None:
             return
         tgt = self._target()
         if tgt is None:

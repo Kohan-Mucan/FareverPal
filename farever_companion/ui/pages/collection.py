@@ -1,10 +1,10 @@
 """Collection tracker page.
 
-The full collectible catalog (mounts / gliders / companions, from the bundled
-collection_catalog.json) as a checkable list, synced to the signed-in Farever
-Pal account — the same state the website's Collection page edits. Toggles are
-optimistic and pushed in the background; a failed push is re-queued and
-retried on the next change or refresh.
+The full collectible catalog (mounts / gliders / companions, compiled from
+codex.json) as a checkable list, synced to the signed-in Farever Pal account —
+the same state the website's Collection page edits. Toggles are optimistic and
+pushed in the background; a failed push is re-queued and retried on the next
+change or refresh.
 """
 from __future__ import annotations
 
