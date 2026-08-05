@@ -28,6 +28,38 @@ _OVERLAY_CLASSES = {
 }
 
 
+def _is_valid_game_window(active_hwnd: int, game_pid: int) -> bool:
+    """Returns True ONLY if active_hwnd is the main game rendering window."""
+    if not active_hwnd or not game_pid:
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(active_hwnd, ctypes.byref(pid))
+    if pid.value != game_pid or (hasattr(user32, "IsHungAppWindow") and user32.IsHungAppWindow(active_hwnd)):
+        return False
+
+    # GW_OWNER = 4: modal dialogs/popups have an owner window set; main window does not
+    if user32.GetWindow(active_hwnd, 4):
+        return False
+
+    buf = ctypes.create_unicode_buffer(512)
+    user32.GetClassNameW(active_hwnd, buf, 256)
+    cls_name = buf.value.lower()
+    if cls_name == "#32770" or "dialog" in cls_name or "crash" in cls_name:
+        return False
+
+    user32.GetWindowTextW(active_hwnd, buf, 512)
+    title = buf.value.lower()
+    if any(k in title for k in ("crash", "error", "exception", "fatal", "assert", "dump", "unhandled", "fault", "stopped")):
+        return False
+
+    rect = wintypes.RECT()
+    return not (user32.GetClientRect(active_hwnd, ctypes.byref(rect)) and (rect.right < 400 or rect.bottom < 300))
+
+
 class OverlayManager(QtCore.QObject):
     log = QtCore.Signal(str)            # status-log line for the panel
     request_page = QtCore.Signal(str)   # an overlay asked to raise a specific control panel page
@@ -54,6 +86,7 @@ class OverlayManager(QtCore.QObject):
         self._combat_timer.setInterval(getattr(self.s, "mouse_snap_rate", 500))
         self._combat_timer.timeout.connect(self._combat_tick)
         self._last_prof = None
+        self._last_had_addr = False
         self._last_map_id = None
 
     def update_combat_timer_rate(self) -> None:
@@ -79,6 +112,15 @@ class OverlayManager(QtCore.QObject):
                 if panel:
                     if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
                     if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
+                    if hasattr(panel, "_last_hidden_chest_orb"): panel._last_hidden_chest_orb = None
+                    # Plotted codex map pins belong to the old character's
+                    # context — clear them alongside the tracker.
+                    if hasattr(panel, "_clear_codex_map_selection"):
+                        panel._clear_codex_map_selection()
+                    # Profile-driven codex views (remaining Chests/Orbs) must
+                    # re-render against the new character's collected state.
+                    if hasattr(panel, "_refresh_codex_grid"):
+                        panel._refresh_codex_grid()
             self._last_prof = prof
 
         self.model = model
@@ -160,6 +202,7 @@ class OverlayManager(QtCore.QObject):
     def _make(self, key: str):
         panel = self.parent()  # The ControlPanel QWidget
         ov = _OVERLAY_CLASSES[key](self.model, self.s, parent=panel)
+        ov._main_win = panel
         if hasattr(ov, "request_page"):
             ov.request_page.connect(self.request_page)
         elif hasattr(ov, "request_config"):
@@ -313,7 +356,7 @@ class OverlayManager(QtCore.QObject):
         if active_hwnd and m.proc:
             pid = ctypes.c_ulong()
             ctypes.windll.user32.GetWindowThreadProcessId(active_hwnd, ctypes.byref(pid))
-            is_strictly_game = (pid.value == m.proc.pid)
+            is_strictly_game = _is_valid_game_window(active_hwnd, m.proc.pid)
             is_app_focused = (pid.value == os.getpid())
 
         # 2. Menu Detection
@@ -324,8 +367,8 @@ class OverlayManager(QtCore.QObject):
             menu_any = False
             menu_hide = False
 
-        # 3. Mouse Snapping (only if enabled and not in any menu)
-        if getattr(self.s, "snap_mouse_to_player", False) and is_strictly_game and not menu_any:
+        # 3. Mouse Snapping (only if enabled, attached, player addr is valid, and not in any menu)
+        if getattr(self.s, "snap_mouse_to_player", False) and is_strictly_game and m.player_addr is not None and not menu_any:
             rect = wintypes.RECT()
             if ctypes.windll.user32.GetClientRect(active_hwnd, ctypes.byref(rect)):
                 # center of client area
@@ -342,13 +385,24 @@ class OverlayManager(QtCore.QObject):
             curr_prof = None
 
         if curr_prof and self._last_prof and curr_prof != self._last_prof:
+            # Character changed — clear active tracking and selection
             self.tracker.clear()
             panel = self.parent() if hasattr(self, "parent") else None
             if panel:
                 if hasattr(panel, "_last_hidden_unit"): panel._last_hidden_unit = None
                 if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
-        elif not curr_prof and self._last_prof:
-            # Player logged out to menu/relog — clear active tracking and hidden undo buffers
+                if hasattr(panel, "_last_hidden_chest_orb"): panel._last_hidden_chest_orb = None
+                # Plotted codex map pins belong to the old character's
+                # context — clear them alongside the tracker.
+                if hasattr(panel, "_clear_codex_map_selection"):
+                    panel._clear_codex_map_selection()
+                # Profile-driven codex views (remaining Chests/Orbs) must
+                # re-render against the new character's collected state.
+                if hasattr(panel, "_refresh_codex_grid"):
+                    panel._refresh_codex_grid()
+
+        # Logged out check: if player address is gone, but was previously there
+        if m.player_addr is None and getattr(self, "_last_had_addr", False):
             self.tracker.clear()
             panel = self.parent() if hasattr(self, "parent") else None
             if panel:
@@ -356,6 +410,7 @@ class OverlayManager(QtCore.QObject):
                 if hasattr(panel, "_last_hidden_comp"): panel._last_hidden_comp = None
         
         self._last_prof = curr_prof
+        self._last_had_addr = (m.player_addr is not None)
 
         # 4. Dungeon/Rift detection
         in_dungeon = False
@@ -375,6 +430,7 @@ class OverlayManager(QtCore.QObject):
         if curr_map:
             if self._last_map_id and curr_map != self._last_map_id:
                 # Clear active compass tracking on map/zone/dungeon/rift swap
+                # This ensures the tracker doesn't point to non-existent objects in new scenes.
                 self.tracker.clear()
                 # Reset combat session data
                 try:
@@ -406,9 +462,13 @@ class OverlayManager(QtCore.QObject):
 
         for key, ov in items:
             if ov is not None:
-                # 1. Focus check (Show if game OR app is in focus)
-                # Hide map, entity, and compass if the player is not located (e.g. loading screen)
-                if not (is_strictly_game or is_app_focused) or (m.player_addr is None and key in ("map", "entity", "compass")):
+                # 1. Player / Focus check: Immediately hide map, entity, and compass if player address is missing (character screen, loading) or neither game nor app is focused
+                if m.player_addr is None and key in ("map", "entity", "compass"):
+                    if ov.isVisible():
+                        ov.hide()
+                    continue
+
+                if not (is_strictly_game or is_app_focused):
                     if ov.isVisible():
                         ov.hide()
                     continue

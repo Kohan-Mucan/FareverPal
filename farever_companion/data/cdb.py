@@ -67,9 +67,20 @@ def sheet(name: str) -> dict:
     # Fallback to JSON if not found in pre-compiled data
     path = paths.sheets_dir() / f"{name}.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"lines": []}
+    # Scan-generated files may wrap their rows in a top-level key
+    # (e.g. {"critters": [...]}) instead of {"lines": [...]}. Unwrap so
+    # lines() exposes the same flat shape as compiled sheets.
+    if isinstance(data, dict):
+        if "lines" in data:
+            return data
+        for v in data.values():
+            if isinstance(v, list):
+                return {"lines": v}
+        return {"lines": []}
+    return {"lines": data}
 
 
 def lines(name: str) -> list[dict]:

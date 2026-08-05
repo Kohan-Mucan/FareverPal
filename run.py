@@ -1,19 +1,72 @@
 """PyInstaller / direct entry point."""
+import os
 import sys
 
+
+def _profile_raw_data() -> None:
+    """Time each raw_* payload load at startup and log the durations.
+
+    Opt-in: only runs when FAREVER_PROFILE=1 is set, so normal startups stay
+    lazy — each consumer imports only the raw_X module it actually uses.
+    Every `raw_X.py` shim now embeds its payload (zlib+base85-compressed
+    JSON), so the per-module import time IS the per-file load cost (one
+    decompress + json.load). Size is the embedded compressed payload, the
+    exact bytes that ship in a frozen build.
+
+    A module that fails to load logs as FAILED and is left for the app's own
+    `try: from . import raw_X except ImportError` fallbacks to handle.
+
+    The frozen build is windowed (console=False), so prints are invisible
+    there. When FAREVER_PROFILE_LOG points at a writable path, the same lines
+    are mirrored to that file — handy for timing a packaged exe.
+    """
+    import importlib
+    import time
+
+    names = ("raw_codex", "raw_units", "raw_items", "raw_skills", "raw_data")
+    total_ms = 0.0
+    total_kb = 0.0
+    lines: list[str] = []
+    for name in names:
+        t0 = time.perf_counter()
+        try:
+            mod = importlib.import_module(f"farever_companion.data.{name}")
+        except Exception as exc:
+            lines.append(f"[startup] {name}: FAILED ({exc})")
+            continue
+        ms = (time.perf_counter() - t0) * 1000.0
+        total_ms += ms
+        kb = mod._payload_size_kb() if hasattr(mod, "_payload_size_kb") else 0.0
+        total_kb += kb
+        lines.append(f"[startup] {name}: {ms:7.1f} ms ({kb:6.1f} KB embedded)")
+    lines.append(f"[startup] total raw data: {total_ms:7.1f} ms ({total_kb:6.1f} KB)")
+    for line in lines:
+        print(line)
+    log_path = os.environ.get("FAREVER_PROFILE_LOG")
+    if log_path:
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except OSError:
+            pass
+
+
 try:
+    if os.environ.get("FAREVER_PROFILE") == "1":
+        _profile_raw_data()
+
     from farever_companion import paths
     icons_dir = paths.icons_dir()
     atlas_dir = paths.atlas_dir()
     
     has_icons = icons_dir.exists() and (icons_dir / "Items").exists() and (icons_dir / "Units").exists() and (icons_dir / "Skills").exists()
-    has_atlas = atlas_dir.exists() and any(atlas_dir.glob("*.json"))
+    has_atlas = atlas_dir.exists() and (any(atlas_dir.glob("*.webp")) or any(atlas_dir.glob("*.json")))
     
     if not (has_icons or has_atlas):
         msg = (
             f"ERROR: missing atlas/icon folder\n\n"
             f"Icons folder: {icons_dir} ({'Found' if has_icons else 'Missing/Incomplete Items, Units, or Skills subfolders'})\n"
-            f"Atlas folder: {atlas_dir} ({'Found' if has_atlas else 'Missing atlas *.json files'})"
+            f"Atlas folder: {atlas_dir} ({'Found' if has_atlas else 'Missing atlas *.webp or *.json files'})"
         )
         raise RuntimeError(msg)
 

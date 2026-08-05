@@ -11,8 +11,12 @@ Key properties:
   - In-repo assets are always bundled. A full
     local build ships the data while a bare checkout (e.g. CI) still builds a
     verification artifact.
-  - Unused Qt modules are excluded to trim the bundle; only QtCore/QtGui/
-    QtWidgets/QtSvg (+ the Windows platform plugin via PySide6's hook) are kept.
+  - Unused Qt modules are excluded AND the PySide6 binaries are whitelisted
+    (see QT_KEEP below) so only what the app actually loads ships:
+    Qt6Core/Gui/Widgets/Svg, the qwindows platform plugin, the qwebp + qico
+    image plugins (atlas + app icon), qmodernwindowsstyle, and the shiboken6/
+    pyside6 runtimes. Validated against PySide6 6.x — re-run the loaded-modules
+    probe (see QT_KEEP comment) after every PySide6/Qt upgrade.
 """
 import os
 
@@ -43,28 +47,38 @@ datas = [
     ("assets/app_icon.ico", "assets"),
 ]
 
-# Core game database (items, units, loot) is baked into raw_data.py
-# by compiler.py to keep the EXE small and fast.
+# Core game database (items, units, loot, locations) is embedded INSIDE the
+# raw_*.py shims by compiler.py as zlib+base85-compressed JSON (smaller
+# payloads, faster import than the old dict literals). The shims are picked
+# up as modules by hiddenimports below.
 raw_data_path = os.path.join(SPECPATH, "farever_companion", "data", "raw_data.py")
 has_raw_data = os.path.exists(raw_data_path) and os.path.getsize(raw_data_path) > 1000
 
-# Only bundle essential location/scan data from assets/data.
-data_src = os.path.join(SPECPATH, "assets", "data")
-essential_data = [
-    "poi_locs.json", "chest_locs.json", "critter_locs.json",
-    "orb_positions.json", "gatherable_locs.json", "_version.json",
-    "mob_locs.json"
-]
-for f in essential_data:
-    src = os.path.join(data_src, f)
-    if os.path.exists(src):
-        datas.append((src, "assets/data"))
+# Only bundle location/scan data if raw_data.py is missing (fallback mode).
+if not has_raw_data:
+    data_src = os.path.join(SPECPATH, "assets", "data")
+    essential_data = [
+        "poi_locs.json", "chest_locs.json", "critter_locs.json",
+        "orb_positions.json", "gatherable_locs.json", "_version.json",
+        "mob_locs.json"
+    ]
+    for f in essential_data:
+        src = os.path.join(data_src, f)
+        if os.path.exists(src):
+            datas.append((src, "assets/data"))
 
 atlas_src = os.path.join(SPECPATH, "assets", "atlas")
-using_atlas = os.path.exists(atlas_src) and any(f.startswith("atlas_") and f.endswith(".json") for f in os.listdir(atlas_src))
+using_atlas = os.path.exists(atlas_src) and any(f.startswith("atlas_") for f in os.listdir(atlas_src))
 
 if using_atlas:
-    datas.append(("assets/atlas", "assets/atlas"))
+    for f in os.listdir(atlas_src):
+        # Never pack atlas_map.json (unused debug map)
+        if f == "atlas_map.json":
+            continue
+        # Skip atlas JSON coordinate maps when raw_data.py is active (already compiled)
+        if has_raw_data and f.endswith(".json"):
+            continue
+        datas.append((os.path.join(atlas_src, f), "assets/atlas"))
 else:
     for folder in ["icons", "map_icons"]:
         src_path = os.path.join(SPECPATH, "assets", folder)
@@ -73,6 +87,60 @@ else:
 
 # --- data: optional local game-data dirs -----------------------------------
 # (Optional sibling htdocs fallback removed)
+
+# --- PySide6 DLL whitelist (trim the bundle) -------------------------------
+# PySide6's hook collects EVERY Qt DLL in the package (~17MB unused: QML/Quick,
+# Pdf, OpenGL, Network, VirtualKeyboard, opengl32sw...). The app only loads
+# QtCore/Gui/Widgets/Svg + the qwindows platform + qwebp/qico image plugins +
+# the qmodernwindowsstyle style. Verified at runtime: launched the frozen exe
+# and enumerated loaded modules — everything not in this whitelist never loads.
+# Applied to a.binaries below, which is where PySide6's hook puts the DLLs.
+#
+# UPGRADE CHECK: the whitelist silently drops any PySide6 binary not listed
+# here, so after every PySide6/Qt upgrade re-verify by launching the built exe
+# and enumerating loaded modules (PowerShell):
+#   $p = Get-Process FareverPal; $p.Modules | ? {$_.ModuleName -match '^Qt|opengl'} | % {$_.ModuleName}
+# Only the modules in QT_KEEP (plus shiboken6/pyside6 runtimes) may load.
+QT_KEEP = {
+    "PySide6/Qt6Core.dll", "PySide6/Qt6Gui.dll", "PySide6/Qt6Widgets.dll",
+    "PySide6/Qt6Svg.dll",
+    "PySide6/QtCore.pyd", "PySide6/QtGui.pyd", "PySide6/QtWidgets.pyd",
+    "PySide6/QtSvg.pyd",
+    "PySide6/pyside6.abi3.dll",
+    "PySide6/MSVCP140.dll", "PySide6/MSVCP140_1.dll", "PySide6/MSVCP140_2.dll",
+    "PySide6/VCRUNTIME140.dll", "PySide6/VCRUNTIME140_1.dll",
+    "PySide6/plugins/platforms/qwindows.dll",
+    "PySide6/plugins/imageformats/qwebp.dll",
+    "PySide6/plugins/imageformats/qico.dll",
+    "PySide6/plugins/styles/qmodernwindowsstyle.dll",
+}
+
+def _trim_qt_binaries(items):
+    """Drop PySide6 DLLs not in QT_KEEP; leave everything else untouched."""
+    out, dropped = [], 0
+    for dest, src, kind in items:
+        norm = dest.replace("\\", "/")
+        if norm.startswith("PySide6/") and norm not in QT_KEEP:
+            dropped += 1
+            continue
+        out.append((dest, src, kind))
+    if dropped:
+        print(f"[spec] trimmed {dropped} unused PySide6 binaries")
+    return out
+
+def _trim_qt_datas(items):
+    """Drop the 96 Qt .qm translation files (app never installs a QTranslator)
+    from datas; leave everything else untouched."""
+    out, dropped = [], 0
+    for dest, src, kind in items:
+        norm = dest.replace("\\", "/")
+        if norm.startswith("PySide6/translations/") and norm.endswith(".qm"):
+            dropped += 1
+            continue
+        out.append((dest, src, kind))
+    if dropped:
+        print(f"[spec] trimmed {dropped} unused Qt translation files")
+    return out
 
 # --- excludes: Qt modules the app never uses (trim the bundle) -------------
 # Keep only QtCore, QtGui, QtWidgets, QtSvg and the windows platform plugin
@@ -134,6 +202,16 @@ excludes = [
     "test",
     "msilib",
     "antigravity",
+    "pytest",
+    "pytest_qt",
+    "maturin",
+    "pyinstaller",
+    "pefile",
+    "pygments",
+    "setuptools",
+    "pip",
+    "pkg_resources",
+    "distutils",
 ]
 
 
@@ -145,6 +223,7 @@ a = Analysis(
     hiddenimports=[
         "farever_native",
         "farever_companion.data.raw_data",
+        "farever_companion.data.raw_codex",
         "farever_companion.data.raw_units",
         "farever_companion.data.raw_items",
         "farever_companion.data.raw_skills",
@@ -155,6 +234,13 @@ a = Analysis(
     excludes=excludes,
     noarchive=False,
 )
+
+# Trim the ~17MB of unused PySide6 DLLs (verified at runtime: nothing outside
+# QT_KEEP ever loads) and the 96 Qt translation files. Applied here, after
+# Analysis, where the hook's binaries/datas live; shiboken6 and everything
+# non-PySide6 pass through untouched.
+a.binaries = _trim_qt_binaries(a.binaries)
+a.datas = _trim_qt_datas(a.datas)
 
 pyz = PYZ(a.pure)
 

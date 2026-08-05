@@ -28,7 +28,8 @@ FORBIDDEN_TAILS = (
     "core.proc", "core.hl", "core.scene", "core.attributes",
     "core.damage", "core.player",
 )
-PAGE_FILES = sorted((UI_DIR / "pages").glob("*.py")) + [
+PAGE_FILES = sorted((UI_DIR / "pages").glob("*.py")) + \
+    sorted((UI_DIR / "pages" / "codex").glob("*.py")) + [
     UI_DIR / "account.py",
 ]
 

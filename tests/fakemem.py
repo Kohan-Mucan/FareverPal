@@ -191,6 +191,10 @@ class HeapBuilder:
         bptr = self.alloc(len(s) * 2 + 2)
         self.proc.put_utf16(bptr, s)
         strobj = self.alloc(0x18)
+        # A real HL String carries its hl_type at +0, so readers that guard
+        # with class_of(x) == "String" (e.g. the config signature scan) work.
+        tp = self.types.get("String") or self.make_type("String")
+        self.proc.put_u64(strobj, tp)
         self.proc.put_u64(strobj + 8, bptr)
         self.proc.put_i32(strobj + 0x10, len(s))
         return strobj

@@ -49,11 +49,87 @@ def _poi_markers() -> list[dict]:
     return cdb.lines("poi_locs")
 
 
+_COMPANION_RE = re.compile(r"^(.*)_Chest_\d+$")
+
+# How close a reward-chest companion must be to an activity base to be the
+# same physical chest.  Shared by geo/chests.py, minimap.py and
+# entity_overlay.py (see chest_resolver.ACTIVITY_BASE_MATCH_DIST).
+ACTIVITY_BASE_MATCH_DIST = 40.0
+
+# Activity kinds whose bases render a marker of their own and pair with a
+# `_Chest_<n>` reward chest (see _dedupe_activity_pairs).
+_ORB_ACTIVITY_KINDS = ("ChestOrb", "Chest_Orb", "TimerCollectRun")
+
+
+def _dedupe_activity_pairs(markers: list[dict]) -> list[dict]:
+    """Drop duplicated activity markers so one physical event chest shows up once.
+
+    The scan emits two entries per event chest: the activity *base* (e.g.
+    `Z1_World_Greenlands_FightStone_11` / `..._ChestOrb_20`) and a *companion*
+    (`FightStone` or `..._ChestOrb_20_Chest_1`) at (nearly) the same spot.  We
+    keep the base — it drives the activity lifecycle on the map — and drop the
+    companion when it actually sits near a base.
+
+    Matching is by POSITION, never by id prefix: the game names reward chests
+    `..._ChestOrb_<n>_Chest_<m>` where `<n>` does not reliably name the
+    activity (e.g. `..._ChestOrb_10_Chest_2` sits on the `..._ChestOrb_12`
+    base, and `..._ChestOrb_3_Chest_7` on `..._ChestOrb_16`), so an id-based
+    "base exists" check would eat real chests that nothing else covers.  Only
+    orb-activity companions are collapsed this way — a `..._Camp_N_Chest_1`
+    near a ChestOrb base is a distinct chest and keeps its own marker.
+    """
+    orb_bases = [
+        m for m in markers
+        if (m.get("sub_kind") or "") == "activity"
+        and any(t in (m.get("chest_id") or m.get("id") or "") for t in _ORB_ACTIVITY_KINDS)
+    ]
+    fs_instances = [
+        m for m in markers
+        if (m.get("chest_id") or m.get("id") or "") != "FightStone"
+        and "FightStone" in (m.get("chest_id") or m.get("id") or "")
+    ]
+
+    def _near(m: dict, pool: list[dict], limit: float) -> bool:
+        """True when some entry in `pool` sits within `limit` units of `m`."""
+        wp = m.get("world_pos") or {}
+        x, y = wp.get("x"), wp.get("y")
+        if x is None or y is None:
+            return False
+        for inst in pool:
+            iw = inst.get("world_pos") or {}
+            ix, iy = iw.get("x"), iw.get("y")
+            if ix is None or iy is None:
+                continue
+            if math.hypot(x - ix, y - iy) <= limit:
+                return True
+        return False
+
+    out = []
+    for m in markers:
+        cid = m.get("chest_id") or m.get("id") or ""
+        # bare `FightStone` mirrors a *_FightStone_<n> instance near the same spot
+        if cid == "FightStone" and _near(m, fs_instances, 30.0):
+            continue
+        # `..._ChestOrb_N_Chest_<m>` companion that duplicates a nearby
+        # orb-activity base
+        if (_COMPANION_RE.match(cid)
+                and any(t in cid for t in _ORB_ACTIVITY_KINDS)
+                and _near(m, orb_bases, ACTIVITY_BASE_MATCH_DIST)):
+            continue
+        out.append(m)
+    return out
+
+
 @lru_cache(maxsize=1)
 def load_chests() -> list[Chest]:
     """All chests from chest_locs.json that have a world position."""
     out = []
-    for m in _chest_markers():
+    for m in _dedupe_activity_pairs(_chest_markers()):
+        # Skip generic activity markers (trigger points) that aren't chests/orbs
+        if (m.get("sub_kind") or "") == "activity":
+            cid = m.get("chest_id") or m.get("id", "")
+            if "ChestOrb" not in cid and "FightStone" not in cid:
+                continue
         wp = m.get("world_pos") or {}
         x = wp.get("x")
         y = wp.get("y")
@@ -79,7 +155,18 @@ def load_chests() -> list[Chest]:
 def _index() -> dict[str, str]:
     """{chest_id -> lootTable} built from chest_locs + poi_locs."""
     out: dict[str, str] = {}
+    # No _dedupe_activity_pairs() here on purpose: the dedupe drops the
+    # `_Chest_<n>` / bare `FightStone` COMPANIONS, which are exactly the rows
+    # that carry the real loot (WorldChest).  Map markers collapse to one per
+    # spot, but the loot index must keep every id so `..._ChestOrb_10_Chest_2`
+    # and `..._FightStone_11` still resolve to a real loot table.
     for m in _chest_markers():
+        # Skip generic activity markers so they don't resolve loot tables
+        # unless they are ChestOrbs or FightStones.
+        if (m.get("sub_kind") or "") == "activity":
+            cid = m.get("chest_id") or m.get("id") or ""
+            if "ChestOrb" not in cid and "FightStone" not in cid:
+                continue
         lt = m.get("lootTable")
         if not lt:
             continue

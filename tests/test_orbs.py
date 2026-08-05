@@ -6,7 +6,7 @@ from farever_companion.geo import nav, orbs
 
 def test_orb_index_loads():
     all_orbs = orbs.load_orbs()
-    assert len(all_orbs) == 199
+    assert len(all_orbs) == 284
     ids = [o.orb_id for o in all_orbs]
     assert len(set(ids)) == len(ids)
     for o in all_orbs:
@@ -15,13 +15,15 @@ def test_orb_index_loads():
 
 
 def test_region_counts():
-    # 99 zone-baked per region count toward the achievement; Z1 carries one
-    # extra placement whose region was inferred (empty zoneBaked in the prefab)
+    # 99 zone-baked per region count toward the achievement; Z1 carries two
+    # extra placements whose region was inferred (empty zoneBaked in prefab),
+    # and Z3 now has 84 real placements.
     by_region = {}
     for o in orbs.load_orbs():
         by_region.setdefault(o.region, []).append(o)
     assert len([o for o in by_region["Z1"] if o.zone]) == 99
     assert len([o for o in by_region["Z2"] if o.zone]) == 99
+    assert len([o for o in by_region["Z3"] if o.zone]) == 84
 
 
 def test_by_id_lookup():

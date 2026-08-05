@@ -14,7 +14,7 @@ from .scene import Scene, Entity, Element
 from .player import PlayerLocator
 from .announcement_reader import AnnouncementReader
 from .camera import ViewCamera
-from .chest_resolver import ChestResolver, ChestRow
+from .chest_resolver import ChestResolver, ChestRow, is_event_orb_id
 from .damage_source import DamageSourceManager
 from .rift_tracker import RiftTracker, RiftStatus
 from . import attributes
@@ -367,12 +367,20 @@ class LiveModel:
                     
                     elem_id = e.elem_id
                     if "fightstone" in elem_id.lower():
+                        # Live fight-spot chests use the GENERIC id "FightStone"
+                        # — the same for every fight chest.  Resolve it to the
+                        # nearest static anchor (…_FightStone_N) so done-marking
+                        # is per-chest and the label is meaningful.  Anchors are
+                        # the fight spots themselves, so a live chest always
+                        # spawns right on one; 60 m is a generous tolerance.
+                        # ⛔ ORB-CHEST ACTIVITY LOGIC — DO NOT EDIT (see
+                        # docs/CHEST_ORB_LOGIC.md).
                         fs_chests = [c for c in self.chests if "fightstone" in c.chest_id.lower()]
                         if fs_chests:
                             closest_static = min(fs_chests, key=lambda c: math.hypot(c.x - e.x, c.y - e.y))
-                            if math.hypot(closest_static.x - e.x, closest_static.y - e.y) < 5.0:
+                            if math.hypot(closest_static.x - e.x, closest_static.y - e.y) < 60.0:
                                 elem_id = closest_static.chest_id
-                                
+
                     if elem_id != e.elem_id:
                         e = replace(e, elem_id=elem_id)
                     out.append(e)
@@ -444,16 +452,30 @@ class LiveModel:
         except ProcError:
             return []
 
-    def live_chest_orbs(self) -> list[Element]:
-        """Chest orbs (ent.Element) and TimerCollectRun orbs in the loaded scene."""
+    def live_chest_orbs(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
+        """Chest orbs (ent.Element) and TimerCollectRun orbs in the loaded scene.
+
+        ⛔ ORB-CHEST ACTIVITY LOGIC — DO NOT EDIT.  Filtered exclusively by
+        chest_resolver.is_event_orb_id(); see docs/CHEST_ORB_LOGIC.md.  Do not
+        change unless explicitly asked because a GAME UPDATE broke it."""
         try:
+            from ..geo import zones as geo_zones
+            pxyz = self.player_xyz()
             out = []
             for e in self.scene.elements(self.player_addr):
                 if not e.elem_id:
                     continue
-                eid_l = e.elem_id.lower()
-                if ("chestorb" in eid_l and "_orb_" in eid_l) or "timercollectrun" in eid_l:
-                    out.append(e)
+                if not is_event_orb_id(e.elem_id):
+                    continue
+                if max_dist > 0 and pxyz:
+                    dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                    if dist > max_dist:
+                        continue
+                if player_zone:
+                    ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
+                    if ezone != player_zone:
+                        continue
+                out.append(e)
             return out
         except ProcError:
             return []
@@ -616,8 +638,10 @@ class LiveModel:
     def nearest_chests_merged(self, xyz: XYZ, n: int, max_dist: float = 0.0,
                               player_zone: str | None = None,
                               use_2d: bool = False) -> list[ChestRow]:
+        live = self.live_chests(player_zone, max_dist, use_2d=use_2d)
+        live += self.live_chest_orbs(player_zone, max_dist, use_2d=use_2d)
         return self.chests_resolver.nearest_chests_merged(
-            xyz, n, self.dungeon_boss, self.live_chests(player_zone, max_dist, use_2d=use_2d),
+            xyz, n, self.dungeon_boss, live,
             max_dist, player_zone, use_2d=use_2d)
 
     def player_profile(self) -> str | None:

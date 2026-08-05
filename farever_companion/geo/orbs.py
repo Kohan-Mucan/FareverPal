@@ -1,9 +1,9 @@
 """Static secret-orb index: the world RedOrb_World placements.
 
-Loads `notes/orb_positions.json` (199 orbs resolved from the world prefabs;
-99 per region count toward the "Collector of <region>" achievements).
-Coordinates are global world XYZ, same frame as chests. Pure data, no
-attached process.
+Loads `notes/orb_positions.json` (284 orbs resolved from the world prefabs:
+99 zone-baked per region toward the "Collector of <region>" achievements,
+plus two inferred Z1 placements and 84 real Z3 placements). Coordinates are
+global world XYZ, same frame as chests. Pure data, no attached process.
 """
 from __future__ import annotations
 
@@ -47,8 +47,14 @@ def load_orbs() -> list[Orb]:
     for o in raw:
         if not isinstance(o, dict) or not o.get("id"):
             continue
+        # Normalize coordinates to float — the source JSON may encode whole
+        # numbers as int (e.g. "z": 348) and every consumer does float math.
+        try:
+            x, y, z = (float(o["x"]), float(o["y"]), float(o["z"]))
+        except (KeyError, TypeError, ValueError):
+            continue
         out.append(Orb(
-            orb_id=o["id"], x=o["x"], y=o["y"], z=o["z"],
+            orb_id=o["id"], x=x, y=y, z=z,
             region=o.get("region") or "?", zone=o.get("zone") or None,
         ))
     return out

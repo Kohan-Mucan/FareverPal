@@ -1,7 +1,10 @@
 """User settings + persistence.
 
 Stored as JSON inside moddata/ folder next to the app executable (or dist/moddata in dev mode).
-No core/Qt imports here (pure data) so any layer can read it.
+No core/Qt imports here (pure data) so any layer can read it. The crash-safe
+write/backup primitives live in .persist and every writer (settings,
+collection, profiles, and the fields they carry — dps bests, server pings,
+geometry) funnels through them.
 """
 from __future__ import annotations
 
@@ -9,6 +12,13 @@ import json
 import os
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
+
+from .persist import (
+    atomic_write_json,
+    backup_corrupt,
+    find_backup_files as _find_backup_files,
+    restore_backup_file,
+)
 
 
 def experimental_enabled() -> bool:
@@ -31,6 +41,38 @@ def _settings_path() -> Path:
     return config_dir() / "settings.json"
 
 
+def _collection_path() -> Path:
+    return config_dir() / "collection.json"
+
+
+def find_backup_files() -> list[Path]:
+    """Every *.bak file preserved in config_dir() — settings.json.bak,
+    collection.json.bak, progress_*.json.bak — oldest first. Empty when none
+    were preserved (fresh install or nothing ever corrupted).
+
+    Thin wrapper over persist.find_backup_files() bound to the app's moddata
+    folder; the primitive itself lives in .persist."""
+    return _find_backup_files(config_dir())
+
+
+def _categorize_companion(uid: str) -> str:
+    if uid.startswith("Mount_"):
+        return "mounts"
+    if uid.startswith("Glider_"):
+        return "gliders"
+    try:
+        from .data import collections as col
+        for m in col.items("mounts"):
+            if m["id"] == uid:
+                return "mounts"
+        for g in col.items("gliders"):
+            if g["id"] == uid:
+                return "gliders"
+    except Exception:
+        pass
+    return "pets"
+
+
 @dataclass
 class Settings:
     # --- Core Application Settings ---
@@ -49,7 +91,8 @@ class Settings:
     mouse_snap_rate: int = 500
 
     # --- Overlay General ---
-    show_enemies: bool = False
+    show_enemies: bool =False
+    show_spark_mobs: bool = False
     enemy_count: int = 4
     show_chests: bool = True
     chest_count: int = 4
@@ -69,9 +112,9 @@ class Settings:
     entity_font_size: int = 15
     entity_bare: bool = False
     PlayerNames: bool = False
-    show_group_members: bool = False
+    show_group_members: bool = True
     group_count: int = 5
-    show_gatherables: bool = True
+    show_gatherables: bool = False
     # --- Specific Entity Toggles ---
     show_lavendula: bool = True
     show_madrigold: bool = True
@@ -111,12 +154,14 @@ class Settings:
     minimap_limit_by_zone: bool = True
     minimap_hide_collected: bool = False
     minimap_enemies: bool = False
+    minimap_spark_mobs: bool = True
     minimap_chests: bool = True
     minimap_gatherables: bool = False
     minimap_obelisks: bool = True
     minimap_orbs: bool = True
     minimap_dungeons: bool = True
     minimap_companions: bool = True
+    minimap_petshops: bool = True
 
     # --- Speedrun ---
     speedrun_auto: bool = False
@@ -130,10 +175,10 @@ class Settings:
     open_overlay_speedrun: bool = False
 
     # --- Overlay Open States ---
-    open_overlay_entity: bool = False
+    open_overlay_entity: bool = True
     open_overlay_dps: bool = False
     open_overlay_skills: bool = False
-    open_overlay_map: bool = False
+    open_overlay_map: bool = True
 
     # --- Navigation & Targeting ---
     track_kind: str = ""
@@ -166,7 +211,26 @@ class Settings:
     speedrun_best: dict = field(default_factory=dict)
     speedrun_boss_best: dict = field(default_factory=dict)
     poi_done: list = field(default_factory=list)
-    companion_hidden_units: list = field(default_factory=list)
+    entity_hidden_units: list = field(default_factory=list)
+    pet_hidden_units: list = field(default_factory=list)
+    mount_hidden_units: list = field(default_factory=list)
+    glider_hidden_units: list = field(default_factory=list)
+
+    @property
+    def companion_hidden_units(self) -> list[str]:
+        return sorted(set(self.pet_hidden_units + self.mount_hidden_units + self.glider_hidden_units))
+
+    @companion_hidden_units.setter
+    def companion_hidden_units(self, val: list[str]) -> None:
+        p_list, m_list, g_list = [], [], []
+        for u in (val or []):
+            cat = _categorize_companion(u)
+            if cat == "mounts": m_list.append(u)
+            elif cat == "gliders": g_list.append(u)
+            else: p_list.append(u)
+        self.pet_hidden_units = sorted(set(p_list))
+        self.mount_hidden_units = sorted(set(m_list))
+        self.glider_hidden_units = sorted(set(g_list))
 
     def __post_init__(self):
         # Runtime-only cache of loaded profile progress lists
@@ -174,20 +238,73 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
+        p = _settings_path()
         try:
-            data = json.loads(_settings_path().read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return cls()
+            # A corrupt/unreadable file must never be silently overwritten by
+            # the next save(): move it aside so it survives for recovery.
+            backup_corrupt(p)
+            data = {}
         known = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        inst = cls(**{k: v for k, v in data.items() if k in known})
+
+        # Load collection data from collection.json (separate from settings.json)
+        coll_path = _collection_path()
+        if coll_path.exists():
+            try:
+                coll_data = json.loads(coll_path.read_text(encoding="utf-8"))
+                if isinstance(coll_data, dict):
+                    inst.pet_hidden_units = coll_data.get("pets", [])
+                    inst.mount_hidden_units = coll_data.get("mounts", [])
+                    inst.glider_hidden_units = coll_data.get("gliders", [])
+            except (OSError, json.JSONDecodeError):
+                # preserve a corrupt file instead of clobbering it on save
+                backup_corrupt(coll_path)
+
+        # Migrate the old no-profile fallback file: hidden mobs toggled while
+        # no character was attached used to live in progress_default.json.
+        # Fold them into the global settings list and remove the file —
+        # profile data is per-character only, collection is global.
+        try:
+            def_path = config_dir() / "progress_default.json"
+            if def_path.exists():
+                def_data = json.loads(def_path.read_text(encoding="utf-8"))
+                merged = sorted(set(inst.entity_hidden_units)
+                                | set(def_data.get("entity_hidden_units", [])))
+                if merged != inst.entity_hidden_units:
+                    inst.entity_hidden_units = merged
+                inst.save()          # persist before deleting so nothing is lost
+                def_path.unlink()
+        except (OSError, json.JSONDecodeError):
+            pass
+        return inst
+
+    def save_collection(self) -> None:
+        """Save collection data (pets, mounts, gliders hidden state) to collection.json."""
+        try:
+            data = {
+                "pets": sorted(set(self.pet_hidden_units)),
+                "mounts": sorted(set(self.mount_hidden_units)),
+                "gliders": sorted(set(self.glider_hidden_units))
+            }
+            atomic_write_json(_collection_path(), data)
+        except OSError:
+            pass
 
     def save(self) -> None:
         try:
             # Exclude runtime-only cached attributes starting with underscore
             serialized = {k: v for k, v in asdict(self).items() if not k.startswith("_")}
-            _settings_path().write_text(json.dumps(serialized, indent=1), encoding="utf-8")
+            # Keep settings.json clean by removing collection lists
+            serialized.pop("pet_hidden_units", None)
+            serialized.pop("mount_hidden_units", None)
+            serialized.pop("glider_hidden_units", None)
+            serialized.pop("companion_hidden_units", None)
+            atomic_write_json(_settings_path(), serialized)
         except OSError:
             pass
+        self.save_collection()
 
     # --- profile data helpers -------------------------------------------
     def _ensure_profile_loaded(self, profile: str) -> None:
@@ -197,6 +314,8 @@ class Settings:
                 try:
                     self._profile_progress[profile] = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:
+                    # never silently overwrite a corrupt per-character file
+                    backup_corrupt(path)
                     self._profile_progress[profile] = {}
             else:
                 self._profile_progress[profile] = {}
@@ -205,7 +324,7 @@ class Settings:
         try:
             path = config_dir() / f"progress_{profile}.json"
             data = self._profile_progress.get(profile, {})
-            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            atomic_write_json(path, data)
         except OSError:
             pass
 
@@ -294,41 +413,52 @@ class Settings:
         return done
 
     def get_entity_hidden_units(self, profile: str | None = None) -> list[str]:
-        if not profile:
-            return []
-        self._ensure_profile_loaded(profile)
-        return self._profile_progress[profile].setdefault("entity_hidden_units", [])
+        """Hidden mobs: per-character when a profile is attached, otherwise the
+        global settings list (never a progress_default.json)."""
+        if profile:
+            self._ensure_profile_loaded(profile)
+            return self._profile_progress[profile].setdefault("entity_hidden_units", [])
+        return self.entity_hidden_units
 
     def toggle_unit_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
-        if not profile:
-            return
-        hidden_list = self.get_entity_hidden_units(profile)
-        cur = set(hidden_list)
-        (cur.add if hidden else cur.discard)(uid)
-        new_list = sorted(cur)
-        
-        self._profile_progress[profile]["entity_hidden_units"] = new_list
-        self.save_profile_data(profile)
+        if profile:
+            hidden_list = self.get_entity_hidden_units(profile)
+            cur = set(hidden_list)
+            (cur.add if hidden else cur.discard)(uid)
+            new_list = sorted(cur)
+            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            self.save_profile_data(profile)
+        else:
+            cur = set(self.entity_hidden_units)
+            (cur.add if hidden else cur.discard)(uid)
+            self.entity_hidden_units = sorted(cur)
+            self.save()
 
     def bulk_toggle_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
-        if not profile:
-            return
-        hidden_list = self.get_entity_hidden_units(profile)
-        cur = set(hidden_list)
-        for uid in uids:
-            (cur.add if hidden else cur.discard)(uid)
-        new_list = sorted(cur)
-        
-        self._profile_progress[profile]["entity_hidden_units"] = new_list
-        self.save_profile_data(profile)
+        if profile:
+            hidden_list = self.get_entity_hidden_units(profile)
+            cur = set(hidden_list)
+            for uid in uids:
+                (cur.add if hidden else cur.discard)(uid)
+            new_list = sorted(cur)
+            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            self.save_profile_data(profile)
+        else:
+            cur = set(self.entity_hidden_units)
+            for uid in uids:
+                (cur.add if hidden else cur.discard)(uid)
+            self.entity_hidden_units = sorted(cur)
+            self.save()
 
     def set_all_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
-        if not profile:
-            return
-        new_list = sorted(uids) if hidden else []
-        self._ensure_profile_loaded(profile)
-        self._profile_progress[profile]["entity_hidden_units"] = new_list
-        self.save_profile_data(profile)
+        if profile:
+            new_list = sorted(uids) if hidden else []
+            self._ensure_profile_loaded(profile)
+            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            self.save_profile_data(profile)
+        else:
+            self.entity_hidden_units = sorted(uids) if hidden else []
+            self.save()
 
     # --- companions ----------------------------------------------------------
     def get_companion_hidden_units(self, profile: str | None = None) -> list[str]:
@@ -338,4 +468,4 @@ class Settings:
         cur = set(self.companion_hidden_units)
         (cur.add if hidden else cur.discard)(uid)
         self.companion_hidden_units = sorted(cur)
-        self.save()
+        self.save_collection()

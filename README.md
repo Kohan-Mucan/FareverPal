@@ -74,7 +74,7 @@ data management and asset extraction.
 
 ```bat
 :: from companion\  (a .venv with the deps is already set up)
-build.bat                                  :: builds the Rust extension (farever_native)
+.venv\Scripts\python.exe -m maturin develop --release -m native\Cargo.toml   :: build the Rust extension (farever_native)
 .venv\Scripts\python.exe -m farever_companion
 ```
 
@@ -97,12 +97,13 @@ reads, but the **player locate** (memory scan) needs `farever_native`.
 ## Build the single-file .exe
 
 ```bat
-build.bat        :: ensure the Rust ext is built first
-package.bat      :: runs PyInstaller -> dist\FareverPal.exe (bundles sheets + icons + data)
+build-mod.bat    :: one-shot pipeline: Rust ext -> compile data shims -> PyInstaller -> verify
 ```
 
-`package.bat` contains the full PyInstaller command. The resulting
-`dist\FareverPal.exe` (~105 MB, self-contained) is published as a GitHub
+`build-mod.bat` handles the whole pipeline in one go (Rust `farever_native`,
+`compiler.py` embedded shims, PyInstaller, `packaging/verify_assets.py`) and
+names the output `dist\FareverPal-<version>-<commit>.exe` from the latest git
+commit. The resulting exe (~105 MB, self-contained) is published as a GitHub
 **release asset**, not committed to the repo.
 
 ## Use

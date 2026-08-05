@@ -34,7 +34,7 @@ those are headless and unit-tested.
 :: from the companion\ directory
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
-build.bat                 :: compiles the Rust ext (farever_native) into the venv via maturin
+.venv\Scripts\python.exe -m maturin develop --release -m native\Cargo.toml   :: builds the Rust ext (farever_native) into the venv
 ```
 
 Run the app (needs Farever running to actually attach):
@@ -49,7 +49,7 @@ Run the tests (no game needed — do this before every PR):
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-If you skip `build.bat`, the app falls back to `pymem` for basic reads, but the
+If you skip the Rust build, the app falls back to `pymem` for basic reads, but the
 **player locator** needs the Rust `find_bytes` scan, so memory features won't work
 without the extension. Logic/UI work is unaffected.
 

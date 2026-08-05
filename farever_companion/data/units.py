@@ -71,6 +71,36 @@ def is_elite(unit_id: str | None) -> bool:
     return _is_elite_map().get(unit_id, False)
 
 
+@lru_cache(maxsize=1)
+def spark_unit_ids() -> frozenset[str]:
+    try:
+        from . import raw_codex
+        if raw_codex and hasattr(raw_codex, "DATA"):
+            spark_ids = set()
+            for region_data in raw_codex.DATA.values():
+                if isinstance(region_data, list):
+                    for entry in region_data:
+                        if isinstance(entry, dict) and entry.get("drops_spark"):
+                            spark_ids.add(entry["id"])
+                elif isinstance(region_data, dict):
+                    for category_list in region_data.values():
+                        if isinstance(category_list, list):
+                            for entry in category_list:
+                                if isinstance(entry, dict) and entry.get("drops_spark"):
+                                    spark_ids.add(entry["id"])
+            return frozenset(spark_ids)
+    except ImportError:
+        pass
+    return frozenset()
+
+
+def drops_spark(unit_id: str | None) -> bool:
+    """True if the unit is a 'Spark' variant that drops Spark Dust."""
+    if not unit_id:
+        return False
+    return unit_id in spark_unit_ids()
+
+
 def is_unique(unit_id: str | None) -> bool:
     """True if the unit is marked with the UNIQUE_FLAG_BIT (0x80), identifying
     it as a named/special unit that should typically bypass filters."""
@@ -86,12 +116,12 @@ def boss_loot_table(unit_id: str | None) -> str | None:
     return unit_id if (unit_id and unit_id in _named_bosses()) else None
 
 
-# Wild catchable companions: authoritative list = the collection catalog's
-# "companions" category (the same file the Collection tab / website show).
-# unit.type == "Critter" is the union fallback - the 60 catalog companions are
-# exactly the Critter units minus the Base_Critter template and the
-# YellowRabbits spawner row (verified against the CDB), and it still works
-# when the catalog json isn't bundled.
+# Wild catchable companions: authoritative list = the compiled collection
+# catalog's "companions" category (derived from codex.json; the Collection tab
+# shows the same rows). unit.type == "Critter" is the union fallback - the 60
+# catalog companions are exactly the Critter units minus the Base_Critter
+# template and the YellowRabbits spawner row (verified against the CDB), and it
+# still works when the compiled catalog is empty.
 COMPANION_TYPE = "Critter"
 
 

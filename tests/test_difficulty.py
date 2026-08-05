@@ -66,6 +66,7 @@ def test_no_player_is_none():
 
 
 def test_non_poi_config_ignored():
-    # a struct that isn't the instance config (mapId lacks 'POI') is not matched
-    scene, player = _scene_with_difficulty(1, map_id="Overworld/Z1_Town")
+    # a struct that isn't the instance config (mapId lacks every instance
+    # signature the reader accepts: POI/World/Dungeon/Z1) is not matched
+    scene, player = _scene_with_difficulty(1, map_id="Town_Central")
     assert scene.difficulty(player) is None

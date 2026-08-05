@@ -39,7 +39,11 @@ assets/map_icons/
 /farever_companion/assets/icons/
 
 # --- generated game data (compiled from jsons ) ---
-farever_companion/data/raw_*.py
+# The raw_*.py shims ARE tracked (all five, incl. raw_codex/raw_data): they
+# embed the game data as zlib+base85-compressed JSON and are byte-identical
+# across rebuilds, so commits only happen when the game data actually changes.
+# The readable raw_*.json dev copies are written to tmp_preview/ (ignored via
+# the `tmp_*` rule below) — regenerable, not part of the shipped module.
 
 # --- Secrets / credentials (none expected, but never commit these) ---
 # git ls-files -v | findstr "^S"
@@ -61,6 +65,7 @@ desktop.ini
 # --- local scratch / working files ---
 _scratch*.py
 _tmp*.py
+tmp_*
 *_dump.txt
 *.txt.tmp
 *PLAN.md
@@ -81,3 +86,4 @@ AGENTS.md
 .aider*
 .antigravityrules
 .github/copilot-instructions.md
+.freebuff

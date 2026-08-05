@@ -27,6 +27,7 @@ class AnnouncementReader:
         self.seen_ptrs = set()
         self.last_announcement: Announcement | None = None
         self._last_poll = 0.0
+        self._poll_interval = 2.0
 
     def clear(self):
         """Explicitly clear the cached announcement (called when rift is entered or closed)."""
@@ -51,17 +52,36 @@ class AnnouncementReader:
         return None
 
     def update(self) -> Announcement | None:
-        """Poll for new system announcements (throttled to 2Hz)."""
+        """Poll for new system announcements with dynamic window throttling."""
         now = time.time()
-        if now - self._last_poll < 0.5:
+        # If we ALREADY found a valid announcement for this cycle, stop scanning memory.
+        if self.last_announcement and (now - self.last_announcement.received_at <= 1200):
+            return self.last_announcement
+
+        # Determine target polling interval based on time-to-event windows
+        struct_utc = time.gmtime(now)
+        curr_min = struct_utc.tm_min
+        curr_sec = struct_utc.tm_sec
+        secs_into_hour = curr_min * 60 + curr_sec
+        
+        # 1. High-frequency 2s window: 20s before :45 warning (2680s) through :03 active end (180s)
+        # i.e., 44m40s to 45m20s OR 59m40s to 03m20s
+        is_fast_window = (2680 <= secs_into_hour <= 2720) or (secs_into_hour >= 3580) or (secs_into_hour <= 200)
+        
+        target_interval = 2.0 if is_fast_window else 30.0
+
+        if now - self._last_poll < getattr(self, "_active_interval", target_interval):
             return self.last_announcement
         self._last_poll = now
 
         try:
             me = self.locator.locate()
             if not me:
-                print("[DEBUG AnnouncementReader] locate() returned None - player not located")
+                # Back off polling when player cannot be located (in rift / loading screen)
+                self._active_interval = 60.0
                 return self.last_announcement
+
+            self._active_interval = target_interval
 
             # `me` is an ent.Hero pointer. ownerPlayer points to the st.Player object
             me_tp = self.hl.ptr(me)
@@ -70,7 +90,6 @@ class AnnouncementReader:
             
             player_ptr = self.hl.ptr(me + off_owner)
             if not player_ptr:
-                print(f"[DEBUG AnnouncementReader] player_ptr (st.Player) is NULL at me(0x{me:X}) + off_owner(0x{off_owner:X})")
                 return self.last_announcement
 
             player_tp = self.hl.ptr(player_ptr)
@@ -79,7 +98,6 @@ class AnnouncementReader:
             
             client_ptr = self.hl.ptr(player_ptr + off_client)
             if not client_ptr:
-                print(f"[DEBUG AnnouncementReader] client_ptr is NULL at st.Player(0x{player_ptr:X}) + off_client(0x{off_client:X})")
                 return self.last_announcement
             
             client_tp = self.hl.ptr(client_ptr)

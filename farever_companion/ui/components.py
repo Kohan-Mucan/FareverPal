@@ -387,6 +387,10 @@ class IconTile(QtWidgets.QLabel):
         """A UI SVG icon (assets/icons_ui) instead of a game-sheet icon."""
         self.setPixmap(icons.tile_ui(name, self._size, accent))
 
+    def set_achievement(self, accent: str = theme.ACCENT) -> None:
+        """A drawn trophy glyph (the app ships no achievement icon asset)."""
+        self.setPixmap(icons.achievement_marker(self._size, accent))
+
     def set_size(self, size: int) -> None:
         self._size = size
         self.setFixedSize(size, size)
@@ -633,11 +637,32 @@ class ColorSwatch(QtWidgets.QWidget):
         return self._btn.color()
 
 
+class EyeToggle(QtWidgets.QAbstractButton):
+    def __init__(self, checked: bool = False, size: int = 18, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, _e):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        on = self.isChecked()
+        name = "eye" if on else "eye-off"
+        color = theme.ACCENT if on else theme.MUTED
+        p.drawPixmap(0, 0, icons.ui_icon(name, color, self.width()))
+        p.end()
+
+
 # --- labeled toggle (Cell row, for grids) ---------------------------------
 class LabeledToggle(QtWidgets.QFrame):
     toggled = QtCore.Signal(bool)
+    eye_toggled = QtCore.Signal(bool)
 
-    def __init__(self, label: str, checked: bool = False, parent=None):
+    def __init__(self, label: str, checked: bool = False, parent=None,
+                 eye_icon: bool = False, eye_checked: bool = False,
+                 eye_tooltip: str = ""):
         super().__init__(parent)
         self.setObjectName("Cell")
         lay = QtWidgets.QHBoxLayout(self)
@@ -651,6 +676,15 @@ class LabeledToggle(QtWidgets.QFrame):
         self._toggle = ToggleSwitch(checked)
         self._toggle.toggled.connect(self.toggled.emit)
         lay.addWidget(lbl, 1, QtCore.Qt.AlignVCenter)
+        self.eye_toggle = None
+        if eye_icon:
+            self.eye_toggle = EyeToggle(eye_checked)
+            if eye_tooltip:
+                self.eye_toggle.setToolTip(eye_tooltip)
+            self.eye_toggle.toggled.connect(self.eye_toggled.emit)
+            lay.addSpacing(4)
+            lay.addWidget(self.eye_toggle, 0, QtCore.Qt.AlignVCenter)
+            lay.addSpacing(6)
         lay.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
 
     def setChecked(self, on: bool) -> None:
@@ -659,6 +693,11 @@ class LabeledToggle(QtWidgets.QFrame):
     def set_checked_silent(self, on: bool) -> None:
         self._toggle.set_checked_silent(on)
         self.setChecked(on)
+
+    def set_eye_checked(self, on: bool) -> None:
+        if self.eye_toggle is not None:
+            self.eye_toggle.setChecked(on)
+            self.eye_toggle.update()
 
     def isChecked(self) -> bool:
         return self._toggle.isChecked()

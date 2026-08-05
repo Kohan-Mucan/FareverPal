@@ -2,16 +2,47 @@
 setlocal
 cd /d %~dp0
 
-call build.bat
+echo [1/5] Building Rust memory reader (farever_native)...
+set PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+REM Strip the leaked cargo/user path from panic strings in the shipped binary
+REM (otherwise the absolute %USERPROFILE% build path leaks into release panics).
+set RUSTFLAGS=--remap-path-prefix=%USERPROFILE%=.
+.venv\Scripts\python.exe -m maturin develop --release -m native\Cargo.toml
+if errorlevel 1 goto err
+set "RUSTFLAGS="
+
+echo [2/5] Import sanity check...
+.venv\Scripts\python.exe -c "import farever_native; print('farever_native', farever_native.__version__)"
 if errorlevel 1 goto err
 
 echo.
-echo [1.5/3] Compiling raw_data.py database...
+echo [3/5] Compiling game database (embedded raw_*.py shims)...
 .venv\Scripts\python.exe compiler.py
 if errorlevel 1 goto err
 
 echo.
-echo [2/3] Packaging executable...
+echo [4/5] Packaging executable...
+
+:: Never ship loose .json files. FareverPal.spec bundles assets/data/*.json
+:: into the exe only when raw_data.py is missing or too small (fallback mode).
+:: Check the same way the spec does, and abort instead of building that exe.
+set "RAW_DATA_SIZE=0"
+if exist "farever_companion\data\raw_data.py" for %%A in ("farever_companion\data\raw_data.py") do set "RAW_DATA_SIZE=%%~zA"
+if %RAW_DATA_SIZE% GTR 1000 (
+    echo JSON packing: OFF - raw_data.py active ^(%RAW_DATA_SIZE% bytes^), no loose .json files will be bundled.
+) else (
+    echo.
+    powershell -Command "Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red"
+    powershell -Command "Write-Host '   JSON PACKING DETECTED - ABORTING BUILD        ' -ForegroundColor White -BackgroundColor Red"
+    powershell -Command "Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Red"
+    echo.
+    echo raw_data.py is missing or too small ^(%RAW_DATA_SIZE% bytes^), so FareverPal.spec
+    echo would fall back to bundling assets/data/*.json into the exe. Loose JSONs
+    echo should never ship. Fix the data first, then re-run:
+    echo   1. Extract the game sheets into assets/data
+    echo   2. Run Update_Raw_Data.bat to regenerate the raw_*.py shims
+    goto err
+)
 
 :: Extract Version-like info from the latest Git commit message
 :: (e.g., if message is "v 0.3.0 Compass Fix", it extracts "v_0_3_0")
@@ -39,10 +70,16 @@ if exist "dist\FareverPal.exe" (
     echo.
     echo Renaming dist\FareverPal.exe to dist\%EXE_NAME%.exe
     move /y "dist\FareverPal.exe" "dist\%EXE_NAME%.exe" >nul
+    if errorlevel 1 (
+        echo.
+        echo ERROR: could not rename dist\FareverPal.exe to dist\%EXE_NAME%.exe.
+        echo Close any running FareverPal instance and re-run the build.
+        goto err
+    )
 )
 
 echo.
-echo [3/3] Validating Build Integrity...
+echo [5/5] Validating Build Integrity...
 set "VERIFY_SCRIPT=packaging\verify_assets.py"
 
 .venv\Scripts\python.exe "%VERIFY_SCRIPT%"

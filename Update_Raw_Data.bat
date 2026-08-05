@@ -4,8 +4,8 @@ set "SRC=%~1"
 if "%SRC%"=="" set "SRC=."
 
 echo Select action:
-echo  [1] Update raw_*.py only
-echo  [2] Update raw_data.py and Prune assets/data
+echo  [1] Compile game data (raw_*.py embedded shims + dev .json copies)
+echo  [2] Compile game data and Prune assets/data
 echo(
 set /p "CHOICE=Choice (1-2): "
 
