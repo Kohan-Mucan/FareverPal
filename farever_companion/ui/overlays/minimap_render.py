@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import math
 
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import theme
 from ... import constants as C
 from ...data import icons, names, units as udata
-from ...geo import gatherables as geo_gatherables, orbs as geo_orbs
+from ...geo import gatherables as geo_gatherables, orbs as geo_orbs, pois as geo_pois, zones as geo_zones
 
 # Set to True to use player SVGs instead of dots for group members.
 USE_HERO_SVGS = False
@@ -85,6 +85,7 @@ _MARKER = {
     "dungeon": "dungeon", "respawn": "respawnpoint", "recipe": "recipe",
     "chest_orb": "goldorb", "rift": "rift", "spark_enemy": "swords",
     "petshop": "shop", "mountshop": "shop", "vendor": "shop",
+    "soulstone": "soulstone",
 }
 
 
@@ -140,13 +141,66 @@ def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
         m_name = name + ("2" if done and name in ("chest", "orb") else "")
         # Apply thin gold border to all uncollected chests as requested; shop
         # vendors (pet/mount) render the gold $ marker from the minimap atlas.
-        eff_accent = theme.GOLD if (not done and kind in ("chest", "petshop", "mountshop", "vendor")) else accent
+        # Soulstone summon points always carry their magenta outline so they
+        # read as click-to-summon markers even when untracked.
+        if kind == "soulstone":
+            eff_accent = theme.KIND_COLOR.get("soulstone", theme.ACCENT)
+        else:
+            eff_accent = theme.GOLD if (not done and kind in ("chest", "petshop", "mountshop", "vendor")) else accent
         pm = icons.marker(m_name, size, accent=eff_accent)
         if pm:
             return pm
 
-    glyph = {"chest": "box", "obelisk": "radio", "checkpoint": "radio", "flower": "dice-5", "ore": "dice-5", "enemy": "swords", "orb": "broadcast", "activity": "box", "dungeon": "map", "rift": "map", "companion": "heart", "pos": "map-pin", "recipe": "box", "chest_orb": "broadcast"}.get(kind)
+    glyph = {"chest": "box", "obelisk": "radio", "checkpoint": "radio", "flower": "dice-5", "ore": "dice-5", "enemy": "swords", "orb": "broadcast", "activity": "box", "dungeon": "map", "rift": "map", "companion": "heart", "pos": "map-pin", "recipe": "box", "chest_orb": "broadcast", "soulstone": "gem"}.get(kind)
     return icons.ui_icon(glyph, theme.KIND_COLOR.get(kind, theme.TEXT), size) if glyph else None
+
+
+def add_soulstone_pois(cv, pois, p_area):
+    """Append soulstone summon-point markers (the `minimap_soulstones` layer).
+
+    Soulstone_Demon_1..8 are clickable world nodes that consume a Soulstone
+    item and spawn one of the 8 demon bosses; static, no distance limit so
+    the map can pan to them like dungeons/obelists."""
+    if not getattr(cv.s, "minimap_soulstones", True):
+        return
+    for p in geo_pois.load_pois():
+        if p.sub_kind != "soulstone":
+            continue
+        if p_area and geo_zones.get_area_id(p.zone) != p_area:
+            continue
+        cv._add_poi(pois, p.x, p.y, p.z, "soulstone", p.name or p.id, p.id, max_dist=0)
+
+
+def soulstone_zone_text(p) -> str | None:
+    """Subzone label for a soulstone POI (e.g. 'Isle of Flowers'), or None.
+    More useful than the cost — every summon point costs exactly 1 of its
+    own-named soulstone, so the zone is the info you actually navigate by."""
+    if not p or not p.zone:
+        return None
+    return names.zone_name(p.zone) or p.zone
+
+
+def poi_tooltip(cv, e):
+    """Hover tooltip for the POI under the cursor. Soulstone summon points
+    show the subzone they sit in (the cost is always 1× its own-named stone)."""
+    if cv._drag or cv._right_drag_start:
+        return
+    poi = poi_at(cv, e.position())
+    if poi is None:
+        if getattr(cv, "_tip_shown", False):
+            QtWidgets.QToolTip.hideText()
+            cv._tip_shown = False
+        return
+    wx, wy, _wz, kind, label, poi_id = poi
+    text = label or kind.capitalize()
+    if kind == "soulstone":
+        zone = soulstone_zone_text(geo_pois.by_id().get(poi_id))
+        if zone:
+            text = f"{text}\n{zone}"
+    if getattr(cv, "_tip_shown", False) and QtWidgets.QToolTip.text() == text:
+        return
+    QtWidgets.QToolTip.showText(QtGui.QCursor.pos(), text, cv)
+    cv._tip_shown = True
 
 
 def draw_compass(cv, p, cx, cy, rad, phi):
@@ -207,7 +261,7 @@ def is_waypoint(cv, kind, label, poi_id, wx, wy, track_pos) -> bool:
 
     # 3. Position-based tracking (everything else: Chests, Recipes, Gatherables, Static POIs)
     # These usually have coordinates in the track_id, e.g., "123.4,567.8,90.1|Chest Name"
-    if tk in ("chest", "recipe", "chest_orb", "gather", "dungeon", "rift", "obelisk", "pos"):
+    if tk in ("chest", "recipe", "chest_orb", "gather", "dungeon", "rift", "obelisk", "pos", "soulstone"):
         if tk == "gather" and "|" not in str(tid):
             if kind in ("flower", "ore"):
                 if geo_gatherables.get_display_name(label) == tid:
@@ -239,7 +293,7 @@ def is_waypoint(cv, kind, label, poi_id, wx, wy, track_pos) -> bool:
 
 _CLICK_PRIORITY = {
     "orb": 0, "chest": 0, "recipe": 0,
-    "dungeon": 1, "rift": 1, "obelisk": 1, "checkpoint": 1,
+    "dungeon": 1, "rift": 1, "obelisk": 1, "checkpoint": 1, "soulstone": 1,
     "chest_orb": 2, "activity": 2,
     "flower": 3, "ore": 3,
     "enemy": 4, "spark_enemy": 4, "companion": 4,

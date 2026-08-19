@@ -52,11 +52,20 @@ HERO = {
     "rogue": GOOD,
     "mage": ACCENT,
     "priest": GOLD,
+    "fighter": ORANGE,
+    "assassin": GOOD,
+    "wizard": ACCENT,
+    "cleric": GOLD,
 }
 
-# fonts
-UI_FONT = "Inter"
-MONO_FONT = "JetBrains Mono"
+CLASS_COLOR = HERO
+
+
+def class_color(cls: str) -> str:
+    """The tile and button color for a class — Warrior orange, Rogue green,
+    Mage blue, Priest gold."""
+    return HERO.get((cls or "").lower(), MUTED)
+
 
 RARITY = {
     "Common": "#c2c6d0",
@@ -65,6 +74,37 @@ RARITY = {
     "Epic": "#c297ff",
     "Legendary": "#f0a836",
 }
+
+STAT_COLOR = {
+    "critical": ORANGE,
+    "crit": ORANGE,
+    "fervor": GOLD,
+    "armor penetration": RARITY["Epic"],
+    "arpen": RARITY["Epic"],
+    "magic penetration": BLUE,
+    "mapen": BLUE,
+    "vitality": GOOD,
+    "vit": GOOD,
+    "strength": ORANGE,
+    "str": ORANGE,
+    "agility": GOOD,
+    "agi": GOOD,
+    "intellect": ACCENT,
+    "intelligence": ACCENT,
+    "int": ACCENT,
+    "faith": GOLD,
+}
+
+
+def stat_color(stat: str) -> str:
+    """The identity color for a stat/rating — Critical orange, Fervor gold,
+    Armor Penetration epic purple, Magic Penetration blue, Vitality green."""
+    return STAT_COLOR.get((stat or "").lower(), ACCENT)
+
+
+# fonts
+UI_FONT = "Inter"
+MONO_FONT = "JetBrains Mono"
 KIND_COLOR = {
     "enemy": DANGER,
     "companion": "#7aa2f7",
@@ -77,6 +117,7 @@ KIND_COLOR = {
     "chest_orb": GOLD,
     "activity": "#8fa395",   # world-activity loot drops (grey-green marker)
     "dungeon": "#7c3aed",    # dungeon entrances / teleporters
+    "soulstone": "#e879f9",  # soulstone summon points (click-to-spawn demon bosses)
     "petshop": GOLD,          # pet shop vendors (Demon Huntress pet sellers)
     "mountshop": GOLD,        # mount shop vendors (MountTamer NPCs)
     "vendor": GOLD,           # generic shop vendor NPCs

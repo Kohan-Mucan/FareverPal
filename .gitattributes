@@ -1,0 +1,7 @@
+# Treat the raw data shims as binary to stop massive text diffs
+farever_companion/data/raw_*.py binary linguist-generated=true
+
+# Treat all atlas and icon assets as binary/generated
+assets/atlas/** binary linguist-generated=true
+assets/icons/** binary linguist-generated=true
+assets/map_icons/** binary linguist-generated=true

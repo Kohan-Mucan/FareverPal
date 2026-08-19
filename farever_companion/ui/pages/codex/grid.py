@@ -50,6 +50,8 @@ class CodexGridMixin:
             if getattr(self, "_chest_orb_kind", None) and (dungeon_tab or collection_tab):
                 # 'Chests' / 'Orbs' view active: remaining uncollected items
                 grid_row, total_shown = self._render_chest_orb_list(grid_row)
+            elif getattr(self, "_soulstones_mode", False) and dungeon_tab:
+                grid_row, total_shown = self._render_soulstone_list(grid_row)
             elif getattr(self, "_dungeon_list_mode", False) and dungeon_tab:
                 # 'Dungeon List' view active: render the list instead of cards
                 grid_row, total_shown = self._render_dungeon_list(grid_row)
@@ -64,9 +66,10 @@ class CodexGridMixin:
                                                        dungeon_tab, collection_tab)
                     if not matches:
                         continue
-                    self._sort_codex_matches(matches, rid, status_filter, query)
+                    self._sort_codex_matches(matches, rid, status_filter, query, collection_tab)
                     grid_row = self._render_codex_region(rid, rname, matches, grid_row,
-                                                         is_global, status_filter, current_rid)
+                                                         is_global, status_filter, current_rid,
+                                                         collection_tab)
                     total_shown += len(matches)
 
             self._codex_grid.setRowStretch(grid_row, 1)
@@ -85,7 +88,6 @@ class CodexGridMixin:
                     sb.setValue(scroll_val)
                     QtCore.QTimer.singleShot(0, lambda val=scroll_val: sb.setValue(val))
 
-    # --- grid pipeline helpers -------------------------------------------
     def _codex_filter_state(self) -> tuple[str, str]:
         """(lowercased search query, status filter label) from the current controls."""
         query = self._codex_search.text().strip().lower() if hasattr(self, "_codex_search") else ""
@@ -93,7 +95,10 @@ class CodexGridMixin:
         if hasattr(self, "_status_btns"):
             checked = self._status_btns.checkedButton()
             if checked:
-                status_filter = checked.text().upper()
+                # The Collection tab styles the status labels with counts
+                # ('Visible (51)'), so the filter key lives in a property.
+                key = checked.property("statusKey")
+                status_filter = (key if key else checked.text()).upper()
         return query, status_filter
 
     def _codex_is_global(self, query: str, status_filter: str, tab_label: str) -> bool:
@@ -165,21 +170,27 @@ class CodexGridMixin:
             self._was_others_tab = is_others_tab
 
         # Dungeons-tab view switcher: the list is the default view; 'Dungeon
-        # Mobs' switches to the old card grid. Hidden on every other tab, and
-        # reset to the list default when the tab is left.
+        # Mobs' switches to the old card grid, 'Soulstones' to the summon-spot
+        # list. Hidden on every other tab, and reset to the list default when
+        # the tab is left.
         is_dungeon_tab = current_rid == "Bosses" or tab_label == "Dungeons"
         if hasattr(self, "_btn_dungeon_list"):
-            view_btns = (self._btn_dungeon_list, self._btn_dungeon_mobs)
+            view_btns = (self._btn_dungeon_list, self._btn_dungeon_mobs,
+                         self._btn_dungeon_soulstones)
             for b in view_btns:
                 b.blockSignals(True)
                 b.setVisible(is_dungeon_tab)
             if not is_dungeon_tab:
                 self._dungeon_list_mode = True  # default on next visit
+                self._soulstones_mode = False
                 self._btn_dungeon_list.setChecked(True)
                 self._btn_dungeon_mobs.setChecked(False)
+                self._btn_dungeon_soulstones.setChecked(False)
             else:
                 self._btn_dungeon_list.setChecked(self._dungeon_list_mode)
-                self._btn_dungeon_mobs.setChecked(not self._dungeon_list_mode)
+                self._btn_dungeon_mobs.setChecked(
+                    not self._dungeon_list_mode and not self._soulstones_mode)
+                self._btn_dungeon_soulstones.setChecked(self._soulstones_mode)
             for b in view_btns:
                 b.blockSignals(False)
 
@@ -199,15 +210,23 @@ class CodexGridMixin:
                 self._collection_sub = "pets"
                 self._chest_orb_kind = None
 
+        # Collection species-group sub-menu (the second sub-bar per unit
+        # type) — owned by the grouping mixin, synced on every refresh (the
+        # status filter feeds the chip counts for Visible/Hidden). The shared
+        # status chips pick up their visible/hidden totals on the same views.
+        self._sync_codex_group_bar(current_rid, tab_label, status_filter)
+        self._update_codex_status_chips(current_rid, tab_label)
+
         # 'Grid / Outline' compact toggle only matters for the card grid, so
         # hide it only while a click-to-track list view is active (Dungeon
-        # List, Chests/Orbs remaining lists). _dungeon_list_mode is a
-        # Dungeons-tab concept that defaults True, so it must be gated by
+        # List, Soulstones, Chests/Orbs remaining lists). _dungeon_list_mode
+        # is a Dungeons-tab concept that defaults True, so it must be gated by
         # is_dungeon_tab — otherwise the Collection card views (Pets /
         # Mounts / Gliders) would hide the toggle too and the outline look
         # would be unreachable there.
         if hasattr(self, "_btn_compact"):
-            list_view_active = ((is_dungeon_tab and getattr(self, "_dungeon_list_mode", True))
+            list_view_active = ((is_dungeon_tab and (getattr(self, "_dungeon_list_mode", True)
+                                                     or getattr(self, "_soulstones_mode", False)))
                                 or getattr(self, "_chest_orb_kind", None) is not None)
             self._btn_compact.setVisible(not list_view_active)
 
@@ -304,13 +323,10 @@ class CodexGridMixin:
                     b.setVisible(True)
 
     def _sync_nearby_status_key(self, current_rid: str, tab_label: str) -> None:
-        """Fade the Nearby status key out on Collection views where it can't
-        match anything. Nearby filters by real world entities, so it only
-        makes sense for the Pets sub-view (and the zone tabs); on the
-        Collection Mounts/Gliders views (and the Chests/Orbs lists, where the
-        status block is hidden anyway) it's disabled + faded like the source
-        keys, and cleared if it was left checked so the filter never
-        silently empties the grid."""
+        """Fade the Nearby status key out where it can't match anything
+        (Nearby filters by real world entities, so it only makes sense for
+        the Pets sub-view and the zone tabs); it's cleared if left checked
+        so the filter never silently empties the grid."""
         if not hasattr(self, "_status_widgets") or "Nearby" not in self._status_widgets:
             return
         is_collection_tab = current_rid == "Pets" or tab_label == "Collection"
@@ -390,6 +406,13 @@ class CodexGridMixin:
             src_filters = getattr(self, "_source_filters", set())
             if src_filters and not (codex.item_sources(item) & src_filters):
                 continue
+            # Collection species-group filter (the secondary Pets/Mounts/
+            # Gliders sub-menu): when a family key is active, keep only that
+            # family's cards.
+            group_filter = getattr(self, "_codex_group_filter", "All")
+            if collection_tab and group_filter != "All" \
+                    and self._codex_sub_group(item, rid, rid == "Z0") != group_filter:
+                continue
 
             # Sub-view filters on the Collection / Others tabs: Z0 items split
             # by type on Collection (Mounts/Gliders, unreleased excluded) and
@@ -410,7 +433,8 @@ class CodexGridMixin:
             matches.append((uid, item, is_active, is_pet, nearby_info.get(uid, 0)))
         return matches
 
-    def _sort_codex_matches(self, matches: list, rid: str, status_filter: str, query: str) -> None:
+    def _sort_codex_matches(self, matches: list, rid: str, status_filter: str, query: str,
+                            collection_tab: bool = False) -> None:
         """Sort a region's matches in place (in-game order preserved by default)."""
         if status_filter == "NEARBY":
             matches.sort(key=lambda x: x[4])
@@ -424,12 +448,21 @@ class CodexGridMixin:
                 x[1]["name"].lower()
             ))
         elif rid in ("Pets", "Z0"):
-            matches.sort(key=lambda x: (x[1].get("type") or "", not x[1].get("is_boss", False), x[1]["name"].lower()))
+            # Pets group by species, Collection mounts/gliders by their
+            # `group` family, and Z0 Others rows by type bucket — the shared
+            # `_codex_sub_group` key keeps each family's cards contiguous so
+            # the sub-headers render one per group.
+            matches.sort(key=lambda x: (
+                self._codex_sub_group(x[1], rid, collection_tab and rid == "Z0"),
+                not x[1].get("is_boss", False),
+                x[1]["name"].lower()
+            ))
         elif query or status_filter != "ALL":
             matches.sort(key=lambda x: x[1]["name"].lower())
 
     def _render_codex_region(self, rid: str, rname: str, matches: list, grid_row: int,
-                             is_global: bool, status_filter: str, current_rid: str) -> int:
+                             is_global: bool, status_filter: str, current_rid: str,
+                             collection_tab: bool = False) -> int:
         """Render one region's cards into the grid; returns the next grid row."""
         cols = 4
         compact_mobs = self.s.codex_compact if hasattr(self.s, "codex_compact") else False
@@ -444,13 +477,24 @@ class CodexGridMixin:
         curr_col = 0
         last_type = None
         for uid, item, is_active, is_pet, dist in matches:
-            # Species/category sub-headers (Pets, Dungeons, Others) on the 'ALL' view
-            if rid in ("Pets", "Bosses", "Z0") and not is_global and status_filter == "ALL" and item.get("type") != last_type:
+            # Species/category sub-headers (Pets, Dungeons, Others) on the
+            # 'ALL' view. The Collection tab's Mounts/Gliders views key by the
+            # compiled `group` family (Aries / Boar / Wolf / …), just like
+            # Pets keys by species — via the shared `_codex_sub_group` helper.
+            group_key = self._codex_sub_group(item, rid, collection_tab and rid == "Z0")
+            if rid in ("Pets", "Bosses", "Z0") and not is_global and status_filter == "ALL" and group_key != last_type:
                 if curr_col > 0:
                     grid_row += 1
                     curr_col = 0
-                last_type = item.get("type")
-                header_text = self._codex_type_header(rid, last_type)
+                last_type = group_key
+                if (collection_tab and rid == "Z0") or rid == "Pets":
+                    # Species families read as spaced words: 'FlyingFish' ->
+                    # 'FLYING FISH' (Mounts/Gliders) and 'DemonDog' ->
+                    # 'DEMON DOG' (Pets) — the same labels as the group
+                    # sub-menu buttons.
+                    header_text = self._codex_group_label(group_key)
+                else:
+                    header_text = self._codex_type_header(rid, last_type)
                 if header_text and str(header_text).upper() != "OTHERS":
                     header_text = str(header_text).upper()
                     if rid == "Bosses":
@@ -500,6 +544,7 @@ class CodexGridMixin:
         from .chest_orb_list import ChestOrbListView
         cols = 4
         view = ChestOrbListView(self)
+        self._codex_chest_list = view   # jump-to-chest reveal targets a row
         self._codex_grid.addWidget(view, grid_row, 0, 1, cols)
         grid_row += 1
         for c in range(cols):
@@ -513,10 +558,25 @@ class CodexGridMixin:
         from .dungeon_list import DungeonListView
         cols = 4
         view = DungeonListView(self)
+        self._codex_dungeon_list = view  # jump-to-boss reveal targets a row
         self._codex_grid.addWidget(view, grid_row, 0, 1, cols)
         grid_row += 1
         # Let the outer columns share the panel width so the list fills it
         # (and the 2-column block centers itself) instead of hugging the left.
+        for c in range(cols):
+            self._codex_grid.setColumnStretch(c, 1)
+        return grid_row, view.row_count
+
+    def _render_soulstone_list(self, grid_row: int) -> tuple[int, int]:
+        """Render the click-to-track soulstone summon-spot list into the grid
+        (replacing cards while the 'Soulstones' toggle is active). Returns the
+        next grid row and the number of spots listed."""
+        from .soulstones import SoulstoneListView
+        cols = 4
+        view = SoulstoneListView(self)
+        self._codex_soulstone_list = view  # jump-to-soulstone reveal targets a row
+        self._codex_grid.addWidget(view, grid_row, 0, 1, cols)
+        grid_row += 1
         for c in range(cols):
             self._codex_grid.setColumnStretch(c, 1)
         return grid_row, view.row_count
@@ -530,12 +590,9 @@ class CodexGridMixin:
 
     def _codex_others_sub_ok(self, item: dict, sub_tag: str) -> bool:
         """True when an Others-tab (Z0) item belongs in the given sub-view
-        (All / Shop / Unreleased / Misc). Shop items (cash-shop / early-
-        access) are buyable now; 'unreleased' content isn't in the game yet;
-        'misc' entries are compiler todo placeholders. The type lists (Mounts
-        / Gliders) moved to the Collection tab, so Others is the status
-        bucket: 'All' is the union of the other three — released mounts/
-        gliders (world drops and achievement rewards) never render here."""
+        (All / Shop / Unreleased / Misc). Shop items are buyable now;
+        'unreleased' content isn't in the game yet; 'misc' entries are
+        compiler todo placeholders."""
         if sub_tag == "all":
             return codex.belongs_in_others(item)
         if sub_tag == "shop":
@@ -609,17 +666,11 @@ class CodexGridMixin:
         return ttype or ""
 
     def _sync_source_key_visibility(self, current_rid: str, tab_label: str) -> None:
-        """Keep the source-badge legend keys locked to their full 2x3 footprint.
-
-        Every key (Vendor / Achievement / Dungeon / Chest / Shop / Mob Drop)
-        stays visible on the collection views, in the fixed 2-column grid they
-        were built with, so the header never grows or shrinks when switching
-        Pets <-> Mounts/Gliders <-> Others. A key that can't match anything in
-        the current sub-view is pruned when checked (so the grid never
-        silently filters to nothing) and disabled outright (greyed out, not
-        clickable) so it can't flash-check on click — the button stays in
-        place, just unchecked and inert. Clicking the active key again clears
-        the filter (no Reset key)."""
+        """Keep the source-badge legend keys locked to their full 2x3
+        footprint: every key stays visible in the fixed 2-column grid, while
+        a key that can't match anything in the current sub-view is pruned
+        when checked and disabled outright (greyed, not clickable). Clicking
+        the active key again clears the filter."""
         present: set[str] = set()
         if current_rid == "Pets":
             regions = self._codex_collection_regions()
@@ -673,6 +724,10 @@ class CodexGridMixin:
         """Dungeon List view active — swap the grid to the track list."""
         self._set_dungeon_view_mode("list")
 
+    def _on_dungeon_soulstones_toggled(self, checked: bool) -> None:
+        """Soulstones view active — swap the grid to the summon-spot list."""
+        self._set_dungeon_view_mode("soulstones")
+
     def _on_dungeon_mobs_toggled(self, checked: bool) -> None:
         """Dungeon Mobs view active — swap the grid back to the card grid."""
         self._set_dungeon_view_mode("mobs")
@@ -704,16 +759,17 @@ class CodexGridMixin:
         self._refresh_codex_grid(reset_scroll=True)
 
     def _set_dungeon_view_mode(self, mode: str) -> None:
-        """Switch the grid between the card grid ('mobs'), the click-to-track
-        dungeon list ('list'), and the remaining chests / orbs lists
-        ('chests'/'orbs'). The chests/orbs modes live on the Collection tab;
-        'list'/'mobs' on the Dungeons tab. Skip the refresh when the view
-        didn't change."""
+        """Switch between the card grid ('mobs'), the dungeon list ('list'),
+        the soulstone list ('soulstones'), and the chests/orbs lists. Skip
+        the refresh when the view didn't change."""
         cur = (getattr(self, "_chest_orb_kind", None)
-               or ("list" if getattr(self, "_dungeon_list_mode", False) else "mobs"))
+               or ("soulstones" if getattr(self, "_soulstones_mode", False)
+                   else "list" if getattr(self, "_dungeon_list_mode", False)
+                   else "mobs"))
         if mode == cur:
             return
         self._dungeon_list_mode = mode == "list"
+        self._soulstones_mode = mode == "soulstones"
         self._chest_orb_kind = mode if mode in ("chests", "orbs") else None
         if mode in ("chests", "orbs"):
             self._collection_sub = mode
@@ -728,3 +784,4 @@ class CodexGridMixin:
             else:
                 lbl_text = f"ZONE TOTAL: {total_shown}"
             self._codex_count.setText(lbl_text)
+

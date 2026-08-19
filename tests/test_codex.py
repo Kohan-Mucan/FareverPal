@@ -40,3 +40,59 @@ def test_codex_unit_ids():
 def test_type_name():
     assert units.type_name("Manfish") == "Nepsids"
     assert units.type_name("Wolf") == "Wolves"
+
+
+def test_find_unit_region():
+    """find_unit_region resolves a codex card to its region — the lookup
+    that powers the Drops From codex jumps."""
+    from farever_companion.data import codex
+    # the Mount Tamer vendor's card lives on the Others tab
+    assert codex.find_unit_region("TODO_StableMaster") == "Z0"
+    assert codex.find_unit_region("TODO_Slime_King") == "Z0"
+    # non-codex ids (vendor spawn ids, arbitrary strings) never resolve
+    assert codex.find_unit_region("MountTamer_NPC_1") is None
+    assert codex.find_unit_region("") is None
+    assert codex.find_unit_region(None) is None
+
+
+def test_stable_master_plots_perinas_shop_spots():
+    """The Mount Tamer card resolves Perina Wann's real shop coordinates —
+    taken from the drop records of the mounts/gliders she sells — instead
+    of the todo placeholder's 'No Map Locations'."""
+    from farever_companion.data import codex
+    coords, title, is_rift = codex.resolve_locations("TODO_StableMaster")
+    assert len(coords) == 2
+    assert {round(c["x"], 1) for c in coords} == {1218.4, -397.3}
+    assert {round(c["y"], 1) for c in coords} == {221.6, 1502.1}
+    assert title == "Vendor: Perina Wann (2 Locations)"
+    assert is_rift is False
+
+
+def test_vendor_card_coords_only_for_real_vendors():
+    """Plain todo placeholders still resolve to nothing — only the Stable
+    Master (whose shop spots the codex data carries on the items she sells)
+    gets coordinates. The Wandering Merchant card has no vendor records in
+    the codex data, so it stays unplotted."""
+    from farever_companion.data import codex
+    assert codex.resolve_locations("TODO_Slime_King") == ((), "", False)
+    assert codex.resolve_locations("TODO_WanderingMerchant") == ((), "", False)
+
+
+def test_vendor_sold_glider_plots_only_its_own_spot():
+    """A mount/glider card resolves exactly the vendor spot(s) where IT is
+    sold — the Almazean Owl sells from one of Perina Wann's two shops, so
+    its card plots one pin (this is why the Drops From row jumps to the
+    item's card, not the vendor's aggregated one)."""
+    from farever_companion.data import codex
+    coords, title, is_rift = codex.resolve_locations("Glider_Owl_Brown02")
+    assert len(coords) == 1
+    assert round(coords[0]["x"], 1) == -397.3
+    assert round(coords[0]["y"], 1) == 1502.1
+    assert title == "Vendor: Perina Wann"
+    assert is_rift is False
+    # the wolf (sold from the OTHER shop) pins its own single spot
+    coords2, title2, _ = codex.resolve_locations("Mount_Wolf_01")
+    assert len(coords2) == 1
+    assert round(coords2[0]["x"], 1) == 1218.4
+    assert round(coords2[0]["y"], 1) == 221.6
+    assert title2 == "Vendor: Perina Wann"

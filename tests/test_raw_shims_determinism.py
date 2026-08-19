@@ -30,7 +30,8 @@ ASSETS_ATLAS = PROJECT_ROOT / "assets" / "atlas"
 SHIMS_DIR = PROJECT_ROOT / "farever_companion" / "data"
 
 # raw_shop.py is hand-written, not compiler output.
-EXPECTED_SHIMS = ("raw_codex", "raw_units", "raw_items", "raw_skills", "raw_data")
+EXPECTED_SHIMS = ("raw_codex", "raw_units", "raw_items", "raw_skills",
+                  "raw_craft", "raw_item_drops", "raw_data")
 
 
 def _inputs_present() -> bool:

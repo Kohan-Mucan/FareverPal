@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtWidgets
 from .. import components as C
-from ...data import names
-from ...data import icons
 
 class OverlaysPageMixin:
     def _page_overlays(self):
@@ -12,8 +10,8 @@ class OverlaysPageMixin:
         cards.setSpacing(12)
         from ...config import experimental_enabled
         specs = [
-            ("entity", "layers", "Entity & Loot",
-             "Nearby enemies, chests, and their drop tables.", self.s.entity_bare, True),
+            ("entity", "layers", "Entity",
+             "Nearby enemies, chests, companions, orbs — live HUD.", self.s.entity_bare, True),
             ("dps", "swords", "DPS Meter",
              "Big live self-DPS, survivability, recent cycles.", self.s.dps_bare, True),
             # experimental; release builds hide it (FAREVER_EXPERIMENTAL exposes it)

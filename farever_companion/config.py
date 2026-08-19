@@ -17,7 +17,6 @@ from .persist import (
     atomic_write_json,
     backup_corrupt,
     find_backup_files as _find_backup_files,
-    restore_backup_file,
 )
 
 
@@ -28,11 +27,17 @@ def experimental_enabled() -> bool:
 
 
 def config_dir() -> Path:
-    import sys
-    if getattr(sys, "frozen", False):
-        d = Path(sys.executable).parent / "moddata"
+    # Tooling/tests can point the app at a throwaway config dir so smoke runs
+    # never touch the real user data (dist/moddata or the frozen moddata).
+    override = os.environ.get("FAREVER_MODDATA_DIR", "").strip()
+    if override:
+        d = Path(override)
     else:
-        d = Path(__file__).resolve().parent.parent / "dist" / "moddata"
+        import sys
+        if getattr(sys, "frozen", False):
+            d = Path(sys.executable).parent / "moddata"
+        else:
+            d = Path(__file__).resolve().parent.parent / "dist" / "moddata"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -84,6 +89,7 @@ class Settings:
     icon_size: int = 28
     codex_compact: bool = False
     codex_pets_compact: bool = True
+
     click_through: bool = False
     lock_overlays: bool = False
     auto_hide_menus: bool = True
@@ -137,10 +143,8 @@ class Settings:
     dps_bare: bool = False
     skills_bare: bool = False
     dps_columns: list = field(default_factory=lambda: ["pct", "dps", "hits", "crit", "max"])
-    show_drop_window: bool = False
     show_rift_timer: str = "Always"
     combat_click_through: bool = False
-    rows_per_rarity: int = 6
 
     # --- Minimap ---
     minimap_texture: bool = True
@@ -162,6 +166,7 @@ class Settings:
     minimap_dungeons: bool = True
     minimap_companions: bool = True
     minimap_vendors: bool = True
+    minimap_soulstones: bool = True
 
     # --- Speedrun ---
     speedrun_auto: bool = False
@@ -188,9 +193,6 @@ class Settings:
     # --- Global Hotkeys ---
     hotkey_speedrun_toggle: str = "Ctrl+Alt+T"
     hotkey_speedrun_reset: str = "Ctrl+Alt+R"
-    hotkey_loot_prev: str = "Ctrl+Alt+Z"
-    hotkey_loot_next: str = "Ctrl+Alt+X"
-    hotkey_loot_close: str = "Ctrl+Alt+C"
 
     # --- Web & Account ---
     api_base: str = "https://farever-pals.com"

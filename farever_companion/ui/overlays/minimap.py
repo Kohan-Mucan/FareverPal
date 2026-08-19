@@ -54,6 +54,7 @@ class _Canvas(QtWidgets.QWidget):
         self._tracking_pan = False  # True when pan was set by pan_to() (tracker)
         self._coord_str = ""
         self._zone_name = ""
+        self.setMouseTracking(True)     # hover tooltips (e.g. soulstone costs)
 
     def _read_player(self) -> bool:
         xyz = self.model.player_xyz()
@@ -271,6 +272,8 @@ class _Canvas(QtWidgets.QWidget):
                     continue
                 # Static locations have no distance limit (allows panning to them)
                 self._add_poi(pois, p.x, p.y, p.z, p.sub_kind, p.name or p.sub_kind, p.id, max_dist=0)
+
+        render.add_soulstone_pois(self, pois, p_area)   # 4c. soulstone summon points
 
         # 5. Orbs
         if s.minimap_orbs:
@@ -590,8 +593,6 @@ class _Canvas(QtWidgets.QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.RightButton:
-            # Capture pan start; _last_player_pos is already kept current by
-            # _read_player() so no need to reset it here.
             self._right_drag_start = e.position()
             self._pan_start_x, self._pan_start_y = self._pan_x, self._pan_y
             self._right_click_panned = False
@@ -603,9 +604,8 @@ class _Canvas(QtWidgets.QWidget):
                 wx, wy, wz, kind, label, poi_id = poi
 
                 # ChestOrb / TimerCollectRun spawned orbs are informational
-                # markers only — not clickable, never tracked as chests (they
-                # can't be right-clicked to find loot either).  Right-click
-                # done-marking still works via _mark_done.
+                # markers only — not clickable, never tracked as chests.
+                # Right-click done-marking still works via _mark_done.
                 if kind == "orb" and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)
                 elif (kind.startswith("hero_") or kind in ("enemy", "companion", "spark_enemy")) and label != "?":
@@ -648,7 +648,7 @@ class _Canvas(QtWidgets.QWidget):
                             norm_kind = "hero"
                         elif kind == "companion":
                             norm_kind = "comp"
-                        elif kind in ("dungeon", "rift", "obelisk", "respawn", "checkpoint", "pos"):
+                        elif kind in ("dungeon", "rift", "obelisk", "respawn", "checkpoint", "pos", "soulstone"):
                             norm_kind = "static"
                         elif kind in ("flower", "ore"):
                             norm_kind = "gather"
@@ -683,13 +683,14 @@ class _Canvas(QtWidgets.QWidget):
                         old_tr = getattr(ov, "_tracker", None)
                         ov._tracker = None
                         try:
-                            ov.select_by_key(norm_kind, ck, open_drops=False)
+                            ov.select_by_key(norm_kind, ck)
                         finally:
                             ov._tracker = old_tr
                 return
             self._drag = e.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
 
     def mouseMoveEvent(self, e):
+        render.poi_tooltip(self, e)
         if self._drag and e.buttons() & QtCore.Qt.LeftButton:
             self.window().move(e.globalPosition().toPoint() - self._drag)
         elif self._right_drag_start and e.buttons() & QtCore.Qt.RightButton:

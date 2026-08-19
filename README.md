@@ -101,7 +101,7 @@ build-mod.bat    :: one-shot pipeline: Rust ext -> compile data shims -> PyInsta
 ```
 
 `build-mod.bat` handles the whole pipeline in one go (Rust `farever_native`,
-`compiler.py` embedded shims, PyInstaller, `packaging/verify_assets.py`) and
+`compiler.py` embedded shims, PyInstaller, `build_tools/verify_assets.py`) and
 names the output `dist\FareverPal-<version>-<commit>.exe` from the latest git
 commit. The resulting exe (~105 MB, self-contained) is published as a GitHub
 **release asset**, not committed to the repo.

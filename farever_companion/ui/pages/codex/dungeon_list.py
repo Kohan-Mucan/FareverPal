@@ -49,6 +49,8 @@ class _WrapLabel(QtWidgets.QLabel):
 class DungeonListCell(QtWidgets.QFrame):
     """One 2-column cell: gold-outlined boss icon + boss/dungeon names."""
 
+    # left-click tracks the dungeon; keep the app-wide copy menu off it
+    _no_copy_menu = True
     pick = QtCore.Signal(object)  # dungeon dict
 
     def __init__(self, ui, dungeon: dict, key, parent=None):
@@ -110,11 +112,14 @@ class DungeonListCell(QtWidgets.QFrame):
         txt.addWidget(self._track_lbl)
         lay.addLayout(txt, 1)
 
-        tip = sub
+        # The row already shows boss name + level · dungeon name, so the
+        # tooltip adds only what the row can't: the rift tracking note or
+        # the missing-entrance explanation. Everything else hovers empty.
+        tip = ""
         if dungeon.get("entrance_zone") == "Rifts":
-            tip += " — tracks the active rift (or the next one due)"
+            tip = "Tracks the active rift (or the next one due)"
         elif not key:
-            tip += " — no entrance location found"
+            tip = "No entrance location found"
             self._name_lbl.setStyleSheet(f"color:{theme.DIM}; font-size:14px; font-weight:bold;")
             self._sub_lbl.setStyleSheet(f"color:{theme.DIM}; font-size:12px;")
         self.setToolTip(tip)

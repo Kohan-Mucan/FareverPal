@@ -64,11 +64,16 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
 
         self.pins = []
         for c in (coords or []):
+            # A coord that carries its own name (soulstone summon spots) labels
+            # its pin on the map — everything else stays anonymous to avoid
+            # painting the same spawn-mob name dozens of times.
+            pin_name = c.get("name") or name or ""
             self.pins.append({
                 "x": c.get("x", 0),
                 "y": c.get("y", 0),
                 "color": m_col,
-                "name": name or "",
+                "name": pin_name,
+                "show_label": bool(c.get("name")),
                 "is_dungeon": is_dung,
                 "is_vendor": is_vendor,
                 "is_chest": is_chest
@@ -213,3 +218,25 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
                 p.setPen(QtGui.QPen(QtGui.QColor(10, 15, 18, 220), 1.5))
                 p.setBrush(QtGui.QBrush(main_col))
                 p.drawEllipse(pt, 3.8, 3.8)
+
+            # Named pins (the soulstone summon spots resolve with their boss
+            # name) draw a small label under the marker so the pin isn't
+            # anonymous — everything else stays unlabeled to avoid clutter.
+            if pin.get("show_label"):
+                lbl = pin.get("name") or ""
+                if lbl:
+                    f = QtGui.QFont(self.font())
+                    f.setPixelSize(10)
+                    f.setBold(True)
+                    p.setFont(f)
+                    fm = p.fontMetrics()
+                    tw = fm.horizontalAdvance(lbl)
+                    bh = fm.height() + 2
+                    bx = px - tw / 2 - 3
+                    by = py + 9
+                    p.setPen(QtCore.Qt.NoPen)
+                    p.setBrush(QtGui.QColor(10, 15, 18, 205))
+                    p.drawRoundedRect(QtCore.QRectF(bx, by, tw + 6, bh), 3, 3)
+                    p.setPen(QtGui.QPen(QtGui.QColor(main_col)))
+                    p.drawText(QtCore.QRectF(bx, by, tw + 6, bh),
+                               QtCore.Qt.AlignCenter, lbl)

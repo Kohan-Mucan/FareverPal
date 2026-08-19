@@ -22,6 +22,11 @@ from ..geo import nav, orbs as geo_orbs
 
 TICK_MS = 33
 ARRIVE = 4.0          # world units = "you are here" (matches nav_needle)
+# static waypoints (dungeons, rifts, obelisks, soulstone summon spots)
+# stop tracking once you're this close — you've arrived, so the needle/HUD
+# row clears itself
+ARRIVE_CLEAR = 15.0
+ARRIVE_CLEAR_KINDS = ("dungeon", "soulstone", "rift", "obelisk")
 
 # world-space needle decal dimensions (world units, ground plane)
 N_TIP = 3.0
@@ -115,7 +120,7 @@ class TrackController(QtCore.QObject):
             if tk in ("chest", "recipe", "chest_orb") and curr_tk in ("chest", "recipe", "chest_orb"):
                 pass
             # Fallback for 'static' HUD kind matching specific sub-kinds
-            elif tk == "static" and curr_tk in ("dungeon", "rift", "obelisk", "pos", "respawn"):
+            elif tk == "static" and curr_tk in ("dungeon", "rift", "obelisk", "pos", "respawn", "soulstone"):
                 pass
             else:
                 return False
@@ -207,7 +212,7 @@ class TrackController(QtCore.QObject):
                 return None
             return (o.x, o.y, o.z,
                     f"{geo_orbs.orb_label(key)} · {geo_orbs.orb_region_name(o)}")
-        if kind in ("pos", "chest", "chest_orb", "gather", "recipe", "dungeon", "rift", "obelisk", "respawn"):
+        if kind in ("pos", "chest", "chest_orb", "gather", "recipe", "dungeon", "rift", "obelisk", "respawn", "soulstone"):
             # fixed waypoint: "x,y,z|label[|id]" (any minimap marker)
             if kind == "gather" and "|" not in key:
                 # Dynamic gatherable tracking by type: find nearest matching instance
@@ -241,6 +246,15 @@ class TrackController(QtCore.QObject):
                 coords = parts[0]
                 label = parts[1] if len(parts) > 1 else kind.capitalize()
                 x, y, z = (float(v) for v in coords.split(","))
+
+                # Auto-clear static waypoints (dungeons, rifts, obelisks,
+                # soulstone summon spots) once you arrive: within 15m the
+                # needle has done its job (and the HUD row drops via
+                # `changed`), same as gatherables clear on pickup.
+                if kind in ARRIVE_CLEAR_KINDS:
+                    pxyz = self.model.player_xyz()
+                    if pxyz is not None and math.hypot(x - pxyz[0], y - pxyz[1]) <= ARRIVE_CLEAR:
+                        return None
 
                 # Auto-clear tracking for live gatherables once picked up
                 if kind == "gather" and len(parts) >= 3:

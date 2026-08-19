@@ -22,6 +22,9 @@ from ...data import icons
 _ID = QtCore.Qt.UserRole
 _ROW = QtCore.Qt.UserRole + 1
 
+# Tile icon size for the collectible grid (QListWidget IconMode rows).
+_COL_TILE = 48
+
 
 class CollectionPageMixin:
     def _page_collection(self):
@@ -50,6 +53,7 @@ class CollectionPageMixin:
         so_btn.setObjectName("Accent")
         so_btn.setMinimumHeight(32)
         so_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        so_btn.setFocusPolicy(QtCore.Qt.NoFocus)   # mouse-only: no Space/Enter trigger
         so_btn.clicked.connect(self._open_login)
         so.addWidget(so_lbl)
         so.addWidget(so_btn, 0, QtCore.Qt.AlignLeft)
@@ -72,13 +76,13 @@ class CollectionPageMixin:
         # filter row
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(8)
-        self._col_cat = QtWidgets.QComboBox()
+        self._col_cat = QtWidgets.QComboBox(page)
         self._col_cat.addItem("All categories", "")
         for c in coldata.categories():
             self._col_cat.addItem(c["label"], c["key"])
-        self._col_sub = QtWidgets.QComboBox()
+        self._col_sub = QtWidgets.QComboBox(page)
         self._col_sub.addItem("Any type", "")
-        self._col_state = QtWidgets.QComboBox()
+        self._col_state = QtWidgets.QComboBox(page)
         for label, val in (("All", ""), ("Missing", "missing"), ("Collected", "collected")):
             self._col_state.addItem(label, val)
         self._col_search = QtWidgets.QLineEdit()
@@ -151,13 +155,17 @@ class CollectionPageMixin:
     def _col_populate(self):
         self._col_list.blockSignals(True)
         for it in coldata.items():
-            sheet = coldata.icon_sheet(it["category"])
             li = QtWidgets.QListWidgetItem()
             lvl = f"  ·  Lv {it['level']}" if it.get("level") else ""
             li.setText(it['name'])
             li.setToolTip(f"{it['name']}\n{it['subtype']}{lvl}\n{it['source']}")
-            li.setIcon(QtGui.QIcon(icons.tile(sheet, it["id"], 48,
-                                              theme.rarity_color(it.get("rarity")))))
+            # Cheap rarity-tinted placeholder tile (cached per color); the
+            # real collectible art is swapped in by _col_fill_icons in
+            # batches after the page is shown, so the first paint never
+            # waits on the atlas crops.
+            li.setIcon(QtGui.QIcon(icons.tile(
+                None, None, _COL_TILE,
+                theme.rarity_color(it.get("rarity")))))
             li.setData(_ID, it["id"])
             li.setData(_ROW, it)
             if it.get("obtainable"):
@@ -168,6 +176,44 @@ class CollectionPageMixin:
                 li.setText(li.text() + "   [unreleased]")
             self._col_list.addItem(li)
         self._col_list.blockSignals(False)
+        self._col_fill_icons()
+
+    def _col_fill_icons(self, batch: int = 160) -> None:
+        """Swap the placeholder tiles for the real collectible icons in
+        batches. Each row starts with the tinted-square placeholder; this
+        fills the real art ~`batch` rows per 0-ms timer tick after the page
+        is shown (the timer yields to the event loop, which repaints between
+        ticks), so the grid paints instantly on a cold cache and the icons
+        stream in over a few frames. Icons come from the shared tile cache,
+        so repeat opens are instant."""
+        rows = [self._col_list.item(i)
+                for i in range(self._col_list.count())]
+        if not rows:
+            return
+        timer = QtCore.QTimer(self._col_list)
+        timer.setInterval(0)
+        idx = 0
+
+        def _tick():
+            nonlocal idx
+            try:
+                end = min(idx + batch, len(rows))
+                for li in rows[idx:end]:
+                    it = li.data(_ROW)
+                    if not it:
+                        continue
+                    sheet = coldata.icon_sheet(it.get("category") or "")
+                    col = theme.rarity_color(it.get("rarity"))
+                    li.setIcon(QtGui.QIcon(
+                        icons.tile(sheet, it["id"], _COL_TILE, col)))
+                idx = end
+                if idx >= len(rows):
+                    timer.stop()
+            except RuntimeError:
+                timer.stop()     # the page was torn down mid-fill
+
+        timer.timeout.connect(_tick)
+        timer.start()
 
     def _col_cat_changed(self):
         """Refill the subtype combo for the active category, then refilter."""

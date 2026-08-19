@@ -113,8 +113,14 @@ def find_entry(category: str | None, entry_id: str):
             return cat_dict[entry_id]
     return None
 
+@lru_cache(maxsize=None)
 def resolve_path(gfx_file: str) -> Path | None:
-    """Resolve an atlas gfx path to an actual file on disk."""
+    """Resolve an atlas gfx path to an actual file on disk.
+
+    Cached: this is called once per icon id on every cold page build (the
+    items list alone resolves ~850 entries), and each call sweeps the disk
+    with several `exists()` stats. The bundled asset tree never changes at
+    runtime, so the mapping is stable for the app's lifetime."""
     name = Path(gfx_file).name
     # 1. Try local atlas folder first
     p = paths.atlas_dir() / name

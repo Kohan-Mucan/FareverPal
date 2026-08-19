@@ -16,6 +16,21 @@ from ...geo import orbs as geo_orbs
 from .entity_rows import RowSpec
 
 
+def _static_waypoint_marker(kind: str) -> str:
+    """Map-marker asset name for a tracked static-POI kind (the Entity HUD
+    waypoint row icon, matching the minimap's marker art). Soulstones use the
+    bundled `soulstone` gem marker; unknown kinds fall back to 'map-pin'."""
+    if kind in ("dungeon", "rift"):
+        return "rift" if kind == "rift" else "dungeon"
+    if kind == "obelisk":
+        return "obelisk"
+    if kind == "respawn":
+        return "respawnpoint"
+    if kind == "soulstone":
+        return "soulstone"
+    return "map-pin"
+
+
 class EntityRenderMixin:
     """Provides `_render_sections` and one helper per section."""
 
@@ -333,7 +348,7 @@ class EntityRenderMixin:
         else:
             self.orb_box.hide()
 
-        # 6) render chests (also selectable -> show their loot table)
+        # 6) render chests (also selectable -> trackable on the map)
         if self.s.show_chests:
             self.chest_box.show()
             specs = []
@@ -473,7 +488,7 @@ class EntityRenderMixin:
 
                 # Determine icon and accent based on kind
                 ui_icon = ""
-                marker_name = ("rift" if kind == "rift" else "dungeon") if kind in ("dungeon", "rift") else ("obelisk" if kind == "obelisk" else "respawnpoint" if kind == "respawn" else "map-pin")
+                marker_name = _static_waypoint_marker(kind)
 
                 sub = ""
                 sub_color = None
@@ -490,10 +505,19 @@ class EntityRenderMixin:
                     sub = dname
                     sub_color = self.s.hud_accent if sel else theme.GOLD
 
+                soul_col = theme.KIND_COLOR.get("soulstone", theme.ACCENT)
                 if boss_id:
-                    acc = self.s.hud_accent if sel else None
+                    acc = self.s.hud_accent if sel else (soul_col if kind == "soulstone" else None)
                     boss_acc = self.s.hud_accent if sel else theme.GOLD
                     color = self.s.hud_accent if sel else theme.GOLD
+                    # Same two-icon layout as dungeons: the kind marker as the
+                    # primary tile (the soulstone gem) plus the boss sprite as
+                    # the secondary tile. The soulstone demons are elites, not
+                    # bosses, so the boss sprite's border is silver to match
+                    # the codex's elite badges.
+                    if kind == "soulstone" and not sel:
+                        boss_acc = (theme.SILVER if udata.is_elite(boss_id)
+                                    else theme.GOLD)
                     specs.append(RowSpec(
                         None, None, acc, label or kind.capitalize(), color,
                         sub=sub, sub_color=sub_color, value=f"{d:>6.0f}m",
@@ -504,7 +528,7 @@ class EntityRenderMixin:
                         key=key,
                         size_override=isz + 2 if kind in ("dungeon", "rift") else None))
                 else:
-                    acc = self.s.hud_accent if sel else None
+                    acc = self.s.hud_accent if sel else (soul_col if kind == "soulstone" else None)
                     color = self.s.hud_accent if sel else theme.TEXT
                     specs.append(RowSpec(
                         None, None, acc, label or kind.capitalize(), color,

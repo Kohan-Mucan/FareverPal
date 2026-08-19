@@ -29,16 +29,21 @@ class CodexPageBase:
         self._dungeon_only = False
         self._source_filters: set[str] = set()  # active source-badge filters (Vendor/Achievement/Dungeon/Chest)
         self._dungeon_list_mode = True  # Dungeons tab defaults to the list view
+        self._soulstones_mode = False  # Dungeons-tab Soulstones list view
         self._chest_orb_kind: str | None = None  # 'chests' / 'orbs' remaining-list view
         self._collection_sub = "pets"  # Collection-tab sub-view (pets/mounts/gliders/chests/orbs)
         self._dungeon_zone = "All"  # Dungeons-tab zone filter (All / Z1 / Z2 / Z3)
         self._zone_pins_active = False  # zone-filter pins currently on the map
+        self._codex_group_filter = "All"  # Collection species-family filter (All or one family)
+        self._codex_group_sub_tag = None  # sub-view the group bar was last built for
+        self._codex_group_count_status = None  # status filter the chip counts were built for
+        self._group_sub_btns: dict[str, QtWidgets.QPushButton] = {}
 
         # Tabs for Regions
         regions = codex.region_names()
         self._codex_tabs = C.SegmentedControl(list(regions.values()),
                                               current=list(regions.values())[0])
-        self._codex_tabs.currentChanged.connect(self._on_tab_changed)
+        self._codex_tabs.currentChanged.connect(self._codex_tab_changed)
         v.addWidget(self._codex_tabs)
 
         # 1. Initialize the grid FIRST to avoid crashes during restyle/refresh
@@ -67,6 +72,7 @@ class CodexPageBase:
         left_v.setContentsMargins(0, 0, 0, 0)
         left_v.setSpacing(4)
         left_v.addLayout(self._build_codex_grid_header())
+        left_v.addWidget(self._build_codex_group_sub_bar())
         left_v.addWidget(self._codex_scroll, 1)
 
         self._status_btns.buttonClicked.connect(lambda _: self._restyle_codex_controls())
@@ -170,9 +176,9 @@ class CodexPageBase:
             rid, tab_label = "", ""
         is_zone = bool(rid and rid.startswith("Z") and rid != "Z0")
         is_dungeon = rid == "Bosses" or tab_label == "Dungeons"
-        show_char = (kind in ("chests", "orbs")
-                     or is_zone
-                     or (is_dungeon and not getattr(self, "_dungeon_list_mode", False)))
+        in_list = getattr(self, "_dungeon_list_mode", False) or getattr(self, "_soulstones_mode", False)
+        show_char = (kind in ("chests", "orbs") or is_zone
+                     or (is_dungeon and not in_list))
         profile = self.model.player_profile() if (hasattr(self, "model") and self.model) else None
         if not show_char:
             text, tip, accent = "Profile Global", "Global data — not tied to a character", True
@@ -486,6 +492,9 @@ class CodexPageBase:
             btn.setCheckable(True)
             btn.setFixedSize(110, 36)
             btn.setStyleSheet(grp_btn_qss)
+            # The Collection tab restyles the labels with counts ('Visible
+            # (51)'), so the filter key travels in a property, never the text.
+            btn.setProperty("statusKey", lbl)
             if lbl == "All": btn.setChecked(True)
             ctrl_grid.addWidget(btn, row, col)
             self._status_btns.addButton(btn)
@@ -529,29 +538,27 @@ class CodexPageBase:
 
         btn_compact_qss = _CODEX_TOGGLE_QSS
 
-        # Dungeons-tab view switcher: the list is the default view, with a
-        # 'Dungeon Mobs' button for the old card-grid look. Lives in the grid
-        # header, not the map. 'Dungeon Mobs' comes first, then 'Dungeon List'
-        # (the default view sits on the right).
-        self._btn_dungeon_mobs = QtWidgets.QPushButton("Dungeon Mobs")
-        self._btn_dungeon_mobs.setCheckable(True)
-        self._btn_dungeon_mobs.setFixedHeight(24)
-        self._btn_dungeon_mobs.setStyleSheet(btn_compact_qss)
-        self._btn_dungeon_mobs.setToolTip("Old look: the dungeon mob card grid")
-        self._btn_dungeon_mobs.setVisible(False)
-        self._btn_dungeon_mobs.clicked.connect(self._on_dungeon_mobs_toggled)
-        self._btn_dungeon_list = QtWidgets.QPushButton("Dungeon List")
-        self._btn_dungeon_list.setCheckable(True)
-        self._btn_dungeon_list.setFixedHeight(24)
-        self._btn_dungeon_list.setStyleSheet(btn_compact_qss)
-        self._btn_dungeon_list.setToolTip("Click-to-track list of all dungeons")
-        self._btn_dungeon_list.setVisible(False)
-        self._btn_dungeon_list.clicked.connect(self._on_dungeon_list_toggled)
-
+        # Dungeons-tab view switcher ('Dungeon Mobs' = card grid, 'Dungeon
+        # List'/'Soulstones' = list views; Soulstones sits after Dungeon List).
         self._dungeon_view_group = QtWidgets.QButtonGroup(self)
         self._dungeon_view_group.setExclusive(True)
-        self._dungeon_view_group.addButton(self._btn_dungeon_list)
-        self._dungeon_view_group.addButton(self._btn_dungeon_mobs)
+        for label, attr, tip, handler in (
+                ("Dungeon Mobs", "_btn_dungeon_mobs",
+                 "Old look: the dungeon mob card grid", self._on_dungeon_mobs_toggled),
+                ("Dungeon List", "_btn_dungeon_list",
+                 "Click-to-track list of all dungeons", self._on_dungeon_list_toggled),
+                ("Soulstones", "_btn_dungeon_soulstones",
+                 "List of the soulstone demon-boss summon spots", self._on_dungeon_soulstones_toggled),
+        ):
+            btn = QtWidgets.QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFixedHeight(24)
+            btn.setStyleSheet(btn_compact_qss)
+            btn.setToolTip(tip)
+            btn.setVisible(False)
+            btn.clicked.connect(handler)
+            setattr(self, attr, btn)
+            self._dungeon_view_group.addButton(btn)
 
         # Count label first, so it sits to the LEFT of the view-switch buttons
         # (Dungeons: Dungeon Mobs/List; Collection: All/Pets/Mounts/Gliders/
@@ -566,18 +573,19 @@ class CodexPageBase:
         grid_header.addWidget(self._collection_sub_bar)
         grid_header.addWidget(self._btn_dungeon_mobs)
         grid_header.addWidget(self._btn_dungeon_list)
+        grid_header.addWidget(self._btn_dungeon_soulstones)
         grid_header.addStretch(1)
         return grid_header
 
     # --- tab / search / filter handlers ---------------------------------
-    def _on_tab_changed(self, index: int) -> None:
+    def _codex_tab_changed(self, index: int = 0) -> None:
         """Clear the plotted map pins when switching tabs (they belong to the
         previous tab's context) — the live tracker (overlay compass / HUD
         waypoint) persists. Switch to 'All' status automatically when entering
         the Dungeons tab."""
         self._clear_codex_map_selection()
         self._zone_pins_active = False
-        tab_label = self._codex_tabs.currentText().strip()
+        tab_label = self._codex_tabs.currentText().strip() if hasattr(self, "_codex_tabs") else ""
         if tab_label == "Dungeons":
             if hasattr(self, "_status_widgets"):
                 self._status_widgets["All"].setChecked(True)
@@ -592,9 +600,9 @@ class CodexPageBase:
 
         if text.strip() and hasattr(self, "_status_btns"):
             checked = self._status_btns.checkedButton()
-            if checked and checked.text().lower() != "all":
+            if checked and (checked.property("statusKey") or checked.text()).lower() != "all":
                 for btn in self._status_btns.buttons():
-                    if btn.text().lower() == "all":
+                    if (btn.property("statusKey") or btn.text()).lower() == "all":
                         btn.setChecked(True)
                         break
         self._search_timer.start(150)
@@ -643,6 +651,9 @@ class CodexPageBase:
             # Chests / Orbs view: the zone keys plot that zone's remaining
             # chest or orb pins instead of dungeon entrances.
             self._plot_remaining_chest_orbs(zone)
+        elif getattr(self, "_soulstones_mode", False):
+            # Soulstones view: the zone keys plot that zone's summon spots.
+            self._plot_soulstone_zone_pins(zone)
         else:
             self._plot_zone_dungeon_pins(zone)
 

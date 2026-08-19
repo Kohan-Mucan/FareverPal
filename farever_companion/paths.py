@@ -56,6 +56,21 @@ def _game_data_dir() -> Path:
         return Path(meipass) / "assets" / "data"
     return project_root() / "assets" / "data"
 
+def item_drops_path() -> Path:
+    """assets/data/item_drops.json — the item-centric drop index (item -> sources)."""
+    return _game_data_dir() / "item_drops.json"
+
+
+def craft_path() -> Path:
+    """assets/data/craft.json — the crafting recipe sheet (recipe -> job / materials)."""
+    return _game_data_dir() / "craft.json"
+
+
+def job_path() -> Path:
+    """assets/data/job.json — the job/profession sheet (job id -> name / tool)."""
+    return _game_data_dir() / "job.json"
+
+
 def chest_locs_path() -> Path:
     """Scan-generated chest locations (split from map_markers)."""
     return _game_data_dir() / "chest_locs.json"
@@ -63,6 +78,10 @@ def chest_locs_path() -> Path:
 def poi_locs_path() -> Path:
     """Scan-generated POI locations — dungeons, bosses (split from map_markers)."""
     return _game_data_dir() / "poi_locs.json"
+
+def mob_locs_path() -> Path:
+    """Scan-generated mob spawn locations (world spawns)."""
+    return _game_data_dir() / "mob_locs.json"
 
 def orb_positions_path() -> Path:
     """Scan-generated orb positions (not yet in map_markers — pending scan)."""

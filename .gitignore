@@ -66,6 +66,8 @@ desktop.ini
 _scratch*.py
 _tmp*.py
 tmp_*
+*_mockup*.html
+*_mockups.html
 *_dump.txt
 *.txt.tmp
 *PLAN.md

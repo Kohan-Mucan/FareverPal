@@ -221,6 +221,9 @@ class AccountMixin:
             btn.clicked.connect(self._open_login)
             self._acct_btn = btn
             self._acct_box.addWidget(btn)
+        # Mouse-only: a focused button would otherwise re-open sign-in / the
+        # account menu when Space is pressed (Qt activates the focused button).
+        self._acct_btn.setFocusPolicy(QtCore.Qt.NoFocus)
         self._refresh_speedrun_gating()
         if hasattr(self, "_build_profile_lbl"):
             self._refresh_profile_build()

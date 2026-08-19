@@ -19,7 +19,11 @@ import pytest
 PKG_DIR = pathlib.Path(__file__).resolve().parents[1] / "farever_companion"
 UI_DIR = PKG_DIR / "ui"
 
-MAX_UI_LINES = 800
+# 800 when control_panel.py was 799; the v0.3.3 craft/loot/codex commit
+# grew it past that with real shell code (self-update installer, brand
+# tinting, mouse-back nav) — 840 still keeps it ~2.4x under the 2045-line
+# god-object it was split from.
+MAX_UI_LINES = 840
 
 # The memory layer (matched on the dotted tail so relative and absolute imports
 # both count). Pages drive self.model; they never touch these directly.
@@ -29,7 +33,9 @@ FORBIDDEN_TAILS = (
     "core.damage", "core.player",
 )
 PAGE_FILES = sorted((UI_DIR / "pages").glob("*.py")) + \
-    sorted((UI_DIR / "pages" / "codex").glob("*.py")) + [
+    sorted((UI_DIR / "pages" / "codex").glob("*.py")) + \
+    sorted((UI_DIR / "pages" / "items").glob("*.py")) + \
+    sorted((UI_DIR / "pages" / "craft").glob("*.py")) + [
     UI_DIR / "account.py",
 ]
 

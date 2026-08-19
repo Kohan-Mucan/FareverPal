@@ -13,13 +13,16 @@ from functools import lru_cache
 class POI:
     id: str
     kind: str      # "poi"
-    sub_kind: str  # "dungeon", "obelisk", "respawn", "rift"
+    sub_kind: str  # "dungeon", "obelisk", "respawn", "rift", "soulstone"
     x: float
     y: float
     z: float
     name: str | None = None
     zone: str | None = None
     target_activity: str | None = None
+    spawn_unit: str | None = None   # soulstone: summoned boss unit id
+    cost_item: str | None = None    # soulstone: item consumed to summon
+    cost_count: int | None = None   # soulstone: amount consumed
 
     def dist2d(self, x: float, y: float) -> float:
         return math.hypot(self.x - x, self.y - y)
@@ -42,7 +45,10 @@ def load_pois() -> list[POI]:
             z=float(m.get("z", 0.0)),
             name=m.get("name"),
             zone=m.get("zone"),
-            target_activity=m.get("target_activity")
+            target_activity=m.get("target_activity"),
+            spawn_unit=m.get("spawn_unit"),
+            cost_item=m.get("cost_item"),
+            cost_count=m.get("cost_count")
         ))
     return out
 

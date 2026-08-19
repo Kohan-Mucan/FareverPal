@@ -13,10 +13,12 @@ Key properties:
     verification artifact.
   - Unused Qt modules are excluded AND the PySide6 binaries are whitelisted
     (see QT_KEEP below) so only what the app actually loads ships:
-    Qt6Core/Gui/Widgets/Svg, the qwindows platform plugin, the qwebp + qico
-    image plugins (atlas + app icon), qmodernwindowsstyle, and the shiboken6/
-    pyside6 runtimes. Validated against PySide6 6.x — re-run the loaded-modules
-    probe (see QT_KEEP comment) after every PySide6/Qt upgrade.
+    Qt6Core/Gui/Widgets/Svg, the qwindows + qoffscreen platform plugins (the
+    latter powers the headless FAREVER_OPEN_PAGE/FAREVER_SCREENSHOT smoke
+    runs), the qwebp + qico image plugins (atlas + app icon),
+    qmodernwindowsstyle, and the shiboken6/pyside6 runtimes. Validated
+    against PySide6 6.x — re-run the loaded-modules probe (see QT_KEEP
+    comment) after every PySide6/Qt upgrade.
 """
 import os
 
@@ -55,6 +57,11 @@ raw_data_path = os.path.join(SPECPATH, "farever_companion", "data", "raw_data.py
 has_raw_data = os.path.exists(raw_data_path) and os.path.getsize(raw_data_path) > 1000
 
 # Only bundle location/scan data if raw_data.py is missing (fallback mode).
+# In the normal build every loc sheet is compiled into raw_data.py (poi_locs,
+# mob_locs, chest_locs, critter_locs, orb_positions, gatherable_locs), so the
+# loose JSONs are compile inputs only — the Items page reads poi_locs/mob_locs
+# from the shim at runtime (data/items/sources.py). The fallback list below
+# exists for raw_data-less builds, where sources.py falls back to the JSONs.
 if not has_raw_data:
     data_src = os.path.join(SPECPATH, "assets", "data")
     essential_data = [
@@ -91,10 +98,11 @@ else:
 # --- PySide6 DLL whitelist (trim the bundle) -------------------------------
 # PySide6's hook collects EVERY Qt DLL in the package (~17MB unused: QML/Quick,
 # Pdf, OpenGL, Network, VirtualKeyboard, opengl32sw...). The app only loads
-# QtCore/Gui/Widgets/Svg + the qwindows platform + qwebp/qico image plugins +
-# the qmodernwindowsstyle style. Verified at runtime: launched the frozen exe
-# and enumerated loaded modules — everything not in this whitelist never loads.
-# Applied to a.binaries below, which is where PySide6's hook puts the DLLs.
+# QtCore/Gui/Widgets/Svg + the qwindows/qoffscreen platforms + qwebp/qico
+# image plugins + the qmodernwindowsstyle style. Verified at runtime: launched
+# the frozen exe and enumerated loaded modules — everything not in this
+# whitelist never loads. Applied to a.binaries below, which is where PySide6's
+# hook puts the DLLs.
 #
 # UPGRADE CHECK: the whitelist silently drops any PySide6 binary not listed
 # here, so after every PySide6/Qt upgrade re-verify by launching the built exe
@@ -110,6 +118,7 @@ QT_KEEP = {
     "PySide6/MSVCP140.dll", "PySide6/MSVCP140_1.dll", "PySide6/MSVCP140_2.dll",
     "PySide6/VCRUNTIME140.dll", "PySide6/VCRUNTIME140_1.dll",
     "PySide6/plugins/platforms/qwindows.dll",
+    "PySide6/plugins/platforms/qoffscreen.dll",
     "PySide6/plugins/imageformats/qwebp.dll",
     "PySide6/plugins/imageformats/qico.dll",
     "PySide6/plugins/styles/qmodernwindowsstyle.dll",
@@ -227,6 +236,8 @@ a = Analysis(
         "farever_companion.data.raw_units",
         "farever_companion.data.raw_items",
         "farever_companion.data.raw_skills",
+        "farever_companion.data.raw_craft",
+        "farever_companion.data.raw_item_drops",
     ],
     hookspath=[],
     hooksconfig={},

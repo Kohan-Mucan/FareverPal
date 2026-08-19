@@ -1,5 +1,6 @@
 @echo off
 setlocal
+cd /d %~dp0
 
 :run
 call ".\.venv\Scripts\python.exe" run.py

@@ -23,7 +23,8 @@ def _profile_raw_data() -> None:
     import importlib
     import time
 
-    names = ("raw_codex", "raw_units", "raw_items", "raw_skills", "raw_data")
+    names = ("raw_codex", "raw_units", "raw_items", "raw_skills",
+             "raw_craft", "raw_item_drops", "raw_data")
     total_ms = 0.0
     total_kb = 0.0
     lines: list[str] = []
@@ -51,9 +52,59 @@ def _profile_raw_data() -> None:
             pass
 
 
+def _preload_qt_platform_plugin() -> None:
+    """Frozen-build hardening: preload the Qt windows platform plugin chain
+    before QApplication is created.
+
+    In the one-file exe, Qt loads qwindows.dll from the temp extraction when
+    QApplication is created, and that load can transiently fail (antivirus
+    scanning the just-extracted DLLs, dependency resolution through PATH).
+    Qt 6.11 then shows a cryptic native error box - "This application failed
+    to start because no Qt platform plugin could be initialized" - instead
+    of the app. Preloading the chain ourselves, in dependency order, makes
+    the load deterministic: by the time QApplication is created the DLLs are
+    already mapped into the process and Qt reuses them.
+
+    No-op in dev (site-packages resolves plugins normally) and on non-Windows.
+    Failures are logged and ignored - worst case the app falls back to Qt's
+    own (rare) error box.
+    """
+    if not getattr(sys, "frozen", False) or not sys.platform.startswith("win"):
+        return
+    mei = getattr(sys, "_MEIPASS", None)
+    if not mei:
+        return
+    from pathlib import Path
+    import time
+
+    pyside = Path(mei) / "PySide6"
+    chain = [pyside / "Qt6Core.dll",
+             pyside / "Qt6Gui.dll",
+             pyside / "plugins" / "platforms" / "qwindows.dll"]
+    if not all(p.exists() for p in chain):
+        return
+    # Also pin Qt to the bundled plugin dir, so platform / image / style
+    # plugins resolve even if the DLL search path is ever off.
+    os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH",
+                          str(pyside / "plugins"))
+    import ctypes
+    for attempt in range(3):
+        try:
+            for p in chain:
+                ctypes.WinDLL(str(p))
+            return
+        except OSError:
+            if attempt < 2:
+                time.sleep(1.0 + attempt)   # let AV / extraction settle
+    print("[startup] warning: Qt platform plugin preload failed; "
+          "falling back to Qt's own loader", file=sys.stderr)
+
+
 try:
     if os.environ.get("FAREVER_PROFILE") == "1":
         _profile_raw_data()
+
+    _preload_qt_platform_plugin()
 
     from farever_companion import paths
     icons_dir = paths.icons_dir()
@@ -87,4 +138,20 @@ except Exception as e:
     sys.exit(1)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # Anything that slips past the import-time try/except above (e.g. an
+        # exception while building the UI) would otherwise surface as the
+        # bootloader's raw error box - show a clear dialog instead.
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            from PySide6 import QtWidgets
+            app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+            QtWidgets.QMessageBox.critical(
+                None, "Startup Error",
+                f"Farever Pal hit an error during startup:\n\n{e}\n\n{tb}")
+        except Exception:
+            traceback.print_exc()
+        sys.exit(1)

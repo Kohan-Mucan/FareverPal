@@ -13,7 +13,6 @@ inside functions here.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from functools import lru_cache
 
 from .. import paths
@@ -64,7 +63,11 @@ _SHEET_MAP = {
 }
 
 
+@lru_cache(maxsize=None)
 def _icon_path(sheet: str, id_: str):
+    # Cached: called once per icon in has_icon() AND again in _raw(), and
+    # each call does several Path.exists() disk stats. The bundled asset
+    # tree never changes at runtime, so the result is stable.
     # Normalize to the canonical plural name (e.g., "unit" -> "units")
     s_low = sheet.lower()
     canonical = _SHEET_MAP.get(s_low, s_low)
@@ -86,6 +89,59 @@ def _icon_path(sheet: str, id_: str):
 
 
 @lru_cache(maxsize=4096)
+def _raw(sheet: str, id_: str):
+    """The icon's source pixmap at its native resolution — the atlas cell crop
+    when the id has atlas data, else the individual file on disk. None when the
+    icon is missing. Atlas-first, same resolution order as pixmap()."""
+    QtGui, _ = _qt()
+    if sheet and id_:
+        entry = atlas.find_entry(sheet, id_)
+        if entry and isinstance(entry, dict):
+            a_path = atlas.resolve_path(entry.get("file", ""))
+            if a_path:
+                sheet_pm = _get_atlas_sheet(str(a_path))
+                if sheet_pm is not None and not sheet_pm.isNull():
+                    n = entry.get("size", 96)
+                    return sheet_pm.copy(entry.get("x", 0), entry.get("y", 0), n, n)
+        path = _icon_path(sheet, id_)
+        if path is not None:
+            pm = QtGui.QPixmap(str(path))
+            if not pm.isNull():
+                return pm
+    return None
+
+
+@lru_cache(maxsize=4096)
+def _content_bbox(sheet: str, id_: str):
+    """(x, y, w, h) of the sprite's visible content inside its native cell, or
+    None when the icon is missing or fully transparent. Pixels with alpha
+    <= 8 count as background, so faint anti-aliasing never survives but soft
+    edges don't get shaved either."""
+    QtGui, _ = _qt()
+    raw = _raw(sheet, id_)
+    if raw is None:
+        return None
+    img = raw.toImage().convertToFormat(QtGui.QImage.Format_ARGB32)
+    w, h = img.width(), img.height()
+    minx, miny, maxx, maxy = w, h, -1, -1
+    for y in range(h):
+        row = memoryview(img.constScanLine(y)).cast("B")
+        for x in range(w):
+            if row[4 * x + 3] > 8:
+                if x < minx:
+                    minx = x
+                if x > maxx:
+                    maxx = x
+                if y < miny:
+                    miny = y
+                if y > maxy:
+                    maxy = y
+    if maxx < 0:
+        return None
+    return (minx, miny, maxx - minx + 1, maxy - miny + 1)
+
+
+@lru_cache(maxsize=4096)
 def pixmap(sheet: str, id_: str, size: int):
     """A QPixmap for an icon id, scaled to `size`. Never None (placeholder).
 
@@ -93,30 +149,42 @@ def pixmap(sheet: str, id_: str, size: int):
     atlas sheet. Otherwise fall back to the individual file on disk.
     """
     QtGui, QtCore = _qt()
-    if sheet and id_:
-        # 1. Try atlas sprite-sheet
-        entry = atlas.find_entry(sheet, id_)
-        if entry and isinstance(entry, dict):
-            a_path = atlas.resolve_path(entry.get("file", ""))
-            if a_path:
-                pm = _crop_atlas(
-                    a_path,
-                    entry.get("x", 0),
-                    entry.get("y", 0),
-                    entry.get("size", 96),
-                    size,
-                )
-                if pm and not pm.isNull():
-                    return pm
-        # 2. Fall back to individual file
-        path = _icon_path(sheet, id_)
-        if path is not None:
-            pm = QtGui.QPixmap(str(path))
-            if not pm.isNull():
-                return pm.scaled(
-                    size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
-                )
+    raw = _raw(sheet, id_)
+    if raw is not None:
+        return raw.scaled(
+            size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+        )
     return _placeholder(size)
+
+
+@lru_cache(maxsize=4096)
+def pixmap_cropped(sheet: str, id_: str, size: int):
+    """Like pixmap(), but the sprite's transparent margins are trimmed first and
+    the visible content is scaled to fill `size` (aspect preserved, centred on a
+    transparent canvas). Icons whose content already fills their cell are
+    returned unchanged, so only sprites floating small in empty space (e.g.
+    some boss sprites) are enlarged to fill the frame. Missing icons fall back
+    to the placeholder."""
+    QtGui, QtCore = _qt()
+    raw = _raw(sheet, id_)
+    if raw is None:
+        return _placeholder(size)
+    bb = _content_bbox(sheet, id_)
+    if bb is None:
+        return pixmap(sheet, id_, size)
+    x, y, w, h = bb
+    # Content already fills the cell -> plain scaling is identical and cheaper.
+    if w >= raw.width() * 0.97 and h >= raw.height() * 0.97:
+        return pixmap(sheet, id_, size)
+    content = raw.copy(x, y, w, h).scaled(
+        size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+    )
+    out = QtGui.QPixmap(size, size)
+    out.fill(QtGui.QColor(0, 0, 0, 0))
+    p = QtGui.QPainter(out)
+    p.drawPixmap((size - content.width()) // 2, (size - content.height()) // 2, content)
+    p.end()
+    return out
 
 
 @lru_cache(maxsize=64)
@@ -132,17 +200,43 @@ def _placeholder(size: int):
 
 
 def has_icon(sheet: str, id_: str) -> bool:
+    if not sheet or not id_:
+        return False
     if atlas.find_entry(sheet, id_) is not None:
         return True
     return _icon_path(sheet, id_) is not None
 
 
+def item_tile(item_id: str, item_name: str, size: int, accent: str) -> QtGui.QPixmap:
+    """Smart item icon resolver: tries ID first, then display Name (since some
+    assets use spaces), then falls back to the 'unit' sheet for scanned
+    boss gear. Returns the standard tinted tile."""
+    # 1. Try 'item' sheet with the technical ID
+    if has_icon("item", item_id):
+        return tile("item", item_id, size, accent)
+
+    # 2. Try 'item' sheet with the display Name (handles names with spaces)
+    if item_name and has_icon("item", item_name):
+        return tile("item", item_name, size, accent)
+
+    # 3. Fallback to 'unit' sheet (scanned mob/boss gear)
+    if has_icon("unit", item_id):
+        return tile("unit", item_id, size, accent)
+
+    # 4. Final placeholder tile (the tinted square with ID if possible)
+    return tile("item", item_id, size, accent)
+
+
 @lru_cache(maxsize=4096)
-def tile(sheet: str | None, id_: str | None, size: int, accent: str):
+def tile(sheet: str | None, id_: str | None, size: int, accent: str,
+         trim: bool = False):
     """Game icon on a rounded, accent-tinted square, the standard row leading
     element (Loot table + both HUDs). `accent` is a hex color (rarity / faction
     / gold / cyan). Background = accent @18%, 1px border = accent @55%, the PNG
-    centred with ~2px padding. Missing PNG -> the tinted square still shows."""
+    centred with ~2px padding. Missing PNG -> the tinted square still shows.
+    With `trim=True` the sprite's transparent margins are cut first so small
+    sprites fill the tile instead of floating tiny in empty space (see
+    pixmap_cropped)."""
     QtGui, QtCore = _qt()
     pm = QtGui.QPixmap(size, size)
     pm.fill(QtGui.QColor(0, 0, 0, 0))
@@ -154,7 +248,10 @@ def tile(sheet: str | None, id_: str | None, size: int, accent: str):
     p.setPen(QtGui.QPen(bd, 1))
     p.drawRect(QtCore.QRectF(0.5, 0.5, size - 1, size - 1))   # sharp (0px) per design
     if sheet and id_ and has_icon(sheet, id_):
-        g = pixmap(sheet, id_, size - 4)
+        if trim:
+            g = pixmap_cropped(sheet, id_, size - 4)
+        else:
+            g = pixmap(sheet, id_, size - 4)
         p.drawPixmap((size - g.width()) // 2, (size - g.height()) // 2, g)
     p.end()
     return pm
@@ -206,8 +303,10 @@ def _disk_offsets(r: int):
 
 @lru_cache(maxsize=4096)
 def outlined(sheet: str | None, id_: str | None, size: int, accent: str,
-             border: int = 2):
-    """Game icon drawn as itself with an accent border."""
+             border: int = 2, trim: bool = False):
+    """Game icon drawn as itself with an accent border. With `trim=True`
+    the sprite's transparent margins are cut first so small sprites fill
+    the box instead of floating tiny in empty space."""
     QtGui, QtCore = _qt()
     out = QtGui.QPixmap(size, size)
     out.fill(QtGui.QColor(0, 0, 0, 0))
@@ -218,7 +317,8 @@ def outlined(sheet: str | None, id_: str | None, size: int, accent: str,
         p.drawEllipse(QtCore.QPointF(size / 2, size / 2), r, r); p.end()
         return out
 
-    g = pixmap(sheet, id_, size - 2 * (border + 1))
+    g = (pixmap_cropped(sheet, id_, size - 2 * (border + 1)) if trim
+         else pixmap(sheet, id_, size - 2 * (border + 1)))
     keyline, ring = _silhouette(g, "#0b0e14"), _silhouette(g, accent)
     ox, oy = (size - g.width()) // 2, (size - g.height()) // 2
     p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
@@ -283,7 +383,11 @@ def asset_icon(sheet_name: str, size: int):
 
 @lru_cache(maxsize=4096)
 def marker(name: str, size: int, accent: str | None = None, border: int = 2):
-    """A map-marker with optional accent outline."""
+    """A map-marker with optional accent outline.
+
+    Missing/unknown marker assets degrade to an empty transparent pixmap (an
+    accent dot when `accent` is given) instead of returning None, so callers
+    like the Entity HUD's QLabel.setPixmap never crash on a missing asset."""
     QtGui, QtCore = _qt()
     g = asset_icon(name, max(1, size - 2 * (border + 1)))
     if g is None:
@@ -291,7 +395,7 @@ def marker(name: str, size: int, accent: str | None = None, border: int = 2):
         p = QtGui.QPainter(out); p.setRenderHint(QtGui.QPainter.Antialiasing); p.setPen(QtCore.Qt.NoPen)
         if accent:
             p.setBrush(QtGui.QColor(accent)); p.drawEllipse(QtCore.QRectF(border, border, size-2*border, size-2*border))
-        p.end(); return out if accent else None
+        p.end(); return out
 
     keyline, ox, oy = _silhouette(g, "#0b0e14"), (size - g.width()) // 2, (size - g.height()) // 2
     out = QtGui.QPixmap(size, size); out.fill(QtGui.QColor(0, 0, 0, 0))

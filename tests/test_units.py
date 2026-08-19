@@ -1,10 +1,10 @@
-"""Boss detection + unit loot resolution (headless)."""
+"""Boss detection + unit metadata (headless)."""
 import pytest
 
 from farever_companion import paths
 from farever_companion.core.model import LiveModel
 from farever_companion.core.scene import Entity
-from farever_companion.data import units, rarity
+from farever_companion.data import units
 
 
 def _game_data_present() -> bool:
@@ -23,22 +23,9 @@ pytestmark = pytest.mark.skipif(
     reason="requires game data (data/sheets/*.json)")
 
 
-def test_named_bosses_are_the_ten():
-    bosses = units.named_bosses()
-    assert "MunsterChuck" in bosses
-    assert len(bosses) >= 10   # grew from 10 to 12 as the data added named bosses
+def test_named_bosses_are_detected():
     assert units.is_boss("MunsterChuck")
     assert not units.is_boss("Kobold")
-
-
-def test_boss_uses_signature_table():
-    assert units.loot_table_for_unit("MunsterChuck") == "MunsterChuck"
-
-
-def test_trash_unit_uses_type_table():
-    # a Kobold-type unit resolves to the Kobold table via unitType
-    tbl = units.loot_table_for_unit("Kobold")
-    assert tbl in (None, "Kobold") or isinstance(tbl, str)
 
 
 def test_every_catalog_companion_is_detected():
@@ -94,9 +81,3 @@ def test_companion_and_enemy_lists_split():
     assert foes == [kobold]
     # and the type filter still applies to enemies
     assert m.nearest_enemies(xyz, 10, hide_types={"Kobold"}) == []
-
-
-def test_rarity_promotion_floors_and_sums_to_one():
-    dist = rarity.promote_distribution("Rare", 20)
-    assert "Uncommon" not in dist            # floored at Rare
-    assert abs(sum(dist.values()) - 1.0) < 1e-6

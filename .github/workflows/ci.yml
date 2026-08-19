@@ -6,7 +6,10 @@
 # NOTE: this is build verification only. The data-dependent tests self-skip
 # when the optional game-data sheets aren't present in the checkout (they are
 # not part of this repo); full releases are built and cut separately (see
-# release.ps1). This workflow guarantees the code compiles, the read-only tests
+# release.ps1). The cross-repo scan-guard + extractor-gate tests
+# (tests/test_scan_guards.py) ARE exercised for real: the GameFiles repo is
+# checked out as a sibling so the tripwires and the Step 7 pipeline gate run
+# under CI. This workflow guarantees the code compiles, the read-only tests
 # pass, and the exe packages.
 name: CI
 
@@ -25,6 +28,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # tests/test_scan_guards.py loads the item scan and the extractor's
+      # Step 7 gate from the sibling GameFiles repo (resolved from its own
+      # __file__), so check it out next to this checkout (../GameFiles).
+      - name: Checkout GameFiles (scan + extractor under test)
+        uses: actions/checkout@v4
+        with:
+          repository: Kohan-Mucan/GameFiles
+          path: ../GameFiles
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -41,6 +53,21 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -v
+
+      # Tripwire for the wiring itself: the cross-repo tests must RUN, not
+      # silently skip (a misplaced/missing GameFiles checkout would otherwise
+      # pass CI with the guards untested). The real-sheet test is expected to
+      # skip (no extracted DB in CI), so require at least one PASSED test.
+      - name: Scan-guard + extractor-gate tests must run (not skip)
+        run: |
+          $out = python -m pytest tests/test_scan_guards.py -q --no-header 2>&1
+          $code = $LASTEXITCODE
+          $out | Select-Object -Last 3
+          if ($code -ne 0) { exit $code }
+          if (-not ($out -match 'passed')) {
+            Write-Host "::error::scan-guard tests did not run - GameFiles sibling checkout missing/misplaced"
+            exit 1
+          }
 
       - name: Package one-file exe
         run: pyinstaller --noconfirm FareverPal.spec

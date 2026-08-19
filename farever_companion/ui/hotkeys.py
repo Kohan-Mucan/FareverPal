@@ -2,8 +2,8 @@
 
 The HUD overlays are frameless always-on-top windows that don't hold keyboard
 focus while the game is in front, so in-overlay key events never arrive. Global
-hotkeys let the user drive loot-target selection while playing. Read-only: this
-only listens for key combos; it injects nothing into the game.
+hotkeys (e.g. the Speedrun start/stop) work while the game is focused.
+Read-only: this only listens for key combos; it injects nothing into the game.
 
 `GlobalHotkeys.triggered(action)` fires for each bound combo. Bindings are
 QKeySequence strings (e.g. "Ctrl+Alt+Right") edited via QKeySequenceEdit.

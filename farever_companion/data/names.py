@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from . import cdb, tokens
+from . import cdb
 
 
 @lru_cache(maxsize=1)
@@ -46,9 +46,7 @@ def item_name(item_id: str | None) -> str | None:
     if not item_id:
         return item_id
     name = _items().get(item_id)
-    if name and name != item_id:
-        return name
-    return tokens.label(item_id) or name or item_id
+    return name or item_id
 
 
 def unit_name(unit_id: str | None) -> str | None:
@@ -180,24 +178,6 @@ def zone_name(zone_id: str | None) -> str | None:
     if not zone_id:
         return None
     return _all_zone_names().get(zone_id.lower()) or humanize(zone_id)
-
-
-def loot_table_label(tid: str | None) -> str:
-    """Readable name for a loot-table id, for the predictor dropdown. Named
-    bosses use their display name ('Munster Chuck (Boss)'); zone codes resolve to
-    the region name ('Vault_Z2_1' -> 'Vault Valley of Eternal Autumn 1');
-    everything else is humanized ('WorldCrate' -> 'World Crate')."""
-    if not tid:
-        return ""
-    from . import units
-    if tid in units.named_bosses():
-        return f"{unit_name(tid)} (Boss)"
-    label = humanize(tid)
-    regions = _zone_region_names()
-    if regions:                              # Z1/Z2/Z3 -> region name
-        label = re.sub(r"\bZ ?([0-9]+)\b",
-                       lambda m: regions.get(m.group(1), m.group(0)), label)
-    return label
 
 
 def chest_label(chest_id: str | None, loot_table: str | None = None) -> str:

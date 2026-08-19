@@ -33,6 +33,7 @@ class FriendsPageMixin:
         so_btn.setObjectName("Accent")
         so_btn.setMinimumHeight(32)
         so_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        so_btn.setFocusPolicy(QtCore.Qt.NoFocus)   # mouse-only: no Space/Enter trigger
         so_btn.clicked.connect(self._open_login)
         so.addWidget(so_lbl)
         so.addWidget(so_btn, 0, QtCore.Qt.AlignLeft)

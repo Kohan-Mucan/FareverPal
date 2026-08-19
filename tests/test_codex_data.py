@@ -73,6 +73,22 @@ def test_pets_grouped_by_species():
     assert "Critter" not in species
 
 
+def test_z0_mounts_gliders_carry_species_group():
+    """Mounts/gliders keep their compiled `group` family on the merged Z0
+    rows so the Collection Mounts/Gliders views can sub-header by species
+    family just like Pets does."""
+    z0 = codex.units_by_region("Z0")
+    mounts = [e for e in z0 if e["id"].startswith("Mount_")]
+    gliders = [e for e in z0 if e["id"].startswith("Glider_")]
+    assert mounts and gliders
+    # every collectible mount/glider row carries a species family
+    assert all(e.get("group") for e in mounts), [e["id"] for e in mounts if not e.get("group")]
+    assert all(e.get("group") for e in gliders), [e["id"] for e in gliders if not e.get("group")]
+    # the families are meaningful — several distinct groups, not one flat bucket
+    assert len({e["group"] for e in mounts}) >= 5
+    assert len({e["group"] for e in gliders}) >= 5
+
+
 def test_units_by_region_no_duplicates():
     for rid in codex.codex_order():
         ids = [e["id"] for e in codex.units_by_region(rid)]
@@ -216,6 +232,75 @@ def test_achievement_only_items_not_flagged_unreleased():
     assert all((e.get("kind") or "") not in ("todo", "unreleased") for e in drops)
 
 
+def test_soulstone_dropped_mounts_resolve_to_summon_spots():
+    """Mounts/gliders dropped by the soulstone demon bosses (the Niflelian
+    family) plot exactly their 4 summon spots — never every species sibling.
+
+    The soulstone bosses (Ariana Grandemon, Baphometal, ...) carry no coords
+    of their own; the resolver reads their spots from the poi_locs dataset.
+    Before the fix the Niflelian Skunk fell through to the species-group
+    fallback and pinned all 7 'Skunk'-named entities (the other skunk mounts
+    included); the demon crab/bat/wingfish painted 301/133/40 pins the same
+    way."""
+    from farever_companion.data import raw_data
+    ss = {p["spawn_unit"]: p["world_pos"]
+          for p in (raw_data.DATA.get("poi_locs") or [])
+          if p.get("sub_kind") == "soulstone" and p.get("spawn_unit")}
+    cases = {
+        # Z1 soulstone family (Ariana Grandemon, Baphometal, Belzebeat,
+        # Luciferrari)
+        "Mount_Skunk_06": ("FaerieDemon_Z1_Soulstone_Leg",
+                            "Demon_Z1_Claws_Soulstone",
+                            "ImpDemon_Z1_Soulstone",
+                            "Demon_Z1_Spear_Soulstone"),
+        "Glider_FlyingFish_Demon": ("FaerieDemon_Z1_Soulstone_Leg",
+                                     "Demon_Z1_Claws_Soulstone",
+                                     "ImpDemon_Z1_Soulstone",
+                                     "Demon_Z1_Spear_Soulstone"),
+        # Z2 soulstone family (Asmodeaf, Kristian Belial, Lilithium,
+        # Mortalkombaal)
+        "Mount_Crab_Demonic": ("ImpDemon_Z2_Soulstone",
+                                "Demon_Z2_Spear_Soulstone_Leg",
+                                "FaerieDemon_Z2_Soulstone",
+                                "Demon_Z2_Claws_Soulstone"),
+        "Glider_Bat_Demon": ("ImpDemon_Z2_Soulstone",
+                              "Demon_Z2_Spear_Soulstone_Leg",
+                              "FaerieDemon_Z2_Soulstone",
+                              "Demon_Z2_Claws_Soulstone"),
+    }
+    for uid, droppers in cases.items():
+        coords, title, _ = codex.resolve_locations(uid)
+        # exactly the 4 soulstone summon spots, in their world positions
+        assert len(coords) == 4, (uid, len(coords))
+        expected = {(round(ss[d]["x"], 1), round(ss[d]["y"], 1))
+                    for d in droppers}
+        got = {(round(c["x"], 1), round(c["y"], 1)) for c in coords}
+        assert got == expected, (uid, got, expected)
+        assert title.startswith("Mob Drop:"), (uid, title)
+        # each pin carries its boss name so the map can label it
+        names = sorted(p.get("name") for p in coords)
+        expected_names = sorted(codex.enemies_data()[d]["name"] for d in droppers)
+        assert names == expected_names, (uid, names, expected_names)
+
+
+def test_soulstone_pois_carry_summon_metadata():
+    """The soulstone_pois accessor exposes the 8 demon-boss summon spots with
+    their world positions, zones, and costs — the Dungeons tab's Soulstones
+    list reads this (the resolver's soulstone fallback reads the same rows)."""
+    pois = codex.soulstone_pois()
+    assert len(pois) == 8
+    for p in pois:
+        assert p.get("name") and p.get("spawn_unit") and p.get("id")
+        wp = p.get("world_pos") or {}
+        assert "x" in wp and "y" in wp, p
+        assert p.get("zone", "").startswith("Z"), p
+        assert p.get("cost_item"), p
+    # every summon spot is a real enemies_data boss the resolver can name
+    ed = codex.enemies_data()
+    for p in pois:
+        assert ed[p["spawn_unit"]]["name"] == p["name"], p
+
+
 def test_z0_todo_unreleased_short_circuit():
     """todo/unreleased entries can never have locations — the resolver returns
     empty immediately instead of running the fallback chain."""
@@ -243,8 +328,19 @@ def test_resolver_coverage_is_lookup_driven():
     # Brawler Benoit used to fuzzy-pin to Crimson Barracks (a dungeon it does
     # not belong to) — now codex.json supplies his spawn next to Brawler Brahim.
     # Zone mobs without recorded spawn coords stay empty too: the species-group
-    # fallback must never misread the zone tag in their id ('Z2W' in
-    # 'OgreManfish_Z2W_FS_Claws') as a mob family, which used to paint every
-    # Z2W mob's spawns as 'Mob Drop: Z2W Mobs (83 Species)'.
-    assert unresolved == ["Kobold_Z1W_Caster", "Kobold_Z1W_Daggers",
-                          "OgreManfish_Z2W_FS_Claws", "YellowRabbits"], unresolved
+    # fallback must never misread the zone tag in their id ('Z1W' in the Kobold
+    # ids) as a mob family, which used to paint every zone-tagged mob's spawns
+    # as 'Mob Drop: Z2W Mobs (83 Species)'. ('OgreManfish_Z2W_FS_Claws' was the
+    # original motivating example; it is now a drop-source-only mob, no longer
+    # a codex entry, so it cannot appear here — the Kobold pair still exercises
+    # the guard end to end.) The early-access Sparktail pet stays empty too:
+    # it's a cash-shop item (its `group` is just the Collection species-family
+    # header, not a drop family), so the fallback must not paint every Rabbit
+    # mob's spawns for a pet you buy.
+    #
+    # Set comparison (not list order): the exact order these unresolved ids
+    # surface in depends on the compiled shim's zone ordering, which can
+    # legitimately change when the shims are rebuilt from the current
+    # codex.json — the coverage (these four, no more) is what matters.
+    assert set(unresolved) == {"Kobold_Z1W_Caster", "Kobold_Z1W_Daggers",
+                               "Rabbit_EarlyAccess_Spark", "YellowRabbits"}, unresolved

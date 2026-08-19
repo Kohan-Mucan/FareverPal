@@ -1,10 +1,5 @@
-"""Per-unit loot: CDB unit-id -> drop table -> predicted drops, plus boss
-detection. Pure (CDB-only), so a unit-id always resolves to the same table.
-
-Chain (verified against the CDB):
-    unit.json      id    -> type, lvl, maxLvl, faction, flags
-    unitType.json  type  -> lootTable (None for non-droppers)
-    lootTable.json       -> recursive expansion (loot.predict)
+"""Unit metadata + boss detection. Pure (CDB-only), so a unit-id always
+resolves the same way.
 
 Boss detection: a unit whose id also names a loot table (named bosses), or one
 whose unit.flags carries BOSS_FLAG_BIT.
@@ -13,7 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from . import cdb, loot
+from . import cdb
 
 # unit.flags boss bit, calibrated from the CDB: exactly 13 of 403 units carry
 # 0x10 (all named bosses plus Phrixes/PhrixesP1/Ulserous), zero trash mobs.
@@ -37,10 +32,6 @@ def _named_bosses() -> frozenset[str]:
     """Units whose id also names a loot table (the boss convention)."""
     table_ids = {r["id"] for r in cdb.lines("lootTable")}
     return frozenset(u for u in _units_by_id() if u in table_ids)
-
-
-def named_bosses() -> frozenset[str]:
-    return _named_bosses()
 
 
 def is_boss(unit_id: str | None) -> bool:
@@ -239,58 +230,6 @@ def unit_info(unit_id: str | None) -> dict | None:
         "flags": row.get("flags"),
         "lootTable": _type_to_table().get(utype) if utype else None,
     }
-
-
-def loot_table_for_unit(unit_id: str | None) -> str | None:
-    """Boss signature table if it's a named boss, else the type's trash table."""
-    bt = boss_loot_table(unit_id)
-    if bt:
-        return bt
-    info = unit_info(unit_id)
-    return info.get("lootTable") if info else None
-
-
-def predict_unit(unit_id: str, level: int | None = None
-                 ) -> list[tuple[str, float, str, str]]:
-    """Predicted drops for a unit-id at `level` (defaults to the unit's lvl)."""
-    table = loot_table_for_unit(unit_id)
-    if not table:
-        return []
-    info = unit_info(unit_id)
-    lvl = level if level is not None else ((info.get("lvl") if info else None) or 1)
-    return loot.predict_sorted(table, lvl)
-
-
-@lru_cache(maxsize=1)
-def _loot_to_unit_types() -> dict[str, list[str]]:
-    """Map of loot_table_id -> list of unit_type_ids that use it."""
-    out: dict[str, list[str]] = {}
-    for ut in cdb.lines("unitType"):
-        lt = ut.get("lootTable")
-        if lt:
-            out.setdefault(lt, []).append(ut["id"])
-    return out
-
-
-def who_drops(item_id: str) -> list[str]:
-    """List of unit type names that can drop this item."""
-    from . import names, loot
-    
-    # 1. Find all tables containing this item
-    tables = loot.reverse_loot_map().get(item_id, [])
-    
-    # 2. Find unit types using those tables
-    ut_map = _loot_to_unit_types()
-    u_types = set()
-    for tid in tables:
-        for utid in ut_map.get(tid, []):
-            u_types.add(utid)
-            
-    # 3. Return readable names
-    out_names = []
-    for utid in u_types:
-        out_names.append(names.unit_name(utid))
-    return sorted(out_names)
 
 
 def static_spawns(unit_id: str) -> list[list[float]]:

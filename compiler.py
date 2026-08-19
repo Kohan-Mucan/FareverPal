@@ -12,7 +12,7 @@ def _embed_shim(stem: str, payload: dict) -> str:
     each shim stays a single self-contained file that loads in one
     decompress + json.load at import time.
     """
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     comp = zlib.compress(raw, 9)
     b85 = base64.b85encode(comp).decode("ascii")
     lines = "\n    ".join(f'b"{b85[i:i + 76]}"' for i in range(0, len(b85), 76))
@@ -86,7 +86,7 @@ def _write_embedded_data(output_dir: Path, stem: str, payload: dict, dev_dir: Pa
     p.write_text(_embed_shim(stem, payload), encoding="utf-8")
     dev_dir.mkdir(parents=True, exist_ok=True)
     json_p = dev_dir / f"{stem}.json"
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     json_p.write_bytes(raw)
     print(f"Written: {p.name} (+{json_p.name} dev copy in {dev_dir.name}/, {len(raw) / 1024:.0f} KB)")
 
@@ -287,7 +287,9 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         "rarity": ["id", "color", "props"],
         "zone": ["id", "name"],
         "items": ["id", "rarity", "type"],
-        "skills": ["id", "type", "nature"]
+        "skills": ["id", "type", "nature"],
+        # Tuning constants (GearUpgrades material costs, WorldLootLevel, ...)
+        "constant": ["id", "v"]
     }
 
     # Hardcoded fallback region names
@@ -438,6 +440,54 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                 # Bake the name directly into the row to save runtime logic
                 if name in ["units", "items", "skills"]:
                     row["name"] = (line.get("texts") or {}).get("name") or line.get("name")
+                    if name == "skills":
+                        # Skill-description resolver fields: data/skills.py
+                        # resolves the ::token:: descriptions from the FULL
+                        # row (texts.desc + texts.refs for ::ref_*:: slots,
+                        # vars, scalar cooldown/duration, the first step's
+                        # range — plus texts.rankDescs and props.rankOverride
+                        # for rank-aware text). The loose skill.json is a
+                        # compile input only (not bundled — see
+                        # FareverPal.spec), so these fields must ride in the
+                        # shim for the item page's weapon-skills section to
+                        # resolve descriptions in the frozen build. Pruned
+                        # to exactly what the resolver touches (~31 KB
+                        # compressed vs 138 KB for the full rows).
+                        texts = line.get("texts") or {}
+                        t = {}
+                        for k in ("name", "desc", "refs", "rankDescs"):
+                            if texts.get(k) is not None:
+                                t[k] = texts[k]
+                        if t:
+                            row["texts"] = t
+                        # rank resolution: props.rankOverride (per-rank
+                        # var/prop overrides) + the scalar props templates
+                        # read (::charges::, ::duration:: ...)
+                        props = line.get("props") or {}
+                        p = {}
+                        if props.get("rankOverride"):
+                            p["rankOverride"] = props["rankOverride"]
+                        p.update({k: v for k, v in props.items()
+                                  if k != "rankOverride"
+                                  and isinstance(v, (int, float))})
+                        if p:
+                            row["props"] = p
+                        if line.get("vars"):
+                            row["vars"] = line["vars"]
+                        if line.get("cooldown") is not None:
+                            row["cooldown"] = line["cooldown"]
+                        if line.get("duration") is not None:
+                            row["duration"] = line["duration"]
+                        # step pruning: keep range + the move step's
+                        # duration (data/skills.skill_moves reads them for
+                        # the base-chain wind-up / reach lines)
+                        steps = [{k: s[k] for k in ("range", "duration")
+                                  if s.get(k) is not None}
+                                 for s in (line.get("steps") or [])
+                                 if s.get("range") is not None
+                                 or s.get("duration") is not None]
+                        if steps:
+                            row["steps"] = steps
                     if name == "units":
                         if not row.get("name"):
                             row["name"] = ut_names.get(line.get("type"), "")
@@ -552,10 +602,14 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     LOC_FIELDS = {
         "chest_locs": ["sub_kind", "chest_id", "world_pos", "z", "lootTable"],
         "poi_locs": ["id", "sub_kind", "world_pos", "z", "name", "zone",
-                      "target_activity", "lootTable", "chest_ids"],
+                      "target_activity", "lootTable", "chest_ids",
+                      "spawn_unit", "cost_item", "cost_count"],
         "gatherable_locs": ["name", "world", "x", "y", "z"],
         "orb_positions": ["id", "x", "y", "z", "region", "zone"],
         "critter_locs": ["id", "units", "unit"],
+        # world mob spawns — the Items page resolves 'unknown location' drop
+        # rows against these zones (items/sources.py reads the compiled list)
+        "mob_locs": ["unit", "units", "zone"],
     }
 
     def prune_loc_rows(rows, keep):
@@ -573,6 +627,7 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         ("gatherable_locs.json", "gatherable_locs"),
         ("orb_positions.json", "orb_positions"),
         ("critter_locs.json", "critter_locs"),
+        ("mob_locs.json", "mob_locs"),
     ]:
         p = data_new / loc_name
         if not p.exists():
@@ -580,19 +635,52 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         if p.exists():
             try:
                 jdata = json.loads(p.read_text(encoding="utf-8"))
-                rows = jdata.get(key) or jdata.get("pois") or jdata.get("chests") or jdata.get("gatherables") or jdata.get("critters") or jdata
+                rows = (jdata.get(key) or jdata.get("pois")
+                        or jdata.get("chests") or jdata.get("gatherables")
+                        or jdata.get("critters") or jdata.get("mobs")
+                        or jdata)
                 
-                # Deduplicate poi_locs by appending suffix to duplicate IDs
+                # Deduplicate poi_locs by appending suffix to duplicate IDs.
+                # Two passes:
+                #  1. Named-world-NPC rows (sub_kind "npc") are dropped ENTIRELY.
+                #     They never render in the app (no NPC minimap layer — only
+                #     vendors/petshops show), and their only other use was as
+                #     zone-resolution anchors — a value the app doesn't ship
+                #     them for. The full dump WITH NPCs stays in the GameFiles
+                #     scanner output (Live_Data_Clean) for the website.
+                #  2. Exact repeats — the same named node (same kind, id, zone
+                #     AND position) double-emitted from overlapping world tiles
+                #     is dropped for ANY kind. A second pin at the same spot is
+                #     dead weight (this is what the scanner's spatial dedup
+                #     cannot catch for vendor/petshop kinds, which it refuses
+                #     to merge to protect distinct hub NPCs).
+                #  3. Same-id repeats of other kinds get a numeric suffix so
+                #     genuinely distinct instances (different positions) stay
+                #     addressable.
                 if key == "poi_locs" and isinstance(rows, list):
+                    seen_spots = set()
                     seen_ids = {}
+                    kept_rows = []
                     for row in rows:
+                        if row.get("sub_kind") == "npc":
+                            continue
+                        wp = row.get("world_pos") or {}
+                        spot = (row.get("sub_kind"), row.get("id"), row.get("zone"),
+                                wp.get("x"), wp.get("y"))
+                        if spot in seen_spots:
+                            continue
+                        seen_spots.add(spot)
                         rid = row.get("id")
-                        if not rid: continue
+                        if not rid:
+                            kept_rows.append(row)
+                            continue
                         if rid in seen_ids:
                             seen_ids[rid] += 1
                             row["id"] = f"{rid}_{seen_ids[rid]}"
                         else:
                             seen_ids[rid] = 0
+                        kept_rows.append(row)
+                    rows = kept_rows
                     # The scan names the Guild Merchant NPCs "Wandering Merchant",
                     # but the in-game name is "Guild Merchant" (unit.json
                     # TODO_WanderingMerchant) — normalize so the Vendors layer and
@@ -1003,6 +1091,158 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         except Exception as e:
             print(f"Warning: failed to compile shop.json: {e}")
 
+    # Crafting: the craft.json recipe sheet + job.json professions, compiled
+    # into raw_craft.py so the Craft page works in the frozen build too
+    # (these are dev dumps, not .pak sheets, so they aren't part of the
+    # raw_data payload). Consumers prefer the shim and fall back to the
+    # loose JSONs, matching the other raw_* accessors.
+    craft_p = data_new / "craft.json"
+    if not craft_p.exists():
+        craft_p = data_clean / "craft.json"
+    job_p = data_new / "job.json"
+    if not job_p.exists():
+        job_p = data_clean / "job.json"
+    if craft_p.exists() and job_p.exists():
+        try:
+            _write_embedded_data(output_dir, "raw_craft", {
+                "recipes": json.loads(craft_p.read_text(encoding="utf-8"))
+                              .get("lines", []),
+                "jobs": json.loads(job_p.read_text(encoding="utf-8"))
+                            .get("lines", []),
+            }, dev_dir)
+        except Exception as e:
+            print(f"Warning: failed to compile craft.json / job.json: {e}")
+    else:
+        print("Warning: craft.json / job.json missing — raw_craft.py not written")
+
+    # Item drops: the scan-produced item_drops.json index (item -> drop
+    # sources + metadata), compiled into raw_item_drops.py so the Items page
+    # works in the frozen build like the other sheets.
+    #
+    # The scan only recorded CLASS aptitudes in each row's `classes`, which
+    # left jewelry (rings / necks / trinkets — stat aptitudes like Vita,
+    # Crit, Fervor, ArPen, MaPen) with an empty list, and it dropped the
+    # item's faction for most gear. Both matter to the gear stat math: the
+    # aptitudes pick the stat curves, and the faction gates the combat-
+    # rating curves (Fighter + Manfish rolls Armor Penetration, Fighter +
+    # Kobold rolls Critical, etc. — see scaling.aptitudes). The raw item
+    # sheet's per-item aptitudes + faction are stamped onto the drops rows
+    # here — the same source the items whitelist above compiles from.
+    item_aptitudes: dict[str, list[str]] = {}
+    item_factions: dict[str, str] = {}
+    item_rarity_stats: dict[str, dict] = {}
+    # The weapon skills each item wields, from the raw item sheet's `skills`
+    # list ([{skill: 'Axe_Base_Attack'}, ...]) — stamped onto the drops rows
+    # like aptitudes/faction so the item page's weapon-skills section can
+    # render them in the frozen build (item.json, like skill.json, is a
+    # compile input only).
+    item_skills: dict[str, list[str]] = {}
+    # Crafted gear (zone sets, _Craft variants) carries its OWN fixed level /
+    # iLevel in the item sheet — the level the piece is made at, which never
+    # scales with the zone or the viewer's level slider. The runtime uses it
+    # to show crafted gear at its real stats instead of max-level values.
+    item_levels: dict[str, int] = {}
+    item_ilevels: dict[str, int] = {}
+    # The crafting items' granted stats: the scan stamps `stats` for
+    # starter gear / scrolls but left the Elixirs, the cooked Food
+    # dishes, and the craftable augments (Outfitter embroideries,
+    # Blacksmith plates, Enchanter Magic Formulas) statless, so their
+    # flat attribute affixes are carried over here — the same sheet
+    # source — giving the Enchants-page cards their +N stat lines.
+    item_grant_stats: dict[str, list[dict]] = {}
+    # the item sheet's affix attributes are game-internal names; the
+    # rating ones translate to the fareverdb labels the app speaks
+    _ATTR_LABELS = {
+        "CritChanceRating": "Critical",
+        "FervorRating": "Fervor",
+        "ArmorPenetrationRating": "Armor Penetration",
+        "SpellPenetrationRating": "Magic Penetration",
+    }
+    items_p = data_new / "item.json"
+    if not items_p.exists():
+        items_p = data_clean / "item.json"
+    if items_p.exists():
+        try:
+            iraw = json.loads(items_p.read_text(encoding="utf-8"))
+            for r in iraw.get("lines", []):
+                iid = r.get("id")
+                if not iid:
+                    continue
+                apts = [a.get("ref") if isinstance(a, dict) else str(a)
+                        for a in (r.get("aptitudes") or [])]
+                if apts:
+                    item_aptitudes[iid] = apts
+                if r.get("faction"):
+                    item_factions[iid] = r["faction"]
+                sk = [s.get("skill") if isinstance(s, dict) else s
+                      for s in (r.get("skills") or [])]
+                sk = [s for s in sk if s]
+                if sk:
+                    item_skills[iid] = sk
+                if r.get("level") is not None:
+                    item_levels[iid] = r["level"]
+                if r.get("iLevel") is not None:
+                    item_ilevels[iid] = r["iLevel"]
+                # per-rarity stat values — the forward hook for a later game
+                # update that ships gear stats at each rarity. item.json has
+                # no such column today, so nothing is stamped and
+                # gear_rarity_tiers stays single-column; when the data
+                # arrives this {rarity: rows} map is passed through and the
+                # BY RARITY expansion comes back automatically.
+                rs = r.get("rarityStats") or r.get("rarity_stats")
+                if isinstance(rs, dict) and rs:
+                    item_rarity_stats[iid] = rs
+                if (r.get("type") or "") in (
+                        "Elixir", "Food", "AugmentOutfitter",
+                        "AugmentBlacksmith", "AugmentEnchantHands",
+                        "AugmentEnchantFeet", "AugmentEnchantWeapon"):
+                    st = [{"n": _ATTR_LABELS.get(
+                               (a.get("target") or {}).get("attribute"),
+                               (a.get("target") or {}).get("attribute")),
+                           "v": a.get("val", 0)}
+                          for a in (r.get("affixes") or [])
+                          if a.get("ref") == "TAttribute_Flat"
+                          and (a.get("target") or {}).get("attribute")]
+                    if st:
+                        item_grant_stats[iid] = st
+        except Exception as e:
+            print(f"Warning: failed to read item.json aptitudes/faction: {e}")
+    drops_p = data_new / "item_drops.json"
+    if not drops_p.exists():
+        drops_p = data_clean / "item_drops.json"
+    if drops_p.exists():
+        try:
+            drops_data = json.loads(drops_p.read_text(encoding="utf-8"))
+            if drops_data.get("items"):
+                for iid, it in drops_data["items"].items():
+                    apts = item_aptitudes.get(iid)
+                    if apts and not it.get("aptitudes"):
+                        it["aptitudes"] = apts
+                    fac = item_factions.get(iid)
+                    if fac and not it.get("faction"):
+                        it["faction"] = fac
+                    sk = item_skills.get(iid)
+                    if sk and not it.get("skills"):
+                        it["skills"] = sk
+                    rs = item_rarity_stats.get(iid)
+                    if rs and not it.get("rarity_stats"):
+                        it["rarity_stats"] = rs
+                    lvl = item_levels.get(iid)
+                    if lvl and not it.get("level"):
+                        it["level"] = lvl
+                    il = item_ilevels.get(iid)
+                    if il and not it.get("iLevel"):
+                        it["iLevel"] = il
+                    st = item_grant_stats.get(iid)
+                    if st and not it.get("stats"):
+                        it["stats"] = st
+                _write_embedded_data(output_dir, "raw_item_drops",
+                                     drops_data, dev_dir)
+        except Exception as e:
+            print(f"Warning: failed to compile item_drops.json: {e}")
+    else:
+        print("Warning: item_drops.json missing — raw_item_drops.py not written")
+
     write_data_file("raw_units.py", {
         "units": all_data.pop("units", []),
         "lootTable": all_data.pop("lootTable", []),
@@ -1026,7 +1266,8 @@ def prune_unused_jsons(data_dir: Path):
     """Remove JSON files from assets/data that are not used by the app."""
     required = {
         "unit.json", "unitType.json", "rarity.json", "zone.json", "item.json",
-        "skill.json", "lootTable.json", "enemies.json", "items.json", "skills.json",
+        "constant.json", "skill.json", "lootTable.json", "enemies.json",
+        "items.json", "skills.json",
         "dungeons.json", "poi_locs.json", "chest_locs.json",
         "gatherable_locs.json", "orb_positions.json", "critter_locs.json",
         "mob_locs.json", "_version.json", "ach.json",

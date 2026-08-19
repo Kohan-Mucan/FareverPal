@@ -119,7 +119,7 @@ class _EntityRow(QtWidgets.QFrame):
             self.tile2.hide()
 
         weight = "700" if spec.bold else "500"
-        fs = f"font-size:{spec.font_size}px;" if spec.font_size else ""
+        fs = f"font-size:{spec.font_size}px;" if (spec.font_size or 0) > 0 else ""
         self.name.setText(spec.name)
         self.name.setStyleSheet(f"color:{spec.name_color};font-weight:{weight};{fs}background:transparent;")
         self.sub.setText(spec.sub)

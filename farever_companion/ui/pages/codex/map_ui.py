@@ -223,10 +223,14 @@ class CodexMapUiMixin:
         if self._codex_chest_orb_view_active():
             self._plot_remaining_chest_orbs(None)
             return
+        current_rid, tab_label = self._codex_current_region()
+        # Soulstones view: plot every summon spot (matches the button count).
+        if getattr(self, "_soulstones_mode", False):
+            self._plot_all_soulstone_pins()
+            return
         # Dungeons-tab list view: there are no cards to pin, so plot every
         # dungeon entrance (matches the 'Dungeon Locations (N)' button count
         # and tooltip). The card-grid views fall through to the pin loop.
-        current_rid, tab_label = self._codex_current_region()
         if (current_rid == "Bosses" or tab_label == "Dungeons") \
                 and (getattr(self, "_dungeon_list_mode", False) or not self._codex_cards):
             self._plot_all_dungeon_pins()
@@ -335,6 +339,194 @@ class CodexMapUiMixin:
         if hasattr(self, "_map_info_lbl"):
             self._map_info_lbl.setText(label)
 
+    # --- jump into the Codex (the source-row / mount-glider links on the
+    # Items/Craft pages) ---
+    def _codex_jump_to_unit(self, unit_id: str, name: str) -> None:
+        """Open the Codex entry for a drop source / item — the source-row and
+        mount/glider links on the Items/Craft pages. Routes by what the
+        target is: a boss -> the Dungeons tab's dungeon list (scrolls +
+        clicks its row); a mount/glider or other unit with a card -> that
+        card in the Collection / zone / Others grid; a single chest -> its
+        row in the Collection Chests list."""
+        self._select_nav("codex")
+        if not hasattr(self, "_codex_tabs"):
+            return
+        self._codex_reset_jump_filters()
+        from ....data import codex as cdx
+        # Soulstone bosses have no card — reveal their spot in the Soulstones list.
+        for p in cdx.soulstone_pois():
+            if p.get("spawn_unit") == unit_id:
+                self._codex_open_soulstone(p.get("id") or "")
+                return
+        rid = cdx.find_unit_region(unit_id)
+        if rid is None:
+            # a single chest (no unit card) -> the Collection Chests list
+            self._codex_open_chest(unit_id)
+            return
+        if rid == "Bosses":
+            # bosses keep the dungeon-list reveal
+            self._codex_jump_to_boss(unit_id, name)
+            return
+        self._codex_open_card(rid, unit_id, name)
+
+    def _codex_reset_jump_filters(self) -> None:
+        """Clear every codex filter that could hide the jump target: the
+        search query (and its debounce), the spark/dungeon toggles, the
+        source-badge keys and the status filter, and drop any plotted pins
+        from the previous view."""
+        if hasattr(self, "_search_timer"):
+            self._search_timer.stop()
+        if hasattr(self, "_codex_search") and self._codex_search.text():
+            self._codex_search.blockSignals(True)
+            self._codex_search.setText("")
+            self._codex_search.blockSignals(False)
+        if hasattr(self, "_status_widgets") and "All" in self._status_widgets:
+            self._status_widgets["All"].setChecked(True)
+        for attr, btn_name in (("_spark_only", "_spark_filter_btn"),
+                               ("_dungeon_only", "_dungeon_filter_btn")):
+            if hasattr(self, attr):
+                setattr(self, attr, False)
+            btn = getattr(self, btn_name, None)
+            if btn is not None and btn.isChecked():
+                btn.blockSignals(True)
+                btn.setChecked(False)
+                btn.blockSignals(False)
+        if getattr(self, "_source_filters", None):
+            self._source_filters = set()
+            for btn in getattr(self, "_source_filter_btns", {}).values():
+                if btn.isChecked():
+                    btn.blockSignals(True)
+                    btn.setChecked(False)
+                    btn.blockSignals(False)
+        # Collection species-family filter (the secondary Pets/Mounts/Gliders
+        # sub-menu): reset to All so the jump target can't be hidden.
+        if getattr(self, "_codex_group_filter", "All") != "All":
+            self._codex_group_filter = "All"
+            all_btn = getattr(self, "_group_sub_btns", {}).get("All")
+            if all_btn is not None:
+                all_btn.blockSignals(True)
+                all_btn.setChecked(True)  # exclusive group unchecks the rest
+                all_btn.blockSignals(False)
+        self._clear_codex_map_selection()
+
+    def _codex_jump_to_boss(self, unit_id: str, name: str) -> None:
+        """Jump the Codex tab to a boss. Lands on the Dungeons tab's dungeon
+        list, scrolls the boss's row into view, and clicks it like a real
+        user (tracks the entrance + plots it on the map)."""
+        # Dungeons tab, dungeon-list view, all zones
+        self._codex_tabs.setCurrentText("Dungeons")
+        if hasattr(self, "_btn_dungeon_list"):
+            self._dungeon_list_mode = True
+            self._btn_dungeon_list.setChecked(True)
+            self._btn_dungeon_mobs.setChecked(False)
+        if hasattr(self, "_zone_widgets") and "All" in self._zone_widgets:
+            self._zone_widgets["All"].setChecked(True)
+        self._refresh_codex_grid(reset_scroll=True)
+        # one tick for the rebuilt list's layout to settle before scrolling
+        QtCore.QTimer.singleShot(
+            0, lambda: self._codex_click_unit(unit_id, name))
+
+    def _codex_open_card(self, rid: str, unit_id: str, name: str) -> None:
+        """Switch the Codex to the region holding a unit's card and click it
+        like a real user would. Mounts/gliders land on the Collection tab's
+        Mounts/Gliders sub-view; pets on its Pets sub-view; everything else
+        on its region tab (Z1/Z2/Z3 or the Others catch-all)."""
+        from ....data import codex as cdx
+        info = cdx.enemies_data().get(unit_id) or {}
+        itype = (info.get("type") or "").lower()
+        is_mount = "mount" in itype or unit_id.startswith("Mount_")
+        is_glider = "glider" in itype or unit_id.startswith("Glider_")
+        # the card grid is the target view — never the dungeon list
+        if hasattr(self, "_dungeon_list_mode"):
+            self._dungeon_list_mode = False
+        if rid == "Pets" or is_mount or is_glider:
+            # mounts/gliders (and pets) live on the Collection tab
+            self._codex_tabs.setCurrentText("Collection")
+            sub = "Mounts" if is_mount else "Gliders" if is_glider else "Pets"
+            btn = self._collection_sub_btns.get(sub)
+            if btn is not None:
+                btn.click()
+        else:
+            tab = cdx.region_names().get(rid)
+            if tab and hasattr(self, "_codex_tabs"):
+                self._codex_tabs.setCurrentText(tab)
+        self._refresh_codex_grid(reset_scroll=True)
+        QtCore.QTimer.singleShot(
+            0, lambda: self._codex_click_card(unit_id, name))
+
+    def _codex_click_card(self, unit_id: str, name: str) -> None:
+        """Click a codex card like a real user would: scroll it into view
+        and emit its selection (plots spawns + updates the info line).
+        No-op when the card isn't rendered (filtered out / not in view)."""
+        cards = getattr(self, "_codex_cards", None) or []
+        card = next((c for c in cards if c.uid == unit_id), None)
+        if card is None:
+            return
+        self._codex_scroll.ensureWidgetVisible(card, 0, 60)
+        card.selected.emit(card.uid)
+
+    def _codex_open_chest(self, chest_id: str) -> None:
+        """Reveal a chest in the Codex Collection Chests list: switch to the
+        Collection tab's Chests view (zone filter All) and scroll to the
+        chest's row, clicking it so it plots on the map like a manual click."""
+        self._codex_tabs.setCurrentText("Collection")
+        btn = self._collection_sub_btns.get("Chests")
+        if btn is not None:
+            btn.click()
+        if hasattr(self, "_zone_widgets") and "All" in self._zone_widgets:
+            self._zone_widgets["All"].setChecked(True)
+        self._refresh_codex_grid(reset_scroll=True)
+        QtCore.QTimer.singleShot(
+            0, lambda: self._codex_click_chest(chest_id))
+
+    def _codex_click_chest(self, chest_id: str) -> None:
+        """Scroll to a chest's row in the open Chests list and click it like
+        a real user (tracks it + plots the spot on the map). No-op when the
+        chest isn't listed (already collected)."""
+        view = getattr(self, "_codex_chest_list", None)
+        if view is None:
+            return
+        cell = next((c for c in view._cells
+                     if c.item.get("id") == chest_id), None)
+        if cell is None:
+            return
+        self._codex_scroll.ensureWidgetVisible(cell, 0, 60)
+        cell.pick.emit(cell.item)
+
+    def _codex_click_unit(self, unit_id: str, name: str) -> None:
+        """Click the dungeon-list row for `unit_id` like a real user would:
+        scroll it into view and emit its pick signal (tracks the entrance
+        + plots the map). No-op when the boss has no dungeon row."""
+        view = getattr(self, "_codex_dungeon_list", None)
+        if view is None or not getattr(self, "_dungeon_list_mode", False):
+            return
+        row = next((c for c in view._cells
+                    if c.dungeon.get("boss_id") == unit_id
+                    or c.dungeon.get("boss_name") == name), None)
+        if row is None:
+            # not a dungeon-list row (a world mob / pet shared with a
+            # dungeon) — fall back to the card grid and click the card
+            if hasattr(self, "_btn_dungeon_mobs"):
+                self._dungeon_list_mode = False
+                self._btn_dungeon_mobs.setChecked(True)
+                self._btn_dungeon_list.setChecked(False)
+                self._refresh_codex_grid(reset_scroll=True)
+                QtCore.QTimer.singleShot(
+                    0, lambda: self._codex_click_card(unit_id, name))
+            return
+        # the grid defers layout + the body resize (scrollbar range 0) to
+        # the next event pass — force both so the scroll lands now
+        body = self._codex_scroll.widget()
+        if body is not None and body.layout() is not None:
+            body.layout().activate()
+            if view.layout() is not None:
+                view.layout().activate()
+            sh = body.layout().sizeHint()
+            if body.height() < sh.height():
+                body.resize(body.width(), sh.height())
+        self._codex_scroll.ensureWidgetVisible(row, 0, 60)
+        row.pick.emit(row.dungeon)
+
     def _update_plot_pins_button(self, current_rid: str, tab_label: str) -> None:
         """Retitle/hide the 'Missing' / 'Dungeon Locations' pins button."""
         if not hasattr(self, "_btn_plot_all_pins"):
@@ -357,6 +549,12 @@ class CodexMapUiMixin:
                     self._btn_plot_all_pins.setVisible(True)
                     self._btn_plot_all_pins.setText(f"{label} ({n})")
                     self._btn_plot_all_pins.setToolTip(f"Plot remaining {label.lower()}")
+                return
+            elif getattr(self, "_soulstones_mode", False):
+                n = len(codex.soulstone_pois())
+                self._btn_plot_all_pins.setVisible(True)
+                self._btn_plot_all_pins.setText(f"Soulstones ({n})")
+                self._btn_plot_all_pins.setToolTip("Plot every soulstone summon spot")
                 return
             elif getattr(self, "_dungeon_list_mode", False) or not self._codex_cards:
                 # List view replaces the cards, so count dungeons from the data
@@ -561,9 +759,9 @@ class CodexMapUiMixin:
     def _track_dungeon(self, d: dict) -> None:
         """Track a dungeon's entrance exactly like clicking its minimap marker
         (compass needle + Entity HUD WAYPOINT row), and plot the same spot as
-        a pin on the codex map. Click again to stop. Rifts track the ACTIVE /
-        next-due rift via the RiftTracker instead of the static gate, falling
-        back to the gate if no rift spot resolves."""
+        a pin on the codex map. Click again to stop — the pin clears too.
+        Rifts track the ACTIVE / next-due rift via the RiftTracker instead of
+        the static gate, falling back to the gate if no rift spot resolves."""
         result = None
         if d.get("entrance_zone") == "Rifts":
             result = self._rift_live_track_key()
@@ -577,8 +775,11 @@ class CodexMapUiMixin:
             return
         # The list view (when open) refreshes its highlight via tracker.changed.
         tr.toggle(kind, key)
-        # Also show the tracked spot as a pin on the codex map.
-        self._plot_dungeon_on_map(d, kind, key)
+        # Plot the tracked spot as a pin — or clear it when this click untracked.
+        if tr.is_tracked(kind, key):
+            self._plot_dungeon_on_map(d, kind, key)
+        else:
+            self._clear_codex_map_selection()
 
     def _plot_dungeon_on_map(self, d: dict, kind: str, key: str) -> None:
         """Plot the tracked dungeon/rift spot on the codex map (same coords

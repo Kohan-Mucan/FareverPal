@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 from .. import components as C
 from ...data import names, units
 
@@ -26,7 +26,7 @@ class EntityPageMixin:
             ("show_companions", "Wild companions"),
             ("show_orbs", "Secret orbs"),
             ("show_group_members", "Players", True),
-            ("show_compass", "Compass needle"), ("show_drop_window", "Show drop window"),
+            ("show_compass", "Compass needle"),
             ("auto_select_next_collectible", "Auto select next orb/chest"),
             ("limit_by_zone", "Limit by Zone"),
             ("entity_hide_collected", "Hide collected"),
@@ -116,23 +116,6 @@ class EntityPageMixin:
             srow.addWidget(C.Field(label, st), i // 2, i % 2)
         right.addLayout(srow)
         right.addSpacing(12)
-
-        right.addWidget(C.SectionHeader("Loot Hotkeys (global · work while in-game)"))
-        hk = QtWidgets.QGridLayout()
-        hk.setHorizontalSpacing(12)
-        hk.setVerticalSpacing(8)
-        for i, (attr, label) in enumerate([
-                ("hotkey_loot_prev", "Prev target"),
-                ("hotkey_loot_next", "Next target"),
-                ("hotkey_loot_close", "Close loot")]):
-            edit = QtWidgets.QKeySequenceEdit(QtGui.QKeySequence(getattr(self.s, attr)))
-            try:
-                edit.setMaximumSequenceLength(1)
-            except (AttributeError, TypeError):
-                pass
-            edit.keySequenceChanged.connect(lambda seq, a=attr: self._set_hotkey(a, seq))
-            hk.addWidget(C.Field(label, edit), 0, i)
-        right.addLayout(hk)
         right.addStretch(1)
 
         cols.addLayout(left, 1)

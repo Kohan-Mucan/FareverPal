@@ -1,4 +1,4 @@
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtWidgets
 from .. import components as C
 
 class MapPageMixin:
@@ -57,7 +57,8 @@ class MapPageMixin:
                 ("minimap_obelisks", "Obelisks / Respawn"),
                 ("minimap_orbs", "Secret orbs"),
                 ("minimap_dungeons", "Dungeons"),
-                ("minimap_vendors", "Vendors")]
+                ("minimap_vendors", "Vendors"),
+                ("minimap_soulstones", "Soulstones")]
         for i, (attr, label) in enumerate(layer_items):
             t = C.LabeledToggle(label, getattr(self.s, attr))
             t.toggled.connect(lambda on, a=attr: self._set_minimap_layer(a, on))

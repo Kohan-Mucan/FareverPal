@@ -1,18 +1,16 @@
-"""Entity overlay + a separate Drop Table window (Tactical Overlay HUD).
+"""Entity overlay (Tactical Overlay HUD).
 
-The entity HUD lists nearby enemies (selectable with ↑/↓ or click) and chests -
-short, no endless scrolling. Selecting an enemy opens a separate, closable
-**Drop Table** window showing that target's full predicted loot (rarity-grouped,
-collapsible; class-usable items starred). If the selected target leaves range we
-flip to the first available one. Clicking an enemy, wild companion or secret
-orb also points the centre-screen compass needle at it (ui/tracker.py); click
-the tracked row again to stop. Reads the shared LiveModel. Procedural
-generators shown honestly as "🎲 random X". Read-only.
+The entity HUD lists nearby enemies (selectable with ↑/↓ or click), wild
+companions, gatherables, secret orbs and chests - short, no endless scrolling.
+If the selected target leaves range we flip to the first available one.
+Clicking an enemy, wild companion or secret orb also points the centre-screen
+compass needle at it (ui/tracker.py); click the tracked row again to stop.
+Reads the shared LiveModel. Read-only.
 
 Data gathering / done-state / selection lives in `entity_gather` (mixin), the
-section rendering in `entity_render` (mixin), the row widgets in
-`entity_rows` and the drop-table window in `drops_overlay` — this file keeps
-the overlay shell and interaction so it stays under the UI line budget.
+section rendering in `entity_render` (mixin), and the row widgets in
+`entity_rows` — this file keeps the overlay shell and interaction so it stays
+under the UI line budget.
 """
 from __future__ import annotations
 
@@ -22,7 +20,6 @@ from .. import theme
 from ..overlay_base import OverlayWindow
 from ...data import names
 from ...geo import orbs as geo_orbs
-from .drops_overlay import DropTableOverlay
 from .entity_gather import EntityGatherMixin
 from .entity_render import EntityRenderMixin
 from .entity_rows import _Section, _scroll_body
@@ -49,7 +46,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._sel = None                  # ("enemy", addr) | ("chest", chest_id)
         self._tracker = None              # shared compass-needle TrackController
         self._last_was_in_dungeon = False  # track zone transitions to clear tracker
-        self._drop_win: DropTableOverlay | None = None
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
         scroll, self._body = _scroll_body()
@@ -84,17 +80,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._timer.timeout.connect(self._tick)
         self._timer.start(POLL_MS)
 
-    # --- lock + opacity forward to the drop child -----------------------
-    def set_locked(self, on: bool) -> None:
-        super().set_locked(on)
-        if self._drop_win is not None:
-            self._drop_win.set_locked(on)
-
-    def set_opacity(self, value: float) -> None:
-        super().set_opacity(value)
-        if self._drop_win is not None:
-            self._drop_win.set_opacity(value)
-
     def reset_state(self) -> None:
         """Completely reset all HUD selection, entity caches, and sub-windows on relog/logout."""
         self._sel = None
@@ -105,19 +90,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._orbs = []
         self._chests = []
         self._static_pois = []
-        if self._drop_win is not None:
-            self._drop_win.hide()
-
-    def hideEvent(self, e):
-        super().hideEvent(e)
-        if self._drop_win is not None:
-            self._drop_win_was_visible = self._drop_win.isVisible()
-            self._drop_win.hide()
-
-    def showEvent(self, e):
-        super().showEvent(e)
-        if self._drop_win is not None and getattr(self, "_drop_win_was_visible", False):
-            self._drop_win.show()
 
     # --- selection -------------------------------------------------------
     def keyPressEvent(self, e):
@@ -186,28 +158,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
 
         return t
 
-    def _selected_source(self):
-        """(near, name) for the current selection, or (None, ''). Companions
-        and orbs aren't loot sources - they drive the compass instead."""
-        if self._sel is None:
-            return None, ""
-        kind, key = self._sel
-        if kind in ("comp", "orb", "hero", "gather", "static"):
-            return None, ""
-        if kind in ("enemy", "spark"):
-            source_list = self._spark_mobs if kind == "spark" else self._enemies
-            for e, d in source_list:
-                if e.unit_id == key or getattr(e, "addr", None) == key:
-                    return (self.model.enemy_drop_source(e, d, self.s.level),
-                            names.unit_name(e.unit_id) or "?")
-        else:
-            # chest or recipe
-            for c in self._chests:
-                if c.chest_id == key:
-                    name = names.chest_label(c.chest_id, c.loot_table)
-                    return self.model.chest_drop_source(c, self.s.level), name
-        return None, ""
-
     def _move_selection(self, delta):
         targets = self._targets()
         if not targets:
@@ -223,14 +173,12 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         # Ensure the compass follows the selection for all trackable types
         if kind in ("enemy", "spark"):
             self._track("unit", key, force=True)
-            self._open_drops()
         elif kind in ("chest", "recipe"):
             c = next((c for c in self._chests if c.chest_id == key), None)
             if c:
                 cx, cy, cz = c.x, c.y, c.z
                 label = names.chest_label(c.chest_id, c.loot_table)
                 self._track(kind, f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}|{c.chest_id}", force=True)
-            self._open_drops()
         elif kind == "comp":
             e = next((e for e, _ in self._comps if getattr(e, "addr", None) == key), None)
             if e:
@@ -288,7 +236,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
 
         if is_tracked:
             self._sel = None
-            self.close_drops()
             if self._tracker is not None:
                 # Only clear if it matches the item we are unselecting (handle background tracking)
                 if not self.s.track_id or self._tracker.is_tracked(tk, tkey):
@@ -344,9 +291,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
                     cx, cy, cz = c.x, c.y, c.z
                     label = names.chest_label(c.chest_id, c.loot_table)
                     self._tracker.track(kind, f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}|{c.chest_id}")
-
-        if kind in ("enemy", "spark", "chest"):
-            self._open_drops()
 
         # Pan minimap to the selected entity
         self._pan_minimap_to_sel()
@@ -417,7 +361,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         if wx is not None and wy is not None:
             map_ov.pan_to(wx, wy)
 
-    def select_by_key(self, kind, key, open_drops=True) -> bool:
+    def select_by_key(self, kind, key) -> bool:
         """Select an item from the HUD list by kind and key (from external clicks)."""
         # Resolve gatherable IDs to type names for grouped selection
         if kind == "gather" and isinstance(key, str) and (key.startswith("gl") or key.startswith("g")):
@@ -442,50 +386,22 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             # The next _refresh will ensure it's added to the list and properly rendered.
             try:
                 self._sel = (kind, int(key) if isinstance(key, (int, str)) and str(key).isdigit() else key)
-                if open_drops and kind in ("enemy", "chest"):
-                    self._open_drops()
                 self._refresh()
                 self._scroll_to_selected()
                 return True
             except Exception:
                 return False
 
-        if match:
-            if not open_drops:
-                old_show = self.s.show_drop_window
-                self.s.show_drop_window = False
-                try:
-                    self._select(*match)
-                finally:
-                    self.s.show_drop_window = old_show
-            else:
-                self._select(*match)
-            self._scroll_to_selected()
-            return True
-        return False
-
-    # public actions for global hotkeys (selection works while the game is focused)
-    def select_prev(self):
-        self._move_selection(-1)
-
-    def select_next(self):
-        self._move_selection(1)
-
-    def close_drops(self):
-        if self._drop_win is not None:
-            self._drop_win.close()
-            self._drop_win = None
+        self._select(*match)
+        self._scroll_to_selected()
+        return True
 
     def _retint(self, accent: str) -> None:
-        # selected-row / icon-tile accents are read live each refresh; just keep
-        # the open drop-table sub-window in sync.
-        if self._drop_win is not None:
-            self._drop_win.apply_accent(accent)
+        # selected-row / icon-tile accents are read live each refresh
+        pass
 
     def set_scale(self, scale):
         self.apply_scale(scale)
-        if self._drop_win is not None:
-            self._drop_win.apply_scale(scale)
 
     def set_collection_owned(self, owned: set | None) -> None:
         self._owned = owned
@@ -538,36 +454,6 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             profile = self.model.player_profile()
             self.s.toggle_companion_hidden(unit_id, True, profile)
         self._refresh()
-
-    def _open_drops(self):
-        if not self.s.show_drop_window:
-            return
-        if self._sel is None:
-            return
-        if self._drop_win is None or not self._drop_win.isVisible():
-            self._drop_win = DropTableOverlay(self.model, self.s)
-            self._drop_win.set_locked(self._locked)
-            self._drop_win.set_opacity(self.s.opacity)
-            self._drop_win.apply_scale(self._scale)
-            # Only move to the default side-car position if there's no saved geometry
-            if not self.s.geometry.get("droptable"):
-                self._drop_win.move(self.x() + self.width() + 8, self.y())
-            self._drop_win.show()
-        self._drop_win.set_target(*self._selected_source())
-
-    def _update_drops(self):
-        if not self.s.show_drop_window:
-            self.close_drops()
-            return
-        if self._drop_win is not None and self._drop_win.isVisible():
-            if self._sel is None:
-                self.close_drops()
-                return
-            kind, key = self._sel
-            if kind not in ("enemy", "chest", "recipe"):
-                self.close_drops()
-                return
-            self._drop_win.set_target(*self._selected_source())
 
     # --- helpers ---------------------------------------------------------
     def _ranked_orbs(self, xyz, profile, player_zone=None, max_dist=0.0):
@@ -663,7 +549,4 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
 
     def closeEvent(self, e):
         self._timer.stop()
-        if self._drop_win is not None:
-            self._drop_win.close()
-            self._drop_win = None
         super().closeEvent(e)

@@ -227,3 +227,35 @@ class _TraceWorker(QtCore.QThread):
             self.output_ready.emit(f"\nError: {e}\n")
         finally:
             self.finished.emit()
+
+
+class _SteamPlayerCountWorker(QtCore.QThread):
+    result = QtCore.Signal(int)
+
+    def __init__(self, app_id: int = 3672400):
+        super().__init__()
+        self._app_id = app_id
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        import json
+        import urllib.request
+        url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={self._app_id}"
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "FareverCompanion/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                if not self._running:
+                    return
+                data = json.loads(resp.read().decode("utf-8"))
+                count = data.get("response", {}).get("player_count", -1)
+                if self._running:
+                    self.result.emit(int(count))
+        except Exception:
+            if self._running:
+                self.result.emit(-1)

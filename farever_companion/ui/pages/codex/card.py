@@ -10,6 +10,8 @@ from ....data import codex
 
 class CodexUnitCard(QtWidgets.QFrame):
     """A visual card for a mob or pet in the bestiary."""
+    # right-click toggles the card; keep the app-wide copy menu off it
+    _no_copy_menu = True
     toggled = QtCore.Signal(bool)
     selected = QtCore.Signal(str)
 
@@ -73,6 +75,14 @@ class CodexUnitCard(QtWidgets.QFrame):
         self.mob_ico = C.IconTile(size=21, parent=self)
         self.mob_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         self.mob_ico.setVisible(False)
+
+        # Soulstone Badge (Overlay) — magenta gem for mounts/gliders that
+        # drop from the soulstone demon bosses (the Niflelian family), shown
+        # in the mob-drop slot so players can tell soulstone-farmed mounts
+        # from plain mob drops at a glance
+        self.soulstone_ico = C.IconTile(size=21, parent=self)
+        self.soulstone_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self.soulstone_ico.setVisible(False)
 
         # Achievement Badge (Overlay) — drawn trophy glyph; marks mounts/
         # gliders awarded by achievements (ach.json rewards)
@@ -169,20 +179,27 @@ class CodexUnitCard(QtWidgets.QFrame):
                 ach_line += f"\n   {ach['desc']}"
 
         # Mounts/gliders that drop from mobs surface the drop count (unique
-        # mobs) instead of the generic 'Plot spawns' hint.
+        # mobs) instead of the generic 'Plot spawns' hint. Soulstone-farmed
+        # mounts (the Niflelian family) name their summon-spot bosses, so the
+        # hint says so — same predicate as the soulstone card badge.
         drops_from = self.data.get("drops_from")
+        is_soulstone_drop = codex.is_soulstone_drop(self.data)
         drop_line = ""
         if isinstance(drops_from, list) and drops_from:
             mob_ids = {d.get("id") for d in drops_from
                        if isinstance(d, dict) and d.get("id")}
             if mob_ids:
-                drop_line = f"\nDropped by {len(mob_ids)} Mobs"
+                drop_line = (f"\nDropped by {len(mob_ids)} Mobs (Soulstones)"
+                             if is_soulstone_drop
+                             else f"\nDropped by {len(mob_ids)} Mobs")
 
+        # The card already shows name, icon, source badges, and its hidden
+        # state (eye-off icon + dimming), so the tooltip keeps only what the
+        # card can't show: the raw id, the drop count, and the achievement.
         if self.locked:
-            self.setToolTip(f"ID: {self.data['id']}\nVisibility locked in Dungeons\nLeft-click: Plot spawns{drop_line}{ach_line}")
+            self.setToolTip(f"ID: {self.data['id']}\nVisibility locked in Dungeons{drop_line}{ach_line}")
         else:
-            status_text = "Hidden" if not active else "Visible"
-            self.setToolTip(f"ID: {self.data['id']}\nStatus: {status_text}\nLeft-click: Plot spawns\nRight-click: Toggle hide/unhide{drop_line}{ach_line}")
+            self.setToolTip(f"ID: {self.data['id']}{drop_line}{ach_line}")
 
         # Update hide icon badge
         if not active and not self.locked:
@@ -313,10 +330,27 @@ class CodexUnitCard(QtWidgets.QFrame):
         else:
             self.vendor_ico.setVisible(False)
 
+        # Soulstone badge — mounts/gliders that drop from the soulstone demon
+        # bosses (the Niflelian family), the magenta soulstone gem marker in
+        # the mob-drop slot (they ARE a mob drop). Shown instead of the plain
+        # sword so players can tell soulstone-farmed mounts from regular mob
+        # drops at a glance; same lowest-priority chain as the mob badge.
+        is_soulstone_item = "mob" in item_sources and codex.is_soulstone_drop(self.data)
+        if is_soulstone_item and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible() \
+                and not self.dungeon_ico.isVisible() and not self.chest_ico.isVisible() and not self.vendor_ico.isVisible():
+            s_col = theme.KIND_COLOR.get("soulstone", "#e879f9")
+            self.soulstone_ico.set_marker("soulstone", s_col if active else theme.DIM, outlined=True)
+            self.soulstone_ico.setStyleSheet("background: black; border-radius: 4px;")
+            self.soulstone_ico.move(x_off, icon_top + 4)
+            self.soulstone_ico.setVisible(True)
+        else:
+            self.soulstone_ico.setVisible(False)
+
         # Mob Drop badge (mounts/gliders that drop from specific mobs) — the
         # single-sword marker. Lowest priority: only shows when no defining
-        # source badge did.
-        is_mob_item = "mob" in item_sources
+        # source badge did, and never alongside the soulstone gem (a
+        # soulstone drop IS a mob drop, but its gem tells the fuller story).
+        is_mob_item = "mob" in item_sources and not is_soulstone_item
         if is_mob_item and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible() \
                 and not self.dungeon_ico.isVisible() and not self.chest_ico.isVisible() and not self.vendor_ico.isVisible():
             self.mob_ico.set_marker("sword", theme.BROWN if active else theme.DIM, outlined=True)

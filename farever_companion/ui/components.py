@@ -10,7 +10,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import theme
-from .widgets import ColorButton
+from .widgets import ColorButton, GlyphButton
 from ..data import icons
 
 
@@ -28,17 +28,24 @@ class SectionHeader(QtWidgets.QWidget):
     """A 4px accent tick + uppercase mono label, optional right-aligned tag.
 
     The label is colored (`color`, default cyan), control-panel sections are
-    cyan; the colored HUD headers pass DANGER / GOLD / ACCENT.
+    cyan; the colored HUD headers pass DANGER / GOLD / ACCENT. With
+    `collapsible=True` the header shows a fold arrow and emits
+    `collapsedChanged` when clicked, so callers can hide a body widget.
     """
 
+    collapsedChanged = QtCore.Signal(bool)
+
     def __init__(self, text: str, color: str | None = None,
-                 colored_label: bool = True, tag: str = "", parent=None):
+                 colored_label: bool = True, tag: str = "", parent=None,
+                 collapsible: bool = False):
         super().__init__(parent)
         # Resolve the live accent at construction, NOT as a default arg (which is
         # bound once at import and would stay the stale design cyan after the user
         # picks a Highlight color before the UI is built).
         color = color or theme.ACCENT
         self._color = color
+        self._collapsible = collapsible
+        self._collapsed = False
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(0, 2, 6, 2)
         lay.setSpacing(8)
@@ -54,6 +61,11 @@ class SectionHeader(QtWidgets.QWidget):
         lay.addStretch(1)
         lay.addWidget(self._tag, 0, QtCore.Qt.AlignVCenter)
         self._tag.setVisible(bool(tag))
+        if collapsible:
+            self._arrow = QtWidgets.QLabel("▾")
+            self._arrow.setObjectName("Mono")
+            lay.addWidget(self._arrow, 0, QtCore.Qt.AlignVCenter)
+            self.setCursor(QtCore.Qt.PointingHandCursor)
         self.set_color(color)
 
     def set_color(self, color: str) -> None:
@@ -61,6 +73,8 @@ class SectionHeader(QtWidgets.QWidget):
         self._tick.setStyleSheet(f"background:{color};border:0;")
         self._label.setStyleSheet(f"color:{color};")
         self._tag.setStyleSheet(f"color:{color};")
+        if self._collapsible:
+            self._arrow.setStyleSheet(f"color:{color};")
 
     def set_text(self, text: str) -> None:
         self._label.setText(text.upper())
@@ -68,6 +82,22 @@ class SectionHeader(QtWidgets.QWidget):
     def set_tag(self, text: str) -> None:
         self._tag.setText(text)
         self._tag.setVisible(bool(text))
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Collapse (hides the body) or expand; emits `collapsedChanged` on change."""
+        if not self._collapsible or collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
+        self._arrow.setText("▸" if collapsed else "▾")
+        self.collapsedChanged.emit(collapsed)
+
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
+        if self._collapsible and e.button() == QtCore.Qt.LeftButton:
+            self.set_collapsed(not self._collapsed)
+        super().mousePressEvent(e)
 
 
 # --- toggle switch (rectangular, square thumb) ----------------------------
@@ -133,29 +163,30 @@ class Stepper(QtWidgets.QFrame):
                  suffix: str = "", parent=None):
         super().__init__(parent)
         self.setObjectName("Cell")
-        self.setFixedHeight(40)
+        self.setFixedHeight(32)
         self._lo, self._hi, self._step, self._suffix = lo, hi, step, suffix
         self._v = max(lo, min(hi, value))
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(8, 0, 8, 0)
+        lay.setContentsMargins(4, 0, 4, 0)
         lay.setSpacing(0)
         self._minus = self._mk_btn("−")
         self._plus = self._mk_btn("+")
-        self._val = QtWidgets.QLabel()
+        self._val = QtWidgets.QLineEdit()
         self._val.setAlignment(QtCore.Qt.AlignCenter)
-        self._val.setMinimumWidth(48)
+        self._val.setMinimumWidth(28)
+        self._val.editingFinished.connect(self._commit_edit)
         self._style_val()
         self._minus.clicked.connect(lambda: self._bump(-self._step))
         self._plus.clicked.connect(lambda: self._bump(self._step))
-        lay.addWidget(self._minus)
-        lay.addWidget(self._val, 1)
-        lay.addWidget(self._plus)
+        lay.addWidget(self._minus, 0, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._val, 1, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._plus, 0, QtCore.Qt.AlignVCenter)
         self._render()
 
     def _style_val(self) -> None:
         self._val.setStyleSheet(
-            f"color:{theme.ACCENT};font-family:'{theme.MONO_FONT}','Consolas';"
-            "font-size:17px;font-weight:500;background:transparent;")
+            f'color:{theme.ACCENT};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
+            "font-size:14px;font-weight:600;background:transparent;border:0;padding:0;text-align:center;")
 
     def restyle(self) -> None:
         """Re-apply the accent-colored value label after the theme accent
@@ -163,18 +194,19 @@ class Stepper(QtWidgets.QFrame):
         self._style_val()
 
     def _mk_btn(self, text: str) -> QtWidgets.QPushButton:
-        b = QtWidgets.QPushButton(text)
-        b.setCursor(QtCore.Qt.PointingHandCursor)
-        b.setFixedSize(26, 38)
-        b.setStyleSheet(
-            f"QPushButton{{background:transparent;border:0;color:{theme.MUTED};"
-            "font-size:18px;font-weight:500;padding:0;}"
-            f"QPushButton:hover{{color:{theme.ACCENT};}}"
-            f"QPushButton:disabled{{color:{theme.BORDER};}}")
+        b = GlyphButton(text)
+        b.setFixedSize(22, 28)
         return b
 
     def _bump(self, d: int) -> None:
         self.setValue(self._v + d)
+
+    def _commit_edit(self) -> None:
+        """Commit a typed value (clamped to lo..hi; junk input reverts)."""
+        try:
+            self.setValue(int(self._val.text().strip()))
+        except ValueError:
+            self.setValue(self._v)
 
     def _render(self) -> None:
         self._val.setText(f"{self._v}{self._suffix}")
@@ -198,9 +230,11 @@ class Stepper(QtWidgets.QFrame):
 class SegmentedControl(QtWidgets.QFrame):
     currentChanged = QtCore.Signal(str)
 
-    def __init__(self, options: list[str], current: str | None = None, parent=None):
+    def __init__(self, options: list[str], current: str | None = None,
+                 parent=None, colors: dict[str, str] | None = None):
         super().__init__(parent)
         self.setObjectName("Cell")
+        self._colors = colors or {}
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(3)
@@ -211,14 +245,34 @@ class SegmentedControl(QtWidgets.QFrame):
             b = QtWidgets.QPushButton(opt)
             b.setCheckable(True)
             b.setCursor(QtCore.Qt.PointingHandCursor)
-            b.setStyleSheet(self._btn_qss())
+            b.setStyleSheet(self._btn_qss(opt))
             lay.addWidget(b, 1)
             self._group.addButton(b)
             self._btns[opt] = b
-        self._group.buttonClicked.connect(lambda b: self.currentChanged.emit(b.text()))
+        self._group.buttonClicked.connect(
+            lambda b: self.currentChanged.emit(self._opt_of(b)))
         self.setCurrentText(current or (options[0] if options else ""))
 
-    def _btn_qss(self) -> str:
+    def _opt_of(self, b: QtWidgets.QPushButton) -> str:
+        """The option key for a segment button — the tab's identity is the
+        original option text, even when set_text changes the display (e.g.
+        a live count appended to a tab)."""
+        for opt, btn in self._btns.items():
+            if btn is b:
+                return opt
+        return b.text()
+
+    def _btn_qss(self, opt: str = "") -> str:
+        col = self._colors.get(opt)
+        if col:
+            # per-option color (e.g. rarity chips): the chip wears its own
+            # color — dimmed when idle, full color when checked
+            return (
+                f"QPushButton{{background:transparent;border:0;padding:7px 10px;"
+                f"color:{theme.with_alpha(col, 150)};font-weight:600;}}"
+                f"QPushButton:hover{{color:{col};}}"
+                f"QPushButton:checked{{background:{theme.with_alpha(col, 40)};"
+                f"color:{col};}}")
         return (
             f"QPushButton{{background:transparent;border:0;padding:7px 10px;"
             f"color:{theme.MUTED};font-weight:600;}}"
@@ -240,13 +294,33 @@ class SegmentedControl(QtWidgets.QFrame):
 
     def currentText(self) -> str:
         b = self._group.checkedButton()
-        return b.text() if b else ""
+        return self._opt_of(b) if b else ""
+
+    def set_text(self, opt: str, text: str) -> None:
+        """Change a tab's displayed text (e.g. append a live count) without
+        changing its option key — selection, currentChanged and history
+        keep using the original option text."""
+        b = self._btns.get(opt)
+        if b is not None:
+            b.setText(text)
+
+    def clear(self) -> None:
+        """Uncheck the active segment (Qt ignores unchecking a checked button
+        in an exclusive group, so lift exclusivity for the uncheck only)."""
+        b = self._group.checkedButton()
+        if b:
+            self._group.setExclusive(False)
+            b.setChecked(False)
+            self._group.setExclusive(True)
 
     def restyle(self) -> None:
-        """Re-apply the button QSS so the checked tab follows the theme accent."""
-        qss = self._btn_qss()
-        for b in self._btns.values():
-            b.setStyleSheet(qss)
+        """Re-apply the button QSS so the checked tab follows the theme accent
+        (or each option's own color when one is set)."""
+        for opt, b in self._btns.items():
+            b.setStyleSheet(self._btn_qss(opt))
+
+# --- underline tabs (left-accent, sharp) — extracted to ui/tabs.py ---------
+from .tabs import UnderlineTabs  # noqa: F401  (re-exported component)
 
 
 # --- slider row (label + value above a full-width slider) ------------------
@@ -259,16 +333,12 @@ class _MarkedSlider(QtWidgets.QSlider):
         super().paintEvent(event)
         if self._default_val is not None:
             p = QtGui.QPainter(self)
-            # Find the groove rect to align the ticks
             opt = QtWidgets.QStyleOptionSlider()
             self.initStyleOption(opt)
             gr = self.style().subControlRect(QtWidgets.QStyle.CC_Slider, opt, QtWidgets.QStyle.SC_SliderGroove, self)
-            
             lo, hi = self.minimum(), self.maximum()
             if hi > lo:
                 hw = 12 # handle width
-                
-                # Draw 10% marks
                 p.setPen(QtGui.QPen(QtGui.QColor(theme.MUTED), 1))
                 curr = lo
                 while curr <= hi:
@@ -277,8 +347,6 @@ class _MarkedSlider(QtWidgets.QSlider):
                         x = gr.left() + (hw / 2) + frac * (gr.width() - hw)
                         p.drawLine(int(x), gr.top() + 1, int(x), gr.bottom() - 1)
                     curr += 1
-
-                # Draw Default (90%) mark - thicker and accented
                 frac = (self._default_val - lo) / (hi - lo)
                 x = gr.left() + (hw / 2) + frac * (gr.width() - hw)
                 p.setPen(QtGui.QPen(QtGui.QColor(theme.ACCENT), 2))
@@ -302,7 +370,7 @@ class SliderRow(QtWidgets.QWidget):
         self._val = QtWidgets.QLabel()
         self._val.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         self._val.setStyleSheet(
-            f"color:{theme.ACCENT};font-family:'{theme.MONO_FONT}','Consolas';"
+            f'color:{theme.ACCENT};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
             "font-size:11px;background:transparent;")
         top.addWidget(lbl)
         top.addStretch(1)
@@ -334,7 +402,7 @@ class SliderRow(QtWidgets.QWidget):
     def restyle(self) -> None:
         """Re-tint the value readout after the theme accent changes."""
         self._val.setStyleSheet(
-            f"color:{theme.ACCENT};font-family:'{theme.MONO_FONT}','Consolas';"
+            f'color:{theme.ACCENT};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
             "font-size:11px;background:transparent;")
 
     def value(self) -> int:
@@ -381,7 +449,11 @@ class IconTile(QtWidgets.QLabel):
     def set_marker(self, name: str, accent: str | None = None, outlined: bool = False) -> None:
         """A map-marker icon (assets/map_icons) instead of a game-sheet icon."""
         acc = accent if outlined else (accent or theme.ACCENT)
-        self.setPixmap(icons.tile_marker(name, self._size, acc, outlined=outlined))
+        pm = icons.tile_marker(name, self._size, acc, outlined=outlined)
+        # Missing marker assets degrade to an empty pixmap, never None
+        # (a None here would crash QLabel.setPixmap in the Entity HUD).
+        if pm is not None:
+            self.setPixmap(pm)
 
     def set_ui_icon(self, name: str, accent: str = theme.ACCENT) -> None:
         """A UI SVG icon (assets/icons_ui) instead of a game-sheet icon."""
@@ -474,10 +546,8 @@ class OverlayCard(QtWidgets.QFrame):
         main_v.setContentsMargins(16, 16, 16, 16)
         main_v.setSpacing(8)
 
-        # Row 1: Icon, Title, and Main Toggle
         row1 = QtWidgets.QHBoxLayout()
         row1.setSpacing(12)
-        
         self._icon = QtWidgets.QLabel()
         self._icon.setFixedSize(28, 28)
         self._icon.setPixmap(icons.ui_icon(icon_name, theme.ACCENT, 28))
@@ -486,18 +556,14 @@ class OverlayCard(QtWidgets.QFrame):
         title_lbl = QtWidgets.QLabel(title.upper())
         title_lbl.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:16px;background:transparent;")
         row1.addWidget(title_lbl, 1, QtCore.Qt.AlignCenter)
-        
         self._toggle = ToggleSwitch()
         self._toggle.toggled.connect(self._on_toggle)
         row1.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
         main_v.addLayout(row1)
-        
-        # Row 2 (Optional): Borderless Toggle (right-aligned)
         self._bare_toggle = None
         if has_bare:
             row2 = QtWidgets.QHBoxLayout()
             row2.addStretch(1)
-            
             bare_h = QtWidgets.QHBoxLayout()
             bare_h.setSpacing(8)
             bare_lbl = QtWidgets.QLabel(bare_label)
@@ -506,14 +572,11 @@ class OverlayCard(QtWidgets.QFrame):
             self._bare_toggle.toggled.connect(self.bareToggled.emit)
             bare_h.addWidget(bare_lbl)
             bare_h.addWidget(self._bare_toggle)
-            
             row2.addLayout(bare_h)
             main_v.addLayout(row2)
 
-        # Spacer between toggles and description
         main_v.addSpacing(4)
 
-        # Row 3: Description (full width)
         desc_lbl = QtWidgets.QLabel(desc)
         desc_lbl.setWordWrap(True)
         desc_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:12px;background:transparent;")
@@ -707,8 +770,10 @@ class LabeledToggle(QtWidgets.QFrame):
 class FilterChip(QtWidgets.QPushButton):
     """Checked = included, unchecked = filtered out. Flat, sharp."""
 
-    def __init__(self, label: str, checked: bool = True, parent=None):
+    def __init__(self, label: str, checked: bool = True, parent=None,
+                 color: str | None = None):
         super().__init__(label, parent)
+        self._color = color
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(QtCore.Qt.PointingHandCursor)
@@ -716,15 +781,24 @@ class FilterChip(QtWidgets.QPushButton):
         self.restyle()
 
     def restyle(self) -> None:
+        col = self._color or theme.ACCENT
         if self.isChecked():
             self.setStyleSheet(
-                f"QPushButton{{background:{theme.with_alpha(theme.ACCENT, 36)};"
-                f"color:{theme.ACCENT};border:1px solid {theme.ACCENT};"
+                f"QPushButton{{background:{theme.with_alpha(col, 36)};"
+                f"color:{col};border:1px solid {col};"
                 f"border-radius:0;padding:4px 10px;font-weight:600;}}")
+        elif self._color:
+            self.setStyleSheet(
+                f"QPushButton{{background:{theme.with_alpha(col, 12)};"
+                f"color:{theme.with_alpha(col, 200)};"
+                f"border:1px solid {theme.with_alpha(col, 80)};"
+                f"border-radius:0;padding:4px 10px;font-weight:600;}}"
+                f"QPushButton:hover{{background:{theme.with_alpha(col, 24)};color:{col};}}")
         else:
             self.setStyleSheet(
                 f"QPushButton{{background:transparent;color:{theme.DIM};"
-                f"border:1px solid {theme.BORDER};border-radius:0;padding:4px 10px;}}")
+                f"border:1px solid {theme.BORDER};border-radius:0;padding:4px 10px;}}"
+                f"QPushButton:hover{{border-color:{theme.MUTED};color:{theme.TEXT};}}")
 
 
 # --- field (label above a control) ----------------------------------------

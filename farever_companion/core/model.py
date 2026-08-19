@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -20,19 +19,9 @@ from .rift_tracker import RiftTracker, RiftStatus
 from . import attributes
 from ..combat.dps import DpsMeter
 from ..constants import OFF_HERO_OWNERPLAYER
-from ..data import loot, units as udata, rarity as rarity_mod, encounters as encdata
+from ..data import units as udata, encounters as encdata
 
 XYZ = tuple[float, float, float]
-
-
-@dataclass
-class Nearest:
-    kind: str               # 'enemy' | 'chest'
-    label: str
-    dist: float
-    loot_table: str | None
-    level: int
-    note: str = ""
 
 
 class LiveModel:
@@ -630,7 +619,7 @@ class LiveModel:
             return "hard" if live > normal else "normal"
         return "hard" if live >= self.HARD_LEVEL else "normal"
 
-    # --- loot resolution (delegated to ChestResolver) --------------------
+    # --- chest resolution (delegated to ChestResolver) -------------------
     def chest_table(self, chest_id: str, default_table: str | None = None) -> str | None:
         return self.chests_resolver.chest_table(chest_id, self.dungeon_boss,
                                                 default_table)
@@ -661,44 +650,6 @@ class LiveModel:
             return self.locator.player_class()
         except Exception:
             return None
-
-    def enemy_drop_source(self, entity, dist: float, default_level: int) -> Nearest | None:
-        uid = getattr(entity, "unit_id", None)
-        if not uid:
-            return None
-        tbl = udata.loot_table_for_unit(uid)
-        if not tbl:
-            return None
-        info = udata.unit_info(uid)
-        lvl = (info.get("lvl") if info else None) or default_level
-        return Nearest("enemy", uid, dist, tbl, lvl,
-                       note=(info.get("type") if info else "") or "")
-
-    def chest_drop_source(self, chestrow, default_level: int) -> Nearest | None:
-        if not getattr(chestrow, "loot_table", None):
-            return None
-        return Nearest("chest", chestrow.chest_id, chestrow.dist, chestrow.loot_table,
-                       chestrow.level or default_level, note=chestrow.state or "")
-
-    def drop_table(self, near: Nearest | None):
-        if not near or not near.loot_table:
-            return []
-        try:
-            return loot.predict_sorted(near.loot_table, near.level)
-        except Exception as e:
-            log.warning("loot predict failed for table %r: %s", near.loot_table, e)
-            return []
-
-    def drop_table_effective(self, near: Nearest | None):
-        out = []
-        for item, prob, rar, typ in self.drop_table(near):
-            if rarity_mod.should_promote(item, typ, rar):
-                for tier, ch in rarity_mod.promote_distribution(rar, near.level).items():
-                    if ch > 0:
-                        out.append((item, prob * ch, tier, "rolled"))
-            else:
-                out.append((item, prob, rar, typ))
-        return out
 
     # --- combat ----------------------------------------------------------
     def sample_combat(self, radius: float = 30.0) -> DpsMeter:

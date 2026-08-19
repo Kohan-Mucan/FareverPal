@@ -14,7 +14,7 @@ from collections import defaultdict
 from ...data import names, units as udata
 from ...data import dungeons
 from ...core import chest_resolver
-from ...geo import orbs as geo_orbs, zones as geo_zones
+from ...geo import orbs as geo_orbs, pois as geo_pois, zones as geo_zones
 from .entity_rows import _is_chest_orb_id
 
 
@@ -88,7 +88,6 @@ class EntityGatherMixin:
         done_list = self._sync_done_state(xyz, profile, done_list, eff_max_dist)
         self._force_selection_targets(xyz, profile, done_list, eff_max_dist)
         self._render_sections(profile, done_list, isz, show_e, show_s)
-        self._update_drops()
         self._check_auto_height()
 
     # --- 1) gather every section's list (selection cycles across all of them)
@@ -222,7 +221,7 @@ class EntityGatherMixin:
                     ent = next((e for e in self.model.units() if e.addr == taddr), None)
                     if ent:
                         self._group_members.append((ent, ent.dist2d(xyz[0], xyz[1])))
-            elif tk in ("pos", "dungeon", "rift", "obelisk") and tid:
+            elif tk in ("pos", "dungeon", "rift", "obelisk", "soulstone") and tid:
                 try:
                     parts = tid.split("|")
                     coords_str = parts[0]
@@ -249,6 +248,20 @@ class EntityGatherMixin:
                         elif tk == "obelisk":
                             display_name = names.poi_label(label or tk)
                             dungeon_name = "Obelisk"
+                        elif tk == "soulstone":
+                            display_name = names.poi_label(label or tk)
+                            dungeon_name = ""
+                            if len(parts) > 2:
+                                from .minimap_render import soulstone_zone_text
+                                poi = geo_pois.by_id().get(parts[2])
+                                # line 2 shows the summon zone (like a
+                                # dungeon's name), not a literal "Soulstone"
+                                dungeon_name = soulstone_zone_text(poi) or ""
+                                # the summoned demon boss becomes the row's
+                                # secondary icon (the soulstone gem stays the
+                                # primary tile)
+                                if poi and poi.spawn_unit:
+                                    boss_id = poi.spawn_unit
                         elif tk == "dungeon":
                             d_info = dungeons.get_dungeon_info(label)
                             if d_info:

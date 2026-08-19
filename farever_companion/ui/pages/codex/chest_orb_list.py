@@ -113,6 +113,8 @@ def _sort_key(it: dict):
 class ChestOrbListCell(QtWidgets.QFrame):
     """One 2-column cell: orb/chest marker icon + label + zone sub-label."""
 
+    # right-click marks the chest/orb collected; keep the copy menu off it
+    _no_copy_menu = True
     pick = QtCore.Signal(object)  # item dict
 
     def __init__(self, ui, item: dict, parent=None):

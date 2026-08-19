@@ -84,6 +84,23 @@ def unit_regions() -> dict[str, str]:
     return out
 
 
+@lru_cache(maxsize=256)
+def find_unit_region(unit_id: str | None) -> str | None:
+    """The region a codex unit's card lives in ('Z1'..'Z3', 'Bosses',
+    'Pets', 'Z0'), or None when the unit has no codex card. Powers the
+    Drops From codex jumps: a drop source whose id resolves here (Slime
+    King, the Stable Master) links to its card; everything else doesn't.
+    Scans the per-region order lists (cached by units_by_region), so it's a
+    dict hit after the first call per unit."""
+    if not unit_id:
+        return None
+    for rid in ("Z1", "Z2", "Z3", "Bosses", "Pets", "Z0"):
+        for it in units_by_region(rid, ingame_order=True):
+            if it.get("id") == unit_id:
+                return rid
+    return None
+
+
 @lru_cache(maxsize=1)
 def enemies_data() -> dict[str, dict]:
     """Consolidated enemy, pet, mount, and glider info from raw_data or raw_codex."""
@@ -161,6 +178,40 @@ _RIFT_REWARD_LABELS = {
 }
 
 
+# Vendor NPC cards whose own entry has no coordinates (a 'todo' placeholder
+# like the Stable Master): the merchant's world spots live in the vendor
+# records of the items they sell — every mount/glider Perina Wann sells
+# carries 'Perina Wann' with her shop positions — so resolve_locations
+# looks them up through this map instead of reporting 'No Map Locations'.
+_VENDOR_NPC_UNITS = {"TODO_StableMaster": "Perina Wann"}
+
+
+@lru_cache(maxsize=1)
+def _vendor_name_coords() -> dict[str, tuple[tuple[dict, ...], str]]:
+    """Vendor name -> (distinct world coords, display name), indexed from
+    every codex item's vendor records — the merchant positions that only
+    exist inside the items they sell. The mounts/gliders list Perina Wann
+    at her two shop spots; her own card has none."""
+    out: dict[str, list[dict]] = {}
+    for e in enemies_data().values():
+        v_raw = e.get("vendor_npcs") or e.get("vendor_npc") or []
+        if isinstance(v_raw, dict):
+            v_list = [v_raw]
+        elif isinstance(v_raw, list):
+            v_list = v_raw
+        else:
+            continue
+        for v in v_list:
+            if not (isinstance(v, dict)
+                    and v.get("x") is not None and v.get("y") is not None):
+                continue
+            nm = v.get("name") or "Shop NPC"
+            c = {"x": v["x"], "y": v["y"]}
+            if c not in out.setdefault(nm, []):
+                out[nm].append(c)
+    return {nm: (tuple(cs), nm) for nm, cs in out.items()}
+
+
 # Cash-shop / early-access premium items. The canonical list is the game's
 # shop.json, compiled into raw_shop by compiler.py — until the dump ships it,
 # the known premium set is identified by id: an `_EA_` / `EarlyAccess` token
@@ -232,6 +283,24 @@ def item_sources(item: dict) -> set[str]:
     return sources
 
 
+def is_soulstone_drop(item: dict) -> bool:
+    """True when the item drops from the soulstone demon bosses (Ariana
+    Grandemon, Baphometal, Belzebeat, Luciferrari, ...).
+
+    The Niflelian-family mounts/gliders drop from these summon-spot bosses;
+    the card badges them with the soulstone gem instead of the plain mob
+    sword so players can tell soulstone-farmed mounts from regular mob drops
+    at a glance. Matches by the compiled `drops_from` ids against the
+    poi_locs spawn map (authoritative — a future demon boss id that doesn't
+    embed 'Soulstone' still counts).
+    """
+    df = item.get("drops_from")
+    if not isinstance(df, list) or not df:
+        return False
+    ss = _soulstone_spawns()
+    return any(isinstance(d, dict) and d.get("id") in ss for d in df)
+
+
 def belongs_in_others(item: dict) -> bool:
     """True when an item belongs in the Others bucket — the 'no home yet'
     list: cash-shop items, content not released yet, and todo placeholders.
@@ -282,6 +351,49 @@ def _group_mob_coords(group: str) -> tuple[tuple[dict, ...], tuple[str, ...]]:
 
 
 @lru_cache(maxsize=1)
+def soulstone_pois() -> tuple[dict, ...]:
+    """The 8 soulstone demon-boss summon spots (the poi_locs rows), each with
+    the boss name, world position, zone, and summon cost. Read from the
+    compiled raw_data shim first (the frozen build has no loose JSONs),
+    falling back to the JSON file in dev checkouts with a stale shim."""
+    try:
+        from . import raw_data
+        rows = getattr(raw_data, "DATA", None)
+        rows = rows.get("poi_locs") if isinstance(rows, dict) else None
+    except Exception:
+        rows = None
+    if not rows:
+        try:
+            data = json.loads(paths.poi_locs_path().read_text(encoding="utf-8"))
+            rows = data.get("pois") if isinstance(data, dict) else data
+        except (OSError, ValueError):
+            return ()
+    return tuple(r for r in rows or []
+                 if isinstance(r, dict) and r.get("sub_kind") == "soulstone")
+
+
+@lru_cache(maxsize=1)
+def _soulstone_spawns() -> dict[str, dict]:
+    """Soulstone demon-boss summon spots, keyed by spawn unit id.
+
+    The soulstone bosses (Ariana Grandemon, Baphometal, Belzebeat, ...) carry
+    no spawn coords of their own in the codex — their world spots live in the
+    poi_locs dataset (the same rows the Items page reads for soulstone summon
+    zones). Indexed by `spawn_unit` so the resolver's mob-drop chain can plot
+    the exact spot you fight the boss that drops a mount/glider.
+    """
+    out: dict[str, dict] = {}
+    for p in soulstone_pois():
+        wp = p.get("world_pos") or {}
+        sid = p.get("spawn_unit")
+        if (sid and isinstance(wp, dict)
+                and wp.get("x") is not None and wp.get("y") is not None):
+            out[sid] = {"x": wp["x"], "y": wp["y"],
+                        "name": p.get("name") or sid}
+    return out
+
+
+@lru_cache(maxsize=1)
 def _dungeon_pois() -> tuple[tuple[dict, ...], tuple[dict, ...]]:
     """(all dungeon/rift entrance POIs, rift-only POIs) with world positions.
 
@@ -328,6 +440,18 @@ def resolve_locations(uid: str, dungeon_hint: str | None = None) -> tuple[tuple[
                                         or e.get("type") == dungeon_hint):
                 item = e
                 break
+
+    # Vendor NPC cards (the Mount Tamer) are todo placeholders with no coords
+    # of their own — resolve their shop spots from the items they sell BEFORE
+    # the todo short-circuit below, so the Stable Master card plots Perina
+    # Wann's real positions instead of 'No Map Locations'.
+    v_name = _VENDOR_NPC_UNITS.get(uid)
+    if v_name:
+        spots, _n = _vendor_name_coords().get(v_name, ((), v_name))
+        if spots:
+            title = f"Vendor: {v_name}" if len(spots) == 1 \
+                else f"Vendor: {v_name} ({len(spots)} Locations)"
+            return spots, title, False
 
     # todo/unreleased entries have no locations by definition — short-circuit
     # before the fallback chain burns time on steps that can never succeed.
@@ -466,19 +590,40 @@ def resolve_locations(uid: str, dungeon_hint: str | None = None) -> tuple[tuple[
                     mob_targets.append(m_id)
 
         if mob_targets:
+            # The soulstone demon bosses have no embedded spawn coords — plot
+            # their summon spot from poi_locs instead, so the pins land on the
+            # soulstones you actually fight rather than falling through to the
+            # species-group fuzzy match (which painted every species sibling).
+            ss_spawns = _soulstone_spawns()
             for m_target in mob_targets:
                 m_info = enemies_data().get(m_target, {})
-                if m_info and m_info.get("coords"):
-                    m_coords = _valid_coords(m_info["coords"])
-                    if m_coords:
-                        coords.extend(m_coords)
-                        if not d_title:
-                            df_name = df_list[0].get("name") if (df_list and isinstance(df_list[0], dict)) else None
-                            d_title = f"Mob Drop: {df_name or m_info.get('name', m_target)}"
+                m_coords = _valid_coords(m_info.get("coords") or []) if m_info else []
+                if not m_coords:
+                    ss = ss_spawns.get(m_target)
+                    if ss:
+                        # The coord carries the boss name so the map can label
+                        # the pin (Ariana Grandemon, Baphometal, ...) instead of
+                        # leaving the summon spot anonymous.
+                        m_coords = [{"x": ss["x"], "y": ss["y"],
+                                     "name": ss["name"]}]
+                if m_coords:
+                    coords.extend(m_coords)
+                    if not d_title:
+                        df_name = df_list[0].get("name") if (df_list and isinstance(df_list[0], dict)) else None
+                        d_title = f"Mob Drop: {df_name or m_info.get('name', m_target)}"
 
     # 6. Species-group fallback (mounts/gliders dropping from mob families) —
-    # cached per group so this is a dict hit, not a scan.
-    if not coords and not is_dung_mob:
+    # cached per group so this is a dict hit, not a scan. Only for items that
+    # name no droppers and have no premium source: an item that explicitly
+    # lists its drop mobs (drops_from/mob_id/...) must never paint every
+    # species sibling — the Niflelian Skunk used to pin all 7 'Skunk'-named
+    # entities because its 4 soulstone droppers had no coords — and a shop /
+    # early-access item has no mob sources at all (its `group` is just the
+    # Collection species-family header, not a drop family).
+    if not coords and not is_dung_mob and not (
+            item.get("drops_from") or item.get("mob_id")
+            or item.get("drop_mob") or item.get("mob_name")
+            or is_shop_item(item)):
         group_name = item.get("group") or ""
         if not group_name and "_" in uid:
             parts = uid.split("_")
@@ -522,7 +667,7 @@ def units_by_region(region_id: str, ingame_order: bool = True) -> list[dict]:
     """All codex units in a region, with details, sorted by natural game order.
 
     Cached: the returned entries are shared across calls, so callers must treat
-    them as read-only (matching the loot module's pure-data contract).
+    them as read-only (pure-data contract).
     """
     from . import dungeons
     e_data = enemies_data()
