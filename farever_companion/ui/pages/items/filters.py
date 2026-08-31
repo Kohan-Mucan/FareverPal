@@ -96,10 +96,10 @@ class ItemFiltersMixin:
                         self._items_list.item(i).data(_ID), "",
                         cat, cls, types, only, mn, rating))
                 self._items_search_header.set_tag(
-                    f"{shown} FOUND · {filtered} FILTERED")
+                    f"ITEMS {shown} FOUND · {filtered} FILTERED")
             else:
                 self._items_search_header.set_tag(
-                    f"{shown} / "
+                    f"ITEMS {shown} / "
                     f"{getattr(self, '_items_total', 0) or self._items_list.count()}")
         self._items_update_chips()
         support.sync_quick_tabs(self)
@@ -245,6 +245,30 @@ class ItemFiltersMixin:
             lay.addWidget(self._items_quick_group, 2, 0, 1, 2)
             self._items_quick_group.show()
 
+    def _dg_refresh(self) -> None:
+        """Re-run the class/Only filter over the Dungeons tab: re-fill the
+        boss rows (weapon chips) and re-render the open faction card."""
+        if getattr(self, "_items_category", "") != "@dungeon" \
+                or not hasattr(self, "_items_dungeon_view"):
+            return
+        dv = self._items_dungeon_view
+        fac = getattr(dv, "_fac", "")
+        if fac and fac in getattr(dv, "_groups", {}):
+            dv._fill_list(fac)
+        dv.ensure_card()
+
+    def consume_pane_back(self) -> bool:
+        """Mouse-BACK inside the Dungeons tab: an open item detail returns
+        to the faction sheet instead of leaving the page."""
+        if getattr(self, "_items_category", "") != "@dungeon":
+            return False
+        last = getattr(self, "_dg_last_group", None)
+        if not last or getattr(self, "_dg_pane_state", "") != "item":
+            return False
+        from .dungeon_view import show_faction
+        show_faction(self, last)
+        return True
+
     def _items_update_chips(self) -> None:
         """Rebuild the active-filter row above the list: a removable chip
         for the live search query plus Clear all whenever any filter is
@@ -252,6 +276,12 @@ class ItemFiltersMixin:
         if not hasattr(self, "_items_chips_lay"):
             return
         cat = getattr(self, "_items_category", "")
+        if cat == "@dungeon":
+            # the Dungeons accordion has no item rows / type chips
+            box = getattr(self, "_items_type_chips_box", None)
+            if box is not None:
+                box.hide()
+            return
         cls = getattr(self, "_items_class", "")
         class_types = getattr(self, "_class_types", {})
         fam_types = getattr(self, "_items_family_type", {})
@@ -355,6 +385,8 @@ class ItemFiltersMixin:
         for chip in getattr(self, "_items_type_chips", {}).values():
             chip.setChecked(False)
         self._items_refilter()
+        # the Dungeons tab filters BOTH columns by the class/Only chips
+        self._dg_refresh()
 
     def _items_toggle_only(self, on: bool) -> None:
         """The Only chip toggled: with a class picked, every shown item
@@ -368,6 +400,7 @@ class ItemFiltersMixin:
         self._items_only = on
         self._items_sync_only_label()
         self._items_refilter()
+        self._dg_refresh()
 
     def _items_toggle_rating(self, rating: str, on: bool) -> None:
         """A Rating chip toggled: single-select — picking one rating clears

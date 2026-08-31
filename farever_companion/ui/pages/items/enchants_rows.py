@@ -83,11 +83,11 @@ def _slot_badge(text: str, color: str,
             if doc is not None:
                 doc.addResource(QtGui.QTextDocument.ImageResource,
                                 QtCore.QUrl(icon_url),
-                                icons.ui_icon(*icon, 10))
+                                icons.ui_icon(*icon, 12))
     lb.setStyleSheet(
         f"color:{color};background:{theme.with_alpha(color, 40)};"
         f"border:1px solid {theme.with_alpha(color, 90)};"
-        "border-radius:3px;padding:2px 6px;font-size:9px;font-weight:700;")
+        "border-radius:3px;padding:2px 7px;font-size:11px;font-weight:700;")
     return lb
 # per-stat identity colors for the gem table's column headers — the
 # values beneath keep the uniform +/− colors, the header names the stat
@@ -171,7 +171,7 @@ class EnchantsRowsMixin:
                 f"LV {rec.get('level', '')}")
             tag.setObjectName("Mono")
             tag.setStyleSheet(
-                f"color:{theme.DIM};font-size:10px;background:{bg};")
+                f"color:{theme.DIM};font-size:11px;background:{bg};")
             grid.addWidget(tag, r, 1)
             if corrupt:
                 s_s = support.CHIP_SHORT.get(s, s)
@@ -186,14 +186,14 @@ class EnchantsRowsMixin:
                                (f"−{v['value']} {p_s}", theme.DANGER)):
                     lb = QtWidgets.QLabel(t)
                     lb.setStyleSheet(
-                        f"color:{col};{mono}font-size:12px;"
+                        f"color:{col};{mono}font-size:13px;"
                         "font-weight:700;background:transparent;")
                     val.addWidget(lb, 0, QtCore.Qt.AlignVCenter)
                 grid.addWidget(cell, r, 2)
             else:
                 val_l = QtWidgets.QLabel(f"+{v}")
                 val_l.setStyleSheet(
-                    f"color:{theme.ACCENT};{mono}font-size:12px;"
+                    f"color:{theme.ACCENT};{mono}font-size:13px;"
                     "font-weight:700;background:transparent;")
                 grid.addWidget(val_l, r, 2)
         # the value column hugs the names — a trailing empty column absorbs
@@ -229,7 +229,7 @@ class EnchantsRowsMixin:
             btn.setCursor(QtCore.Qt.PointingHandCursor)
             btn.setStyleSheet(
                 f"QPushButton{{color:{theme.TEXT};background:{bg};border:0;"
-                "padding:0;font-size:13px;text-align:left;}"
+                "padding:0;font-size:14px;text-align:left;}"
                 f"QPushButton:hover{{color:{theme.ACCENT};}}")
             dt = None
             if diff:
@@ -243,7 +243,7 @@ class EnchantsRowsMixin:
                     f"color:{theme.GOLD};"
                     f"background:{theme.with_alpha(theme.GOLD, 25)};"
                     f"border:1px solid {theme.with_alpha(theme.GOLD, 80)};"
-                    "border-radius:3px;padding:1px 6px;font-size:10px;"
+                    "border-radius:3px;padding:1px 6px;font-size:11px;"
                     "font-weight:700;")
             grid.addWidget(
                 self._name_with_icon(iid, name, bg, extra=dt), r, 0)
@@ -252,7 +252,7 @@ class EnchantsRowsMixin:
             tag = QtWidgets.QLabel(f"LV {rec.get('level', '')}")
             tag.setObjectName("Mono")
             tag.setStyleSheet(
-                f"color:{theme.DIM};font-size:10px;background:{bg};")
+                f"color:{theme.DIM};font-size:11px;background:{bg};")
             # cap the tag at its own text width: the STATS column takes
             # the leftover width, but its 540px cap means a wide window
             # spills the rest into this column (a 'LV 6' cell reads ~100px
@@ -274,7 +274,7 @@ class EnchantsRowsMixin:
                 val.setObjectName("Mono")
                 val.setWordWrap(True)
                 val.setStyleSheet(
-                    f"color:{theme.ACCENT};{mono}font-size:12px;"
+                    f"color:{theme.ACCENT};{mono}font-size:13px;"
                     "font-weight:700;background:transparent;")
                 grid.addWidget(val, r, 2)
         # the STATS column takes the leftover width — long multi-stat
@@ -302,7 +302,7 @@ class EnchantsRowsMixin:
             h = QtWidgets.QLabel(text)
             h.setObjectName("Mono")
             h.setStyleSheet(
-                f"color:{color};{mono}font-size:10px;font-weight:700;"
+                f"color:{color};{mono}font-size:12px;font-weight:700;"
                 "letter-spacing:1px;background:transparent;padding:2px 4px;")
             # long two-word stat names (ARMOR PENETRATION, MAGIC
             # PENETRATION) wrap onto two lines so the stat columns can
@@ -336,7 +336,7 @@ class EnchantsRowsMixin:
             zh = QtWidgets.QLabel(f"{zone.upper()}{tier}")
             zh.setObjectName("Mono")
             zh.setStyleSheet(
-                f"color:{theme.MUTED};{mono}font-size:10px;font-weight:700;"
+                f"color:{theme.MUTED};{mono}font-size:12px;font-weight:700;"
                 "background:transparent;padding-top:8px;")
             grid.addWidget(zh, r, 0, 1, len(cols) + 1)
             r += 1
@@ -370,7 +370,7 @@ class EnchantsRowsMixin:
                 if mixed:
                     tag = QtWidgets.QLabel(f"Lv {g['level']}")
                     tag.setObjectName("Mono")
-                    tag.setStyleSheet(f"color:{theme.DIM};font-size:10px;"
+                    tag.setStyleSheet(f"color:{theme.DIM};font-size:11px;"
                                       "background:transparent;")
                     rl.addWidget(tag, 0, QtCore.Qt.AlignVCenter)
                 grid.addWidget(row_w, r, 0)
@@ -381,7 +381,7 @@ class EnchantsRowsMixin:
                         cell = QtWidgets.QLabel(
                             f"+{v}" if v > 0 else f"−{abs(v)}")
                         cell.setObjectName("Mono")
-                        cell.setStyleSheet(support.chip_style(col, size=12))
+                        cell.setStyleSheet(support.chip_style(col, size=13))
                         # the signed value centers in its column like the
                         # '·' empty cells, so the stat columns read as a
                         # clean matrix under the centered headers
@@ -391,7 +391,7 @@ class EnchantsRowsMixin:
                         cell = QtWidgets.QLabel("·")
                         cell.setObjectName("Mono")
                         cell.setStyleSheet(
-                            f"color:{theme.DIM};{mono}font-size:11px;"
+                            f"color:{theme.DIM};{mono}font-size:13px;"
                             f"background:{bg};padding:2px 4px;")
                         cell.setAlignment(QtCore.Qt.AlignCenter)
                         grid.addWidget(cell, r, c)
@@ -431,7 +431,7 @@ class EnchantsRowsMixin:
         btn.setCursor(QtCore.Qt.PointingHandCursor)
         btn.setStyleSheet(
             f"QPushButton{{color:{theme.TEXT};background:transparent;border:0;"
-            "padding:0;font-size:13px;text-align:left;}"
+            "padding:0;font-size:14px;text-align:left;}"
             f"QPushButton:hover{{color:{theme.ACCENT};}}")
         btn.clicked.connect(lambda: self._items_open_in_craft(iid))
         return btn
@@ -523,7 +523,7 @@ class EnchantsRowsMixin:
             chev.setFlat(True)
             chev.setStyleSheet(
                 f"QPushButton{{color:{theme.DIM};border:0;padding:0;"
-                "font-size:11px;background:transparent;}"
+                "font-size:12px;background:transparent;}"
                 f"QPushButton:hover{{color:{theme.ACCENT};}}")
 
             def _flip(_, d=detail, c=chev):
@@ -556,7 +556,7 @@ class EnchantsRowsMixin:
                     note.setWordWrap(True)
                     note.setMaximumWidth(400)
                     note.setStyleSheet(
-                        f"color:{theme.MUTED};font-size:10px;"
+                        f"color:{theme.MUTED};font-size:12px;"
                         "background:transparent;")
             nv.addWidget(detail)
             grid.addWidget(name_w, r, 0)
@@ -585,7 +585,7 @@ class EnchantsRowsMixin:
             lv = QtWidgets.QLabel(f"LV {rec.get('level', '')}")
             lv.setObjectName("Mono")
             lv.setStyleSheet(
-                f"color:{theme.DIM};font-size:10px;background:{bg};")
+                f"color:{theme.DIM};font-size:11px;background:{bg};")
             grid.addWidget(lv, r, 2)
             # the granted stats read as the value column, in their colors;
             # the weapon formulas' effect note reads there too, aligned
@@ -602,7 +602,7 @@ class EnchantsRowsMixin:
                     gl = QtWidgets.QLabel(txt)
                     gl.setObjectName("Mono")
                     gl.setStyleSheet(
-                        f"color:{col};font-size:12px;font-weight:700;"
+                        f"color:{col};font-size:13px;font-weight:700;"
                         "background:transparent;")
                     sl.addWidget(gl, 0, QtCore.Qt.AlignVCenter)
                 grid.addWidget(stats_w, r, 3)
@@ -629,7 +629,7 @@ class EnchantsRowsMixin:
         d.setWordWrap(True)
         d.setMaximumWidth(280)
         d.setStyleSheet(
-            f"color:{theme.MUTED};font-size:10px;background:transparent;"
+            f"color:{theme.MUTED};font-size:11px;background:transparent;"
             f"border-left:2px solid {theme.with_alpha(theme.MUTED, 90)};"
             "padding-left:8px;margin-left:36px;")
         return d
@@ -668,14 +668,14 @@ class EnchantsRowsMixin:
                     f"QPushButton{{color:{colr};"
                     f"background:{theme.with_alpha(colr, 45)};"
                     f"border:1px solid {theme.with_alpha(colr, 90)};"
-                    f"border-radius:3px;padding:2px 8px;font-size:9px;"
+                    f"border-radius:3px;padding:2px 8px;font-size:11px;"
                     f"font-weight:700;letter-spacing:1px;{mono}}}"
                     f"QPushButton:hover{{color:{theme.ACCENT};}}")
             else:
                 chip.setStyleSheet(
                     f"QPushButton{{color:{theme.DIM};background:transparent;"
                     f"border:1px solid {theme.BORDER};border-radius:3px;"
-                    f"padding:2px 8px;font-size:9px;font-weight:700;"
+                    f"padding:2px 8px;font-size:11px;font-weight:700;"
                     f"letter-spacing:1px;{mono}}}"
                     f"QPushButton:hover{{color:{theme.ACCENT};}}")
             chip.clicked.connect(
@@ -693,7 +693,7 @@ class EnchantsRowsMixin:
         lab = QtWidgets.QLabel("GIVE UP ↓ / GAIN →")
         lab.setObjectName("Mono")
         lab.setStyleSheet(
-            f"color:{theme.DIM};{mono}font-size:9px;letter-spacing:1px;"
+            f"color:{theme.DIM};{mono}font-size:11px;letter-spacing:1px;"
             "background:transparent;")
         cl.addWidget(lab)
         v = max(c[rar]["value"] for c in convs)
@@ -701,7 +701,7 @@ class EnchantsRowsMixin:
             tb = QtWidgets.QLabel(txt)
             tb.setObjectName("Mono")
             tb.setStyleSheet(
-                f"color:{col};{mono}font-size:11px;font-weight:700;"
+                f"color:{col};{mono}font-size:13px;font-weight:700;"
                 "background:transparent;")
             cl.addWidget(tb)
         grid.addWidget(corner, 1, 0, QtCore.Qt.AlignLeft)
@@ -720,7 +720,7 @@ class EnchantsRowsMixin:
             gname.setObjectName("Mono")
             gname.setStyleSheet(
                 f"color:{_STAT_COLORS.get(target, theme.MUTED)};{mono}"
-                "font-size:10px;font-weight:700;letter-spacing:1px;"
+                "font-size:12px;font-weight:700;letter-spacing:1px;"
                 "background:transparent;padding-bottom:2px;")
             hl.addWidget(gname)
             hl.addStretch(1)
@@ -735,7 +735,7 @@ class EnchantsRowsMixin:
             rl = QtWidgets.QLabel(source)
             rl.setStyleSheet(
                 f"color:{_STAT_COLORS.get(source, theme.TEXT)};"
-                f"background:{bg};")
+                f"background:{bg};font-size:13px;font-weight:600;")
             rl.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
             grid.addWidget(rl, ri, 0)
             for ci, target in enumerate(cols, start=1):
@@ -752,7 +752,7 @@ class EnchantsRowsMixin:
                     dot = QtWidgets.QLabel("↑")
                     dot.setObjectName("Mono")
                     dot.setStyleSheet(
-                        f"color:{theme.BLUE};{mono}font-size:11px;"
+                        f"color:{theme.BLUE};{mono}font-size:13px;"
                         "background:transparent;")
                     cl.addWidget(dot, 0, QtCore.Qt.AlignVCenter)
                 else:
@@ -763,7 +763,7 @@ class EnchantsRowsMixin:
                     mark = QtWidgets.QLabel("↘")
                     mark.setObjectName("Mono")
                     mark.setStyleSheet(
-                        f"color:{theme.MUTED};{mono}font-size:12px;"
+                        f"color:{theme.MUTED};{mono}font-size:13px;"
                         "background:transparent;")
                     cl.addWidget(mark, 0, QtCore.Qt.AlignVCenter)
                 grid.addWidget(cell_w, ri, ci)

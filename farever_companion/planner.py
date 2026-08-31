@@ -74,5 +74,5 @@ def _save(farm: list[str], entries: list[dict], got: dict[str, int]) -> None:
     atomic_write_json(_path(), {
         "farm": farm,
         "craft_queue": {"entries": entries, "got": got},
-    })
+    }, compact_lists=True)
     _data.cache_clear()

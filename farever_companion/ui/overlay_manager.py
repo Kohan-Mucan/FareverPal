@@ -8,24 +8,89 @@ reference back to the panel. Read-only: the overlays only consume the model.
 """
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+import sys
 
-from .overlays.entity_overlay import EntityOverlay
-from .overlays.dps_overlay import DpsOverlay
-from .overlays.skill_overlay import SkillOverlay
-from .overlays.minimap import MinimapOverlay
-from .overlays.speedrun_overlay import SpeedrunOverlay
-from .tracker import TrackController
+from PySide6 import QtCore, QtWidgets
+from shiboken6 import isValid
+
+from .tracker import TrackController, _VolatileTrackSettings
 from ..geo import orb_sync
 
 # The game HUD overlays that share the global opacity + lock. One place so new overlays inherit both.
-HUD_OVERLAYS = ("entity", "dps", "skills", "map", "speedrun")
+# "devscanner" joins them for LOCKING (so it doesn't steal mouse clicks while
+# playing) but keeps its own always-visible rule in the visibility loop below.
+HUD_OVERLAYS = ("entity", "dps", "skills", "map", "speedrun", "dungeon",
+                "devscanner")
 
-# Overlay key -> widget class.
-_OVERLAY_CLASSES = {
-    "entity": EntityOverlay, "dps": DpsOverlay, "skills": SkillOverlay,
-    "map": MinimapOverlay, "speedrun": SpeedrunOverlay,
+# Overlay key -> (module, class). Resolved lazily in _make() so opening the
+# app idle doesn't import six overlay modules' worth of code + PySide
+# registrations — they only load when the user actually opens an overlay.
+_OVERLAY_SOURCES = {
+    "entity": ("entity_overlay", "EntityOverlay"),
+    "dps": ("dps_overlay", "DpsOverlay"),
+    "skills": ("skill_overlay", "SkillOverlay"),
+    "map": ("minimap", "MinimapOverlay"),
+    "speedrun": ("speedrun_overlay", "SpeedrunOverlay"),
+    "dungeon": ("dungeon_overlay", "DungeonOverlay"),
 }
+
+_OVERLAY_CLASSES: dict[str, type] = {}
+
+
+def _overlay_class(key: str):
+    cls = _OVERLAY_CLASSES.get(key)
+    if cls is None:
+        mod_name, cls_name = _OVERLAY_SOURCES[key]
+        from importlib import import_module
+        cls = getattr(import_module(f".overlays.{mod_name}", __package__),
+                      cls_name)
+        _OVERLAY_CLASSES[key] = cls
+    return cls
+
+# Optional, git-ignored dev tool (ai/dev_scanner/). Loaded by path so a
+# checkout without it behaves exactly like a release build.
+_DEV_SCANNER_CLS = False   # False = not probed yet; None = absent/broken
+
+
+def _dev_scanner_class():
+    global _DEV_SCANNER_CLS
+    if _DEV_SCANNER_CLS is not False:
+        return _DEV_SCANNER_CLS
+    import importlib.util
+    from pathlib import Path
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[2] / "ai" / "dev_scanner" / "loader.py",
+        Path.cwd() / "ai" / "dev_scanner" / "loader.py",
+        # frozen builds keep source next to the exe for dev tooling
+        Path(getattr(sys, "executable", "")).parent / "ai" / "dev_scanner"
+        / "loader.py",
+    ]
+    cls = None
+    for p in candidates:
+        if not p.exists():
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "farever_dev_scanner_loader", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            cls = getattr(mod, "OVERLAY_CLASS", None)
+            # silent on success — the Overlays-page card IS the confirmation.
+            # Only failures print, with the reason.
+            if cls is None and getattr(mod, "IMPORT_ERROR", None):
+                print(f"[DevScanner] import failed:\n{mod.IMPORT_ERROR}",
+                      file=sys.stderr, flush=True)
+            break
+        except Exception as e:
+            print(f"[DevScanner] loader failed: {e}", file=sys.stderr,
+                  flush=True)
+    _DEV_SCANNER_CLS = cls
+    return cls
+
+
+def dev_scanner_available() -> bool:
+    return _dev_scanner_class() is not None
 
 
 def _is_valid_game_window(active_hwnd: int, game_pid: int) -> bool:
@@ -73,6 +138,10 @@ class OverlayManager(QtCore.QObject):
         self._detaching = False
         # the one compass-needle target, shared by every overlay
         self.tracker = TrackController(settings, self)
+        # second needle for the Dungeon HUD: volatile target (never persisted),
+        # and exempt from the hide-on-app-focus rule so clicking a dungeon row
+        # keeps the needle up while the panel is focused.
+        self.dungeon_tracker = TrackController(_VolatileTrackSettings(settings), self)
         # auto-sync collected orbs from the live glow-fx signal (1 Hz, only
         # while attached; see geo/orb_sync.py)
         self._orb_sync = orb_sync.FxSync()
@@ -125,9 +194,11 @@ class OverlayManager(QtCore.QObject):
 
         self.model = model
         self.tracker.set_model(model)
+        self.dungeon_tracker.set_model(model)
 
         if model is None:
             self.tracker.clear()
+            self.dungeon_tracker.clear()
             map_ov = getattr(self, "overlays", {}).get("map")
             if map_ov and hasattr(map_ov, "canvas"):
                 map_ov.canvas._pan_x = map_ov.canvas._pan_y = 0.0
@@ -154,8 +225,16 @@ class OverlayManager(QtCore.QObject):
         try:
             profile = m.player_profile()
             done_list = self.s.get_poi_done(profile)
-            mark, unmark = self._orb_sync.update(
-                m.world_orb_fx(), set(done_list))
+            # resolve each live element to the nearest STATIC placement —
+            # done lists (and the entity-list filter) key on prefab ids,
+            # not the live instance ids
+            from ..geo import orbs as geo_orbs
+            live = []
+            for oid, fx, ox, oy in m.world_orb_fx():
+                o = geo_orbs.nearest_orb(ox, oy)
+                if o is not None:
+                    live.append((o.orb_id, fx))
+            mark, unmark = self._orb_sync.update(live, set(done_list))
         except Exception:
             return
         if not mark and not unmark:
@@ -179,21 +258,28 @@ class OverlayManager(QtCore.QObject):
         self.cards.setdefault(key, []).append(card)
 
     def set_cards_enabled(self, on: bool) -> None:
-        """Cards that need a live process (entity/dps/skills/map/compass/speedrun) are gated until
-        attach+locate succeeds."""
-        for key in ("entity", "dps", "skills", "map", "compass", "speedrun"):
-            for card in self.cards.get(key, []):
-                card.setEnabled(on)
+        """Cards remain always enabled and interactive so users can configure them anytime."""
+        pass
 
     def sync_cards(self, key: str) -> None:
         ov = self.overlays.get(key)
-        # If the overlay exists, it counts as "active" even if it's currently 
-        # auto-hidden by a menu or alt-tabbed.
-        active = bool(ov is not None)
-        for card in self.cards.get(key, []):
-            card.set_checked_silent(active)
+        if self.model is not None and self.model.player_addr is not None:
+            active = bool(ov is not None)
+        else:
+            setting_name = f"open_overlay_{key}"
+            active = bool(getattr(self.s, setting_name, False))
 
-
+        cards = self.cards.get(key)
+        if not cards:
+            return
+        alive = []
+        for card in cards:
+            # pages may have been evicted from the page cache and their
+            # widgets destroyed — drop dead references before touching them
+            if card is not None and isValid(card):
+                card.set_checked_silent(active)
+                alive.append(card)
+        self.cards[key] = alive
 
     def get(self, key: str):
         return self.overlays.get(key)
@@ -201,7 +287,13 @@ class OverlayManager(QtCore.QObject):
     # --- open / close ----------------------------------------------------
     def _make(self, key: str):
         panel = self.parent()  # The ControlPanel QWidget
-        ov = _OVERLAY_CLASSES[key](self.model, self.s, parent=panel)
+        if key == "devscanner":
+            cls = _dev_scanner_class()
+            if cls is None:
+                return None
+            ov = cls(self.model, self.s, parent=panel)
+        else:
+            ov = _overlay_class(key)(self.model, self.s, parent=panel)
         ov._main_win = panel
         if hasattr(ov, "request_page"):
             ov.request_page.connect(self.request_page)
@@ -211,7 +303,8 @@ class OverlayManager(QtCore.QObject):
         if hasattr(ov, "set_collection_owned"):
             ov.set_collection_owned(self.collection_owned)
         if hasattr(ov, "set_tracker"):
-            ov.set_tracker(self.tracker)
+            # the Dungeon HUD drives its own volatile-target needle
+            ov.set_tracker(self.dungeon_tracker if key == "dungeon" else self.tracker)
         # Wire the minimap's eye-button → map-page toggle sync callback
         if key == "map":
             panel = self.parent()
@@ -232,35 +325,53 @@ class OverlayManager(QtCore.QObject):
                     # (like map). We'll use a wrapper to sync all of them.
                     def sync_all_cards(on, k=key):
                         for c in self.cards.get(k, []):
-                            if hasattr(c, "set_bare_checked_silent"):
+                            if c is not None and isValid(c) and \
+                                    hasattr(c, "set_bare_checked_silent"):
                                 c.set_bare_checked_silent(on)
                     ov._bare_sync_fn = sync_all_cards
                     break
 
-        # Apply the Borderless (bare) setting from config on creation
+        # Wire universal "Transparent" toggle sync
+        if panel is not None:
+            for card in self.cards.get(key, []):
+                if hasattr(card, "set_transparent_checked_silent"):
+                    def sync_all_trans_cards(on, k=key):
+                        for c in self.cards.get(k, []):
+                            if c is not None and isValid(c) and \
+                                    hasattr(c, "set_transparent_checked_silent"):
+                                c.set_transparent_checked_silent(on)
+                    ov._transparent_sync_fn = sync_all_trans_cards
+                    break
+
+        # Apply the Borderless (bare) & Transparent settings from config on creation
+        geo_key = getattr(ov, "_geo_key", key)
         if hasattr(ov, "set_bare"):
-            geo_key = getattr(ov, "_geo_key", key)
             if getattr(self.s, f"{geo_key}_bare", False):
                 ov.set_bare(True)
+        if hasattr(ov, "set_transparent"):
+            if getattr(self.s, f"{geo_key}_transparent", False):
+                ov.set_transparent(True)
 
         return ov
 
     def request(self, key: str, on: bool) -> None:
+        setting_name = f"open_overlay_{key}"
+        if hasattr(self.s, setting_name):
+            setattr(self.s, setting_name, on)
+            self.s.save()
+
         if not on:
             ov = self.overlays.get(key)
             if ov is not None:
                 ov.close()      # WA_DeleteOnClose -> _on_closed
             self.overlays[key] = None
             self.sync_cards(key)
-            setting_name = f"open_overlay_{key}"
-            if hasattr(self.s, setting_name):
-                setattr(self.s, setting_name, False)
-                self.s.save()
             return
+
         if self.model is None or self.model.player_addr is None:
-            self.log.emit("Attach and locate the player first.")
-            self.sync_cards(key)   # revert the toggle
+            self.sync_cards(key)
             return
+
         ov = self.overlays.get(key)
         if ov is not None:
             # If it already exists but is hidden (Alt-tabbed/Menu), show it
@@ -268,6 +379,9 @@ class OverlayManager(QtCore.QObject):
                 ov.show()
             return
         ov = self._make(key)
+        if ov is None:
+            self.sync_cards(key)   # revert the toggle
+            return
         ov.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
         ov.destroyed.connect(lambda *_: self._on_closed(key))
         ov.show()
@@ -276,10 +390,6 @@ class OverlayManager(QtCore.QObject):
         self.overlays[key] = ov
         self.sync_cards(key)
         self.log.emit(f"Opened {key} overlay.")
-        setting_name = f"open_overlay_{key}"
-        if hasattr(self.s, setting_name):
-            setattr(self.s, setting_name, True)
-            self.s.save()
 
     def _on_closed(self, key: str) -> None:
         self.overlays[key] = None
@@ -311,6 +421,7 @@ class OverlayManager(QtCore.QObject):
             if ov and ov.isVisible():
                 ov.set_opacity(self.s.opacity)   # forwards to child windows (drop table)
         self.tracker.set_opacity(self.s.opacity)
+        self.dungeon_tracker.set_opacity(self.s.opacity)
 
     def set_lock(self, on: bool) -> None:
         self.s.lock_overlays = on
@@ -451,6 +562,13 @@ class OverlayManager(QtCore.QObject):
                         sr_ov.reset()
                     except Exception:
                         pass
+                # Reset Dungeon HUD death counters on new instance
+                dg_ov = self.overlays.get("dungeon")
+                if dg_ov is not None:
+                    dg_ov._dg_death_counts = {}
+                    dg_ov._dg_prev_alive = {}
+                # Dungeon needle target dies with the instance too
+                self.dungeon_tracker.clear()
             self._last_map_id = curr_map
 
         # 5. Visibility Loop
@@ -459,11 +577,19 @@ class OverlayManager(QtCore.QObject):
         items = list(self.overlays.items())
         if self.tracker._needle is not None:
             items.append(("compass", self.tracker._needle))
+        if self.dungeon_tracker._needle is not None:
+            items.append(("dcompass", self.dungeon_tracker._needle))
 
         for key, ov in items:
             if ov is not None:
-                # 1. Player / Focus check: Immediately hide map, entity, and compass if player address is missing (character screen, loading) or neither game nor app is focused
-                if m.player_addr is None and key in ("map", "entity", "compass"):
+                # DEV SCANNER: always visible — ignores ESC/gameplay menus,
+                # dungeons/rifts and focus loss. Never force-clicked.
+                if key == "devscanner":
+                    if not ov.isVisible():
+                        ov.show()
+                    continue
+                # 1. Player / Focus check: Immediately hide map, entity, and compasses if player address is missing (character screen, loading) or neither game nor app is focused
+                if m.player_addr is None and key in ("map", "entity", "compass", "dcompass"):
                     if ov.isVisible():
                         ov.hide()
                     continue
@@ -479,38 +605,48 @@ class OverlayManager(QtCore.QObject):
                 # Dungeon/Rift Rule C is NOT bypassed when app-focused — clicking on an
                 # overlay (e.g. a DPS history row) sets is_app_focused=True but must NOT
                 # cause entity/minimap to reappear while in a dungeon/rift.
-                # (Compass is always hidden when app is focused as requested).
+                # (Main compass is always hidden when app is focused as requested;
+                #  the DUNGEON needle is exempt so clicking a dungeon row keeps it up.)
                 should_hide = False
                 if is_app_focused:
                     should_hide = (key == "compass")
-                    # Still suppress entity/map/compass in dungeons/rifts even when
-                    # an overlay window (e.g. DPS) has app focus.
+                    # Still suppress entity/map in dungeons/rifts even when
+                    # an overlay window (e.g. DPS) has app focus. Compass
+                    # stays visible: the Dungeon HUD tracks rift bosses.
                     if not should_hide:
-                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity", "compass")
+                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity")
                 else:
                     is_esc_menu = menu_any and not menu_hide
                     auto_hide_enabled = getattr(self.s, "auto_hide_menus", False)
                     
                     # Rule A: Escape menu hides everything except Entity and Minimap
+                    # (Dungeon HUD joins the Entity exception)
                     if is_esc_menu:
-                        should_hide = (key not in ("entity", "map"))
+                        should_hide = (key not in ("entity", "map", "dungeon"))
                     # Rule B: Gameplay menus hide everything if enabled
                     elif menu_hide and auto_hide_enabled:
                         should_hide = True
                     
-                    # Rule C: Dungeons/Rifts hide Minimap, Entity, and Compass
+                    # Rule C: Dungeons/Rifts hide Minimap and Entity
+                    # (Compass stays — the Dungeon HUD tracks rift bosses in there)
                     if not should_hide:
-                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity", "compass")
+                        should_hide = (in_dungeon or in_rift) and key in ("map", "entity")
 
                     # Exception: DPS and Speedrun never auto-hide in dungeons/rifts (ignore menus)
                     if (in_dungeon or in_rift) and key in ("dps", "speedrun"):
                         should_hide = False
 
+                # Rule D: Dungeon HUD only exists inside dungeons/rifts — hide
+                # it anywhere else, even when the app has focus.
+                if not should_hide and key == "dungeon":
+                    should_hide = not (in_dungeon or in_rift)
+
                 if should_hide:
                     if ov.isVisible():
                         ov.hide()
                 else:
-                    if key == "compass" and not (self.tracker.s.track_kind and self.tracker.s.track_id):
+                    _tk_s = self.dungeon_tracker.s if key == "dcompass" else self.tracker.s
+                    if key in ("compass", "dcompass") and not (_tk_s.track_kind and _tk_s.track_id):
                         if ov.isVisible():
                             ov.hide()
                     else:

@@ -204,7 +204,7 @@ class _Canvas(QtWidgets.QWidget):
                     # Use a special kind if it's a spark mob AND toggle is on for special rendering
                     kind = "spark_enemy" if (show_s and is_spark) else "enemy"
                     self._add_poi(pois, e.x, e.y, e.z, kind, e.unit_id or "?", f"e{e.addr}")
-        if getattr(s, "show_group_members", False):
+        if getattr(s, "minimap_players", True):
             for e, d in self.model.nearest_group_members((self._px, self._py, self._pz), n=20, max_dist=max_d, use_2d=True):
                 if e.addr != self.model.player_addr:
                     h_cls = (e.cls or "").replace("ent.hero.", "").lower() if (e.cls or "").startswith("ent.hero.") else (e.unit_id or "warrior").lower()
@@ -226,7 +226,7 @@ class _Canvas(QtWidgets.QWidget):
         # 3. Gatherables
         if s.minimap_gatherables:
             for g in self.model.gatherables(player_zone=p_zone, max_dist=max_d, use_2d=True):
-                if getattr(s, geo_gatherables.get_setting_attr(g.elem_id or "") or "", True):
+                if (geo_gatherables.get_type_key(g.elem_id or "") or "") in s.show_gatherable_types:
                     self._add_poi(pois, g.x, g.y, g.z, "ore" if any(x in (g.elem_id or "").lower() for x in ("ore", "tungstene", "tin", "copper")) else "flower", g.elem_id or "?", f"gl{g.addr}")
             for g in geo_gatherables.load_nodes():
                 # Avoid heavy zone resolution for every node; only resolve if limit_z is active
@@ -236,7 +236,7 @@ class _Canvas(QtWidgets.QWidget):
                         continue
                 if any(math.hypot(g.x - p[0], g.y - p[1]) < 2.0 for p in pois if p[3] in ("ore", "flower")):
                     continue
-                if getattr(s, geo_gatherables.get_setting_attr(g.name) or "", True):
+                if (geo_gatherables.get_type_key(g.name) or "") in s.show_gatherable_types:
                     self._add_poi(pois, g.x, g.y, g.z, "ore" if any(x in g.name.lower() for x in ("ore", "tungstene", "tin", "copper")) else "flower", g.name, f"g{g.x}{g.y}", max_dist=max_d)
 
         # 4. Obelisks / Respawns / Checkpoints
@@ -488,6 +488,10 @@ class _Canvas(QtWidgets.QWidget):
 
             done = bool(poi_id and self.s.is_done(poi_id, profile))
             is_wp = render.is_waypoint(self, kind, label, poi_id, wx, wy, track_pos)
+            # Type-level gather tracking (e.g. "Madrigold") highlights nodes
+            # with the green halo but never clamps them to the edge.
+            tracked = is_wp or (not edge and kind in ("flower", "ore")
+                                and render.gather_type_tracked(self, kind, label))
             if edge and not is_wp:
                 continue
 
@@ -506,7 +510,7 @@ class _Canvas(QtWidgets.QWidget):
             if is_wp:
                 sz += 1
 
-            pm = render.poi_pixmap(self, orig_kind, label, sz, done, tracked=is_wp) if (self.s.minimap_icons or (render.USE_HERO_SVGS and orig_kind.startswith("hero_"))) else None
+            pm = render.poi_pixmap(self, orig_kind, label, sz, done, tracked=tracked) if (self.s.minimap_icons or (render.USE_HERO_SVGS and orig_kind.startswith("hero_"))) else None
 
             # Base radius for ground circle/dot
             rad = (5 if edge else 6) if kind == "hero" else (3 if edge else 4)
@@ -517,6 +521,12 @@ class _Canvas(QtWidgets.QWidget):
                 p.drawPixmap(int(sx - pm.width() / 2), int(sy - pm.height() / 2), pm)
                 if is_wp and kind in ("chest", "chest_orb"):
                     p.setPen(QtGui.QPen(QtGui.QColor(theme.CHEST), 2))
+                    p.setBrush(QtCore.Qt.NoBrush)
+                    halo_rad = (pm.width() / 2) + 2
+                    p.drawEllipse(QtCore.QPointF(sx, sy), halo_rad, halo_rad)
+                elif tracked and orig_kind in ("flower", "ore"):
+                    # Tracked gatherable: green halo, icon keeps its own colors.
+                    p.setPen(QtGui.QPen(QtGui.QColor(theme.GOOD), 2))
                     p.setBrush(QtCore.Qt.NoBrush)
                     halo_rad = (pm.width() / 2) + 2
                     p.drawEllipse(QtCore.QPointF(sx, sy), halo_rad, halo_rad)
@@ -727,7 +737,7 @@ class _Canvas(QtWidgets.QWidget):
 class MinimapOverlay(OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("Minimap", settings, geo_key="minimap", parent=parent)
-        self._page_key = "map"
+        self._page_key = "settings:HUD's"
         self.model = model
         self.s, self._tracker, self._sync_fn, self._zoom_sync_fn = settings, None, None, None
 

@@ -12,9 +12,10 @@ import html
 
 from ... import theme
 from ... import components as C
+from ...layout import WrapLabel
 from ....data import items as idata
 from ..items import detail as idetail   # items-list row roles for the jump
-from ..items.support import (WrapLabel, is_enchant_item,  # wrap-safe labels
+from ..items.support import (is_enchant_item,  # wrap-safe labels
                              slot_label)  # (never squashed)
 from .queue import (CraftQueueMixin, _crafted_tag,  # the queue + bill rows
                     _craft_source_hint)  # farmable drop hints (no chests)
@@ -441,31 +442,77 @@ class CraftDetailMixin(CraftQueueMixin):
 
     def _craft_recipe_footer(self, lay, r: dict, jump=None) -> None:
         """The slim footer line under the card: the unlock recipe scroll.
-        It carries no readable name in the data, so the line resolves it
-        to the recipe it teaches, as a link with the crafting job + level.
-        (The old BONUS LOOT line is gone — the loot-table ids are opaque
-        and the human table names were guesses, so it read as noise.)"""
-        if r.get("unlock"):
-            unlocked = idata.recipe_unlocked_by(r["unlock"])
-            if unlocked:
-                txt = (f"UNLOCKED BY  ·  "
-                       f'<a href="open" style="color:{theme.ACCENT};'
-                       'text-decoration:none;">'
-                       f"{html.escape(unlocked['name'])}</a>"
-                       f"  ·  {unlocked['job_name'].upper()}"
-                       f"  ·  LV {unlocked['level']}")
-            else:
-                txt = f"UNLOCKED BY  ·  {r['unlock_name']}"
-            u = WrapLabel(txt)
-            u.setObjectName("Muted")
-            u.setMaximumWidth(620)
-            if unlocked:
-                u.setOpenExternalLinks(False)
-                u.setTextInteractionFlags(
-                    QtCore.Qt.TextBrowserInteraction)
-                u.linkActivated.connect(
-                    lambda _=None: jump(unlocked["item"]))
-            lay.addWidget(u)
+        Clicking the line expands/collapses an inline drawer directly beneath
+        it showing all drop sources for the recipe scroll."""
+        unlock_id = r.get("unlock")
+        if not unlock_id:
+            return
+
+        scroll_name = r.get("unlock_name") or idata.item_name(unlock_id) or unlock_id
+        job_name = (r.get("job_name") or "").upper()
+        lvl = r.get("level", 1)
+
+        box = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(box)
+        bl.setContentsMargins(0, 4, 0, 0)
+        bl.setSpacing(6)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setSpacing(6)
+
+        prefix = QtWidgets.QLabel("UNLOCKED BY  ·")
+        prefix.setObjectName("Mono")
+        prefix.setStyleSheet(
+            f"color:{theme.MUTED};font-size:11px;font-family:'{theme.MONO_FONT}';background:transparent;")
+        btn_row.addWidget(prefix)
+
+        link = QtWidgets.QLabel(
+            f'<a href="toggle" style="color:{theme.ACCENT};text-decoration:none;font-weight:700;">'
+            f"{html.escape(scroll_name)}</a>")
+        link.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
+        link.setStyleSheet("background:transparent;")
+        btn_row.addWidget(link)
+
+        meta = QtWidgets.QLabel(f"·  {job_name}  ·  LV {lvl}")
+        meta.setObjectName("Mono")
+        meta.setStyleSheet(
+            f"color:{theme.MUTED};font-size:11px;font-family:'{theme.MONO_FONT}';background:transparent;")
+        btn_row.addWidget(meta)
+
+        chevron = QtWidgets.QLabel("▸")
+        chevron.setStyleSheet(
+            f"color:{theme.ACCENT};font-size:12px;font-weight:bold;background:transparent;")
+        btn_row.addWidget(chevron)
+        btn_row.addStretch(1)
+        bl.addLayout(btn_row)
+
+        drawer = QtWidgets.QWidget()
+        drawer.setVisible(False)
+        dl = QtWidgets.QVBoxLayout(drawer)
+        dl.setContentsMargins(8, 4, 8, 4)
+        dl.setSpacing(6)
+
+        drops = idata.shown_drops(unlock_id)
+        if not drops:
+            no_src = QtWidgets.QLabel(idata.no_source_reason(unlock_id))
+            no_src.setObjectName("Muted")
+            no_src.setWordWrap(True)
+            dl.addWidget(no_src)
+        else:
+            dl.addLayout(idetail.build_drops_body(
+                drops, on_codex_click=self._codex_jump_to_unit,
+                on_expand=self._craft_refresh_scroll))
+
+        bl.addWidget(drawer)
+
+        def _toggle(_=None):
+            is_vis = not drawer.isVisible()
+            drawer.setVisible(is_vis)
+            chevron.setText("▾" if is_vis else "▸")
+            self._craft_refresh_scroll()
+
+        link.linkActivated.connect(_toggle)
+        lay.addWidget(box)
 
     def _craft_qty_changed(self, st: dict, qty: int) -> None:
         """CRAFT × N stepper handler: scale the already-rendered card in place
@@ -666,10 +713,12 @@ class CraftDetailMixin(CraftQueueMixin):
             self._items_set_mode("Enchants")
             return
         if not idata.is_gear(it):
-            # non-gear crafted items live on this page — their recipe card
-            # IS their full page (the craft page owns the whole crafting
-            # loop), so just open the recipe here
-            self._craft_jump_to_recipe(item_id)
+            if idata.is_craftable(item_id):
+                self._craft_jump_to_recipe(item_id)
+                return
+            self._select_nav("gear")
+            if hasattr(self, "_items_show_id"):
+                self._items_show_id(item_id)
             return
         self._select_nav("gear")
         want = "Gear"

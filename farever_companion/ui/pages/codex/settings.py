@@ -164,6 +164,10 @@ class CodexSettingsMixin:
 
     def _refresh_codex_sync(self) -> None:
         """Sync card active state in-place without rebuilding grid widgets or resetting scroll."""
+        # the Codex page may have been evicted from the page cache
+        if not getattr(self, "_widget_alive", lambda w: False)(
+                getattr(self, "_codex_grid", None)):
+            return
         self._update_last_hidden_widget()
         self._update_bulk_buttons_state()
         if not hasattr(self, "_codex_cards") or not self._codex_cards:

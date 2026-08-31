@@ -5,11 +5,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from ... import components as C
+from ...layout import FlowLayout, make_scroll
 from .... import planner
 from ....data import icons
 from ....data import items as idata
 from ..items import support
-from ..items.support import FlowLayout
 from . import detail
 
 _CRAFT_JOB_CHIPS = ["Blacksmith", "Outfitter", "Jeweller", "Alchemist", "Cook"]
@@ -21,22 +21,17 @@ class CraftPageBase:
 
         # no CRAFT title or queue-count pill here — the two tabs ARE the
         # header, and the Craft List tab carries the queue count (gold)
-        if not idata.available():
-            v.addWidget(C.InfoCard("archive", "Data missing",
-                                   "craft.json / job.json aren't bundled in this "
-                                   "build — re-run the data compile to ship the "
-                                   "crafting database."))
-            return page
-
         all_recipes = idata.recipes()
+        self._craft_all = all_recipes
         self._craft_job: str = ""
         self._craft_qty = 1
         self._craft_queue: list[dict] = planner.queue_entries()
         self._craft_got: dict[str, int] = planner.queue_got()
 
-        self._craft_tabs = C.SegmentedControl(["Recipes", "Craft List"])
+        self._craft_tabs = C.SegmentedControl(["Recipes", "Jobs", "Craft List"])
         self._craft_tabs.currentChanged.connect(self._craft_tab_changed)
         v.addWidget(self._craft_tabs)
+
         self._craft_stack = QtWidgets.QStackedWidget()
         v.addWidget(self._craft_stack, 1)
 
@@ -47,11 +42,9 @@ class CraftPageBase:
 
         left = QtWidgets.QVBoxLayout()
         left.setSpacing(8)      # tight: chips hug the search box
-        self._craft_search = QtWidgets.QLineEdit()
-        self._craft_search.setPlaceholderText("Search recipe, item or job…")
-        self._craft_search.setClearButtonEnabled(True)
+        self._craft_search = C.SearchInput(
+            "Search recipe, item or job…", on_text_changed=self._craft_refilter)
         self._craft_search.setFixedHeight(34)
-        self._craft_search.textChanged.connect(self._craft_refilter)
         left.addWidget(self._craft_search)
 
         self._craft_chip_btns: dict[str, C.FilterChip] = {}
@@ -59,7 +52,8 @@ class CraftPageBase:
         job_flow.setContentsMargins(0, 0, 0, 0)
         job_flow.setSpacing(6)
         jobs_by_id = {j["id"]: j for j in idata.jobs()}
-        for jid in _CRAFT_JOB_CHIPS:
+        active_job_ids = [jid for jid in _CRAFT_JOB_CHIPS if any(r["job"] == jid for r in all_recipes)] or list(_CRAFT_JOB_CHIPS)
+        for jid in active_job_ids:
             j = jobs_by_id.get(jid)
             chip = C.FilterChip(j["name"] if j else jid, checked=False, parent=browse)
             chip.clicked.connect(lambda _=False, jid=jid: self._craft_chip_clicked(jid))
@@ -81,13 +75,13 @@ class CraftPageBase:
         self._craft_list.setItemDelegate(self._craft_delegate)
         self._craft_list.setStyleSheet(
             f"QListWidget{{background:{theme.PANEL};border:1px solid {theme.BORDER};outline:none;}}"
-            f"QListWidget::item{{padding:0px 8px 4px 8px;border-radius:4px;}}"
+            f"QListWidget::item{{padding:2px 8px;border-radius:4px;margin:1px 0px;}}"
             f"QListWidget::item:hover{{background:{theme.with_alpha(theme.ACCENT,15)};}}"
             f"QListWidget::item:selected{{background:{theme.with_alpha(theme.ACCENT,30)};"
             f"border:1px solid {theme.ACCENT};color:{theme.TEXT};}}")
         self._craft_list.currentItemChanged.connect(self._craft_show)
         self._craft_list.itemClicked.connect(self._craft_item_clicked)
-        self._craft_list.setMinimumWidth(380)
+        self._craft_list.setMinimumWidth(440)
         left.addWidget(self._craft_list, 1)
         cols.addLayout(left, 2)
 
@@ -97,16 +91,17 @@ class CraftPageBase:
         self._craft_detail.setObjectName("Card")
         self._craft_detail_lay = QtWidgets.QVBoxLayout(self._craft_detail)
         self._craft_detail_lay.setContentsMargins(18, 16, 18, 16)
-        self._craft_scroll = QtWidgets.QScrollArea()
-        self._craft_scroll.setWidgetResizable(True)
-        self._craft_scroll.setWidget(self._craft_detail)
-        self._craft_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._craft_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self._craft_scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        self._craft_scroll = make_scroll(self._craft_detail)
         right.addWidget(self._craft_scroll, 1)
         cols.addLayout(right, 3)
-        self._craft_stack.addWidget(browse)
+        self._craft_stack.addWidget(browse)  # Index 0: Recipes
 
+        # Index 1: Jobs page from job.json (lazy-built on first visit)
+        self._craft_jobs_placeholder = QtWidgets.QWidget()
+        self._craft_stack.addWidget(self._craft_jobs_placeholder)
+        self._jobs_page_built = False
+
+        # Index 2: Craft List / Queue page
         queue_page = QtWidgets.QWidget()
         qv = QtWidgets.QVBoxLayout(queue_page)
         qv.setContentsMargins(0, 0, 0, 0)
@@ -116,16 +111,11 @@ class CraftPageBase:
             f"QFrame{{background:{theme.PANEL};border:1px solid {theme.with_alpha(theme.GOLD, 70)};}}")
         _rail_v = QtWidgets.QVBoxLayout(self._craft_rail)
         _rail_v.setContentsMargins(0, 0, 0, 0)
-        _rail_sc = QtWidgets.QScrollArea()
-        _rail_sc.setWidgetResizable(True)
-        _rail_sc.setFrameShape(QtWidgets.QFrame.NoFrame)
-        _rail_sc.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        _rail_sc.setStyleSheet("QScrollArea{background:transparent;border:0;}")
         self._craft_rail_body = QtWidgets.QWidget()
         self._craft_rail_lay = QtWidgets.QVBoxLayout(self._craft_rail_body)
         self._craft_rail_lay.setContentsMargins(18, 16, 18, 16)
         self._craft_rail_lay.setSpacing(8)
-        _rail_sc.setWidget(self._craft_rail_body)
+        _rail_sc = make_scroll(self._craft_rail_body)
         _rail_v.addWidget(_rail_sc)
 
         self._craft_rail_empty = C.InfoCard(
@@ -135,12 +125,12 @@ class CraftPageBase:
         qv.addWidget(self._craft_rail, 1)
         self._craft_stack.addWidget(queue_page)
 
-        self._craft_all = all_recipes
         self._craft_build_list()
         # Blacksmith is the default job on open (the user's first chip) —
         # the list lands on its recipes instead of the bare section bars
         self._craft_job = "Blacksmith"
-        self._craft_chip_btns["Blacksmith"].setChecked(True)
+        if "Blacksmith" in self._craft_chip_btns:
+            self._craft_chip_btns["Blacksmith"].setChecked(True)
         self._craft_refilter()
         self._craft_list.setCurrentItem(None)
         self._craft_list.clearSelection()
@@ -148,7 +138,283 @@ class CraftPageBase:
         self._craft_show(None)
         self._craft_rail_built = False
         self._craft_rail_sync()
+        QtCore.QTimer.singleShot(50, self._craft_ensure_jobs)
         return page
+
+
+    def _build_jobs_page(self) -> QtWidgets.QWidget:
+        """The Jobs list tab: a clean, compact catalog of all recipes with
+        job, recipe name, craft level, and unlock source (Auto-learn vs. Dropped Scroll)."""
+        page = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        # Header filter bar: search input + job chips + count badge
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.setSpacing(10)
+
+        self._jobs_search = C.SearchInput(
+            "Search recipe, job, level, unlock source…",
+            on_text_changed=lambda _: self._filter_jobs_page())
+        self._jobs_search.setFixedHeight(34)
+        top_bar.addWidget(self._jobs_search, 1)
+
+        self._jobs_active_job = ""
+        self._jobs_job_chips: dict[str, C.FilterChip] = {}
+        job_chip_flow = FlowLayout()
+        job_chip_flow.setContentsMargins(0, 0, 0, 0)
+        job_chip_flow.setSpacing(6)
+
+        # Job chips: All + active jobs with recipes
+        all_chip = C.FilterChip("All Jobs", checked=True, parent=page)
+        all_chip.clicked.connect(lambda _=False: self._jobs_filter_job(""))
+        self._jobs_job_chips[""] = all_chip
+        job_chip_flow.addWidget(all_chip)
+
+        active_jobs = idata.craft_jobs()
+        for jid in active_jobs:
+            chip = C.FilterChip(jid, checked=False, parent=page)
+            chip.clicked.connect(lambda _=False, _j=jid: self._jobs_filter_job(_j))
+            self._jobs_job_chips[jid] = chip
+            job_chip_flow.addWidget(chip)
+
+        top_bar.addLayout(job_chip_flow)
+
+        self._jobs_dropped_only = False
+        self._jobs_count_btn = QtWidgets.QPushButton(f"{len(self._craft_all)} RECIPES")
+        self._jobs_count_btn.setObjectName("Mono")
+        self._jobs_count_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._jobs_count_btn.setToolTip("Click to toggle: show Dropped Scrolls Only vs. All Recipes")
+        self._jobs_count_btn.setStyleSheet(
+            f"QPushButton {{ color:{theme.GOLD}; font-family:'{theme.MONO_FONT}'; font-size:11px; font-weight:700; "
+            f"background:{theme.with_alpha(theme.GOLD, 20)}; border:1px solid {theme.with_alpha(theme.GOLD, 80)}; "
+            f"border-radius:4px; padding:3px 8px; }}"
+            f"QPushButton:hover {{ background:{theme.with_alpha(theme.GOLD, 40)}; }}")
+        self._jobs_count_btn.clicked.connect(self._jobs_toggle_dropped_only)
+        top_bar.addWidget(self._jobs_count_btn)
+        lay.addLayout(top_bar)
+
+        # Table header
+        th = QtWidgets.QFrame()
+        th.setObjectName("Card")
+        th.setStyleSheet(
+            f"QFrame#Card {{ background: {theme.PANEL_LOW}; border: 1px solid {theme.BORDER}; "
+            f"border-radius: 6px; padding: 0px; }}")
+        th_lay = QtWidgets.QHBoxLayout(th)
+        th_lay.setContentsMargins(14, 6, 26, 6)
+        th_lay.setSpacing(14)
+
+        j_hdr = QtWidgets.QLabel("JOB")
+        j_hdr.setFixedWidth(120)
+        j_hdr.setAlignment(QtCore.Qt.AlignCenter)
+        j_hdr.setStyleSheet(
+            f"color:{theme.DIM};font-size:10px;font-weight:700;letter-spacing:1.5px;background:transparent;")
+        th_lay.addWidget(j_hdr)
+
+        rec_hdr_box = QtWidgets.QHBoxLayout()
+        rec_hdr_box.setSpacing(8)
+        rec_hdr_spacer = QtWidgets.QWidget()
+        rec_hdr_spacer.setFixedSize(26, 1)
+        rec_hdr_box.addWidget(rec_hdr_spacer)
+        r_hdr = QtWidgets.QLabel("RECIPE")
+        r_hdr.setStyleSheet(
+            f"color:{theme.DIM};font-size:10px;font-weight:700;letter-spacing:1.5px;background:transparent;")
+        rec_hdr_box.addWidget(r_hdr, 1)
+        th_lay.addLayout(rec_hdr_box, 1)
+
+        lvl_hdr = QtWidgets.QLabel("LEVEL")
+        lvl_hdr.setFixedWidth(70)
+        lvl_hdr.setStyleSheet(
+            f"color:{theme.DIM};font-size:10px;font-weight:700;letter-spacing:1.5px;background:transparent;")
+        th_lay.addWidget(lvl_hdr)
+
+        src_hdr_box = QtWidgets.QHBoxLayout()
+        src_hdr_box.setSpacing(8)
+        src_hdr_spacer = QtWidgets.QWidget()
+        src_hdr_spacer.setFixedSize(26, 1)
+        src_hdr_box.addWidget(src_hdr_spacer)
+        src_hdr = QtWidgets.QLabel("LEARN SOURCE")
+        src_hdr.setStyleSheet(
+            f"color:{theme.DIM};font-size:10px;font-weight:700;letter-spacing:1.5px;background:transparent;")
+        src_hdr_box.addWidget(src_hdr, 1)
+        src_hdr_widget = QtWidgets.QWidget()
+        src_hdr_widget.setFixedWidth(300)
+        src_hdr_w_lay = QtWidgets.QHBoxLayout(src_hdr_widget)
+        src_hdr_w_lay.setContentsMargins(0, 0, 0, 0)
+        src_hdr_w_lay.addLayout(src_hdr_box)
+        th_lay.addWidget(src_hdr_widget)
+
+        lay.addWidget(th)
+
+        # Scrollable rows body
+        scroll_body = QtWidgets.QWidget()
+        self._jobs_rows_lay = QtWidgets.QVBoxLayout(scroll_body)
+        self._jobs_rows_lay.setContentsMargins(0, 0, 0, 0)
+        self._jobs_rows_lay.setSpacing(3)
+
+        self._jobs_rows: list[tuple[QtWidgets.QWidget, dict]] = []
+        job_order = {j: i for i, j in enumerate(idata.craft_jobs())}
+        for r in sorted(self._craft_all, key=lambda x: (-int(x.get("level", 1)), job_order.get(x.get("job"), 99), x.get("name", "").lower())):
+            row = self._build_job_recipe_row(r)
+            self._jobs_rows.append((row, r))
+            self._jobs_rows_lay.addWidget(row)
+
+        self._jobs_rows_lay.addStretch(1)
+        scroll = make_scroll(scroll_body)
+        lay.addWidget(scroll, 1)
+        return page
+
+    def _build_job_recipe_row(self, r: dict) -> QtWidgets.QWidget:
+        """One compact recipe row in the Jobs catalog with full item tile boxes."""
+        row = QtWidgets.QFrame()
+        row.setObjectName("Card")
+        row.setStyleSheet(
+            f"QFrame#Card {{ background: {theme.PANEL}; border: 1px solid {theme.BORDER}; "
+            f"border-radius: 6px; padding: 2px 4px; }}"
+            f"QFrame#Card:hover {{ border-color: {theme.ACCENT}; background: {theme.with_alpha(theme.ACCENT, 20)}; }}")
+        rl = QtWidgets.QHBoxLayout(row)
+        rl.setContentsMargins(14, 6, 14, 6)
+        rl.setSpacing(14)
+
+        # Job badge
+        job_name = r.get("job_name", r.get("job", "")).upper()
+        col = theme.ACCENT if r.get("job") == "Blacksmith" else theme.ORANGE
+        j_lbl = QtWidgets.QLabel(job_name)
+        j_lbl.setFixedWidth(120)
+        j_lbl.setObjectName("Mono")
+        j_lbl.setStyleSheet(
+            f"color:{col};font-family:'{theme.MONO_FONT}';font-size:12px;font-weight:700;"
+            f"padding:2px 8px;border-radius:4px;background:{theme.with_alpha(col, 22)};"
+            f"border:1px solid {theme.with_alpha(col, 60)};")
+        j_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        rl.addWidget(j_lbl)
+
+        # Recipe column (Tile Box + Clickable Name)
+        rec_box = QtWidgets.QHBoxLayout()
+        rec_box.setSpacing(8)
+        rec_ic = QtWidgets.QLabel()
+        rec_ic.setFixedSize(26, 26)
+        r_rar_col = theme.rarity_color(r.get("rarity") or "")
+        rec_ic.setPixmap(icons.item_tile(r["item"], r.get("name", ""), 26, r_rar_col))
+        rec_box.addWidget(rec_ic)
+
+        name_btn = QtWidgets.QPushButton(r.get("name", ""))
+        name_btn.setFlat(True)
+        name_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        name_btn.setStyleSheet(
+            f"QPushButton {{ color: {theme.TEXT}; font-size: 14px; font-weight: 600; "
+            f"text-align: left; border: 0; background: transparent; }}"
+            f"QPushButton:hover {{ color: {theme.ACCENT}; text-decoration: underline; }}")
+        name_btn.clicked.connect(lambda _=False, iid=r["item"]: self._craft_jump_from_jobs_tab(iid))
+        rec_box.addWidget(name_btn, 1)
+        rl.addLayout(rec_box, 1)
+
+        # Level
+        lvl_lbl = QtWidgets.QLabel(f"LV {r.get('level', 1)}")
+        lvl_lbl.setFixedWidth(70)
+        lvl_lbl.setObjectName("Mono")
+        lvl_lbl.setStyleSheet(
+            f"color:{theme.TEXT};font-family:'{theme.MONO_FONT}';font-size:13px;font-weight:700;background:transparent;")
+        rl.addWidget(lvl_lbl)
+
+        # Learn Source (Tile Box + Clean Text)
+        src_widget = QtWidgets.QWidget()
+        src_widget.setFixedWidth(300)
+        src_box = QtWidgets.QHBoxLayout(src_widget)
+        src_box.setContentsMargins(0, 0, 0, 0)
+        src_box.setSpacing(8)
+
+        src_ic = QtWidgets.QLabel()
+        src_ic.setFixedSize(26, 26)
+
+        unlock = r.get("unlock")
+        if unlock:
+            scroll_nm = r.get("unlock_name") or idata.item_name(unlock)
+            if not scroll_nm or scroll_nm == unlock:
+                scroll_nm = unlock.replace("Recipe_", "").replace("_", " ") + " Scroll"
+            src_ic.setPixmap(icons.item_tile(unlock, scroll_nm, 26, theme.GOLD))
+            src_box.addWidget(src_ic)
+
+            src_lbl = QtWidgets.QLabel(scroll_nm)
+            src_lbl.setStyleSheet(
+                f"color:{theme.GOLD};font-size:12px;font-weight:600;background:transparent;")
+            src_lbl.setToolTip(f"Recipe drops as a scroll / tome item ({scroll_nm})")
+        else:
+            src_ic.setPixmap(icons.tile_ui("check", 26, theme.GOOD))
+            src_box.addWidget(src_ic)
+
+            src_lbl = QtWidgets.QLabel(f"Auto-Learned (LV {r.get('level', 1)})")
+            src_lbl.setStyleSheet(
+                f"color:{theme.GOOD};font-size:12px;font-weight:500;background:transparent;")
+            src_lbl.setToolTip(f"Automatically unlocked upon reaching {job_name} level {r.get('level', 1)}")
+
+        src_lbl.setTextFormat(QtCore.Qt.PlainText)
+        src_box.addWidget(src_lbl, 1)
+        rl.addWidget(src_widget)
+
+        return row
+
+    def _craft_jump_from_jobs_tab(self, item_id: str) -> None:
+        """Switch from Jobs tab to Recipes tab and focus the selected recipe."""
+        if hasattr(self, "_nav_history") and not getattr(self._nav_history, "_restoring", False):
+            self._nav_history.record("craft:Jobs", "craft:Recipes")
+        self._craft_active_tab = "Recipes"
+        self._craft_tabs.setCurrentText("Recipes")
+        self._craft_tab_changed("Recipes", record_history=False)
+        self._craft_jump_to_recipe(item_id)
+
+    def _jobs_filter_job(self, jid: str) -> None:
+        self._jobs_active_job = jid
+        for j, chip in self._jobs_job_chips.items():
+            chip.setChecked(j == jid)
+        self._filter_jobs_page()
+
+    def _jobs_toggle_dropped_only(self) -> None:
+        self._jobs_dropped_only = not getattr(self, "_jobs_dropped_only", False)
+        if self._jobs_dropped_only:
+            self._jobs_count_btn.setStyleSheet(
+                f"QPushButton {{ color:{theme.BG}; font-family:'{theme.MONO_FONT}'; font-size:11px; font-weight:700; "
+                f"background:{theme.GOLD}; border:1px solid {theme.GOLD}; "
+                f"border-radius:4px; padding:3px 8px; }}"
+                f"QPushButton:hover {{ background:{theme.GOLD}; }}")
+        else:
+            self._jobs_count_btn.setStyleSheet(
+                f"QPushButton {{ color:{theme.GOLD}; font-family:'{theme.MONO_FONT}'; font-size:11px; font-weight:700; "
+                f"background:{theme.with_alpha(theme.GOLD, 20)}; border:1px solid {theme.with_alpha(theme.GOLD, 80)}; "
+                f"border-radius:4px; padding:3px 8px; }}"
+                f"QPushButton:hover {{ background:{theme.with_alpha(theme.GOLD, 40)}; }}")
+        self._filter_jobs_page()
+
+    def _filter_jobs_page(self) -> None:
+        if not hasattr(self, "_jobs_rows"):
+            return
+        q = (self._jobs_search.text() if hasattr(self, "_jobs_search") else "").strip().lower()
+        active_j = getattr(self, "_jobs_active_job", "")
+        dropped_only = getattr(self, "_jobs_dropped_only", False)
+        vis_cnt = 0
+        for row_w, r in self._jobs_rows:
+            if dropped_only and not r.get("unlock"):
+                row_w.setVisible(False)
+                continue
+            match_job = not active_j or r.get("job") == active_j
+            if not match_job:
+                row_w.setVisible(False)
+                continue
+            if not q:
+                row_w.setVisible(True)
+                vis_cnt += 1
+                continue
+            hay = f"{r.get('name', '')} {r.get('job_name', '')} {r.get('job', '')} lv {r.get('level', '')} {r.get('unlock_name', '')}".lower()
+            match_q = q in hay
+            row_w.setVisible(match_q)
+            if match_q:
+                vis_cnt += 1
+        if hasattr(self, "_jobs_count_btn"):
+            if dropped_only:
+                self._jobs_count_btn.setText(f"📜 {vis_cnt} DROPPED RECIPES")
+            else:
+                self._jobs_count_btn.setText(f"{vis_cnt} RECIPES")
 
     def _craft_chip_clicked(self, jid: str) -> None:
         if self._craft_job == jid:
@@ -168,13 +434,35 @@ class CraftPageBase:
             self._craft_show(item)
 
     def _craft_tab_changed(self, text: str, record_history: bool = True) -> None:
+        target_name = "Craft List" if text.startswith("Craft List") else text
+        old_tab = getattr(self, "_craft_active_tab", "Recipes")
         if record_history and hasattr(self, "_nav_history") and not getattr(self._nav_history, "_restoring", False):
-            old_tab = "Craft List" if text == "Recipes" else "Recipes"
-            self._nav_history.record(f"craft:{old_tab}", f"craft:{text}")
-        if text == "Craft List":
+            if old_tab != target_name:
+                self._nav_history.record(f"craft:{old_tab}", f"craft:{target_name}")
+        self._craft_active_tab = target_name
+
+        if text.startswith("Craft List"):
             self._craft_ensure_rail()
-        if hasattr(self, "_craft_stack"):
-            self._craft_stack.setCurrentIndex(0 if text == "Recipes" else 1)
+            if hasattr(self, "_craft_stack"):
+                self._craft_stack.setCurrentIndex(2)
+        elif text == "Jobs":
+            self._craft_ensure_jobs()
+            if hasattr(self, "_craft_stack"):
+                self._craft_stack.setCurrentIndex(1)
+        else:
+            if hasattr(self, "_craft_stack"):
+                self._craft_stack.setCurrentIndex(0)
+
+    def _craft_ensure_jobs(self) -> None:
+        if getattr(self, "_jobs_page_built", False):
+            return
+        self._jobs_page_built = True
+        jobs_page = self._build_jobs_page()
+        if hasattr(self, "_craft_jobs_placeholder") and self._craft_jobs_placeholder is not None:
+            self._craft_stack.removeWidget(self._craft_jobs_placeholder)
+            self._craft_jobs_placeholder.deleteLater()
+            self._craft_jobs_placeholder = None
+        self._craft_stack.insertWidget(1, jobs_page)
 
     def _craft_ensure_rail(self) -> None:
         if getattr(self, "_craft_rail_built", False):
@@ -188,6 +476,8 @@ class CraftPageBase:
         row_h = detail._craft_row_height(self._craft_list.font())
         job_order = list(_CRAFT_JOB_CHIPS) + [j for j in idata.craft_jobs() if j not in _CRAFT_JOB_CHIPS]
         self._craft_job_order = job_order
+        lazy_items: list[tuple[QtWidgets.QListWidgetItem, dict, str]] = []
+        first_job = "Blacksmith"
         for jid in job_order:
             group = [r for r in self._craft_all if r["job"] == jid]
             if not group:
@@ -205,19 +495,38 @@ class CraftPageBase:
                 col = theme.rarity_color(r.get("rarity") or "")
                 li = QtWidgets.QListWidgetItem(text)
                 li.setForeground(QtGui.QColor(col))
-
-                # Smart icon resolution (Centralized in icons.item_tile)
-                li.setIcon(QtGui.QIcon(icons.item_tile(r["item"], r["name"], detail.LIST_ICON, col)))
                 li.setSizeHint(QtCore.QSize(0, row_h))
                 li.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
                 li.setData(detail.ID_ROLE, r["item"])
                 li.setData(detail.DATA_ROLE, r)
                 li.setData(detail.QUEUED_ROLE, r["item"] in self._craft_queued_ids())
+                if jid == first_job:
+                    li.setIcon(QtGui.QIcon(icons.item_tile(r["item"], r["name"], detail.LIST_ICON, col)))
+                else:
+                    lazy_items.append((li, r, col))
                 self._craft_list.addItem(li)
         self._craft_list.blockSignals(False)
+        self._craft_fill_icons(lazy_items)
 
-    def _craft_fill_icons(self, batch: int = 160) -> None:
-        pass
+    def _craft_fill_icons(self, items_to_fill: list[tuple], batch: int = 50) -> None:
+        if not items_to_fill:
+            return
+        idx = 0
+        timer = QtCore.QTimer(self._craft_list)
+        timer.setInterval(0)
+
+        def _tick():
+            nonlocal idx
+            end = min(idx + batch, len(items_to_fill))
+            for li, r, col in items_to_fill[idx:end]:
+                li.setIcon(QtGui.QIcon(icons.item_tile(r["item"], r["name"], detail.LIST_ICON, col)))
+            idx = end
+            if idx >= len(items_to_fill):
+                timer.stop()
+                timer.deleteLater()
+
+        timer.timeout.connect(_tick)
+        timer.start()
 
     def _craft_queued_ids(self) -> set[str]:
         return {e["item"] for e in self._craft_queue_get()}

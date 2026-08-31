@@ -13,6 +13,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from ... import components as C
+from ...layout import make_scroll
 from . import support
 from ....data import icons
 from ....data import items as idata
@@ -183,24 +184,20 @@ class ItemPageBase:
         v.addWidget(self._items_tabs)
 
         cols = QtWidgets.QHBoxLayout()
-        cols.setSpacing(24)
+        cols.setSpacing(16)
         left = QtWidgets.QVBoxLayout()
-        left.setSpacing(12)
-        self._items_search_header = C.SectionHeader("Search",
-                                                    tag=f"{len(all_items)} TOTAL")
-        # the result count reads next to the SEARCH title; the far right of
-        # the header row holds the gear-stat display-mode toggle
-        self._items_header_reflow(self._items_search_header)
-        self._items_stat_mode_btn = self._items_stat_mode_toggle()
-        self._items_search_header.layout().addWidget(self._items_stat_mode_btn)
-        left.addWidget(self._items_search_header)
-
-        self._items_search = QtWidgets.QLineEdit()
-        self._items_search.setPlaceholderText(
-            "Search name, type, id, stat or skill…")
-        self._items_search.setClearButtonEnabled(True)
+        left.setSpacing(10)
+        self._items_search = C.SearchInput(
+            "Search name, type, stat or skill…",
+            on_text_changed=self._items_refilter)
         self._items_search.setFixedHeight(34)
-        self._items_search.textChanged.connect(self._items_refilter)
+
+        self._items_stat_mode_btn = self._items_stat_mode_toggle()
+
+        self._items_search_header = C.SectionHeader("Search",
+                                                    tag=f"ITEMS {len(all_items)} TOTAL")
+        self._items_header_reflow(self._items_search_header)
+        left.addWidget(self._items_search_header)
 
         # Gear category is a plain value driven by the Quick tabs below — no
         # dropdown, the tabs ARE the category picker (Weapons/Armor/Jewelry)
@@ -310,10 +307,6 @@ class ItemPageBase:
         self._items_rebuild_filters()
 
         self._items_list = QtWidgets.QListWidget()
-        # 6px gutter between tiles: 4 columns (84px tiles) fit the Items
-        # column at the default window (the old 108px tiles only fit 3),
-        # and the row breathes instead of the 2px-packed look
-        self._items_list.setSpacing(6)
         # codex-style tile grid: icon-above-name tiles in columns, with the
         # full-width type-section rows wrapping the grid between types
         self._items_list.setViewMode(QtWidgets.QListView.IconMode)
@@ -321,6 +314,8 @@ class ItemPageBase:
         self._items_list.setMovement(QtWidgets.QListView.Static)
         self._items_list.setWrapping(True)
         self._items_list.setWordWrap(True)
+        # setSpacing MUST be called after setViewMode (setViewMode resets it to 0)
+        self._items_list.setSpacing(9)
         # pixel-based scrolling: ScrollPerItem (the Qt default) counts rows,
         # and the mixed header/tile heights make scrolls jump by whole rows
         self._items_list.setVerticalScrollMode(
@@ -335,9 +330,7 @@ class ItemPageBase:
         self._items_list.setItemDelegate(support.TileDelegate(self._items_list))
         self._items_list.setStyleSheet(
             f"QListWidget{{background:{theme.PANEL};border:1px solid {theme.BORDER};outline:none;}}"
-            # no top padding: the tile name hugs the icon like the codex
-            # cards (a 5px top pad pushed the wrapped name away from it)
-            f"QListWidget::item{{padding:0px 8px 4px 8px;border-radius:4px;}}"
+            f"QListWidget::item{{padding:4px;margin:2px;border-radius:4px;}}"
             f"QListWidget::item:hover{{background:{theme.with_alpha(theme.ACCENT,15)};}}"
             f"QListWidget::item:selected{{background:{theme.with_alpha(theme.ACCENT,30)};"
             f"border:1px solid {theme.ACCENT};color:{theme.TEXT};}}")
@@ -345,13 +338,17 @@ class ItemPageBase:
         self._items_list.currentItemChanged.connect(self._items_show)
         self._items_list.itemClicked.connect(self._items_show)
 
-        left.addWidget(self._items_search)
         left.addWidget(self._items_filter_box)
         self._items_chips_box = QtWidgets.QWidget()
         self._items_chips_lay = support.FlowLayout(self._items_chips_box)
         self._items_chips_box.hide()
         left.addWidget(self._items_chips_box)
         left.addWidget(self._items_list, 1)
+        # the Dungeons tab's faction accordion swaps in place of the list
+        from .dungeon_view import DungeonView
+        self._items_dungeon_view = DungeonView(self)
+        self._items_dungeon_view.hide()
+        left.addWidget(self._items_dungeon_view, 1)
         cols.addLayout(left, 1)
 
         right = QtWidgets.QVBoxLayout()
@@ -374,13 +371,6 @@ class ItemPageBase:
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(12)
         bl.addLayout(cols, 1)
-        self._items_enchants_scroll = QtWidgets.QScrollArea()
-        self._items_enchants_scroll.setWidgetResizable(True)
-        self._items_enchants_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        # the two-column enchant layout can outgrow a narrow window, so
-        # horizontal scrolling appears when needed instead of clipping
-        self._items_enchants_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAsNeeded)
         self._items_enchants = QtWidgets.QWidget()
         el = QtWidgets.QVBoxLayout(self._items_enchants)
         el.setContentsMargins(0, 0, 0, 0)
@@ -390,7 +380,7 @@ class ItemPageBase:
         # build is deferred
         self._items_enchants_lay = el
         self._items_enchants_built = False
-        self._items_enchants_scroll.setWidget(self._items_enchants)
+        self._items_enchants_scroll = make_scroll(self._items_enchants, h_scroll=True)
         self._items_body = QtWidgets.QStackedWidget()
         self._items_body.addWidget(self._items_browse)            # 0
         self._items_body.addWidget(self._items_enchants_scroll)   # 1
@@ -405,40 +395,44 @@ class ItemPageBase:
         self._items_show(None)
         return page
 
-    @staticmethod
-    def _items_header_reflow(hdr) -> None:
-        """Group the search header as [tick][SEARCH][36 / 829] — the result
-        count right after the title, leaving the far right for the display
-        toggle."""
+    def _items_header_reflow(self, hdr) -> None:
+        """Lay out the header bar as: [SEARCH BOX (expanding)] [tick] [ITEMS 36 / 829] [STATS TOGGLE]"""
         lay = hdr.layout()
-        lay.removeWidget(hdr._tag)
-        lay.insertWidget(lay.indexOf(hdr._label) + 1, hdr._tag, 0,
-                         QtCore.Qt.AlignVCenter)
+        while lay.count():
+            lay.takeAt(0)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self._items_search, 1)
+        if hasattr(hdr, "_tick"):
+            lay.addWidget(hdr._tick, 0, QtCore.Qt.AlignVCenter)
+        if hasattr(hdr, "_tag"):
+            lay.addWidget(hdr._tag, 0, QtCore.Qt.AlignVCenter)
+        lay.addWidget(self._items_stat_mode_btn, 0, QtCore.Qt.AlignVCenter)
 
     # gear-stat display mode toggle — the search header's right-side button
-    # shows the current value form as a live sample; clicking cycles
-    # Rounded -> Exact -> Both and re-renders every stat surface
-    _STAT_MODE_SAMPLES = {
-        "rounding": "16",
-        "true": "15.987",
-        "both": "16 (15.987)",
+    # shows the current value form; clicking cycles
+    # Rounded -> Exact -> Both and re-renders the open item immediately
+    _STAT_MODE_LABELS = {
+        "rounding": "Stats: Rounded (16)",
+        "true": "Stats: Exact (15.987)",
+        "both": "Stats: Both",
     }
     _STAT_MODE_CYCLE = ("rounding", "true", "both")
 
     def _items_stat_mode_toggle(self) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(
-            self._STAT_MODE_SAMPLES.get(idata.stat_display_mode(), "16"))
+            self._STAT_MODE_LABELS.get(idata.stat_display_mode(), "Stats: Rounded (16)"))
         btn.setCursor(QtCore.Qt.PointingHandCursor)
-        btn.setToolTip("Gear stat values: click to cycle "
+        btn.setToolTip("Gear stat precision: click to cycle "
                        "Rounded (16) → Exact (15.987) → Both (16 (15.987))")
         btn.setStyleSheet(
             f'QPushButton{{color:{theme.ACCENT};'
             f'font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
-            f"background:{theme.with_alpha(theme.ACCENT, 12)};"
-            f"border:1px solid {theme.with_alpha(theme.ACCENT, 80)};"
-            "border-radius:4px;padding:1px 8px;font-size:11px;"
+            f"background:{theme.with_alpha(theme.ACCENT, 14)};"
+            f"border:1px solid {theme.with_alpha(theme.ACCENT, 70)};"
+            "border-radius:4px;padding:2px 10px;font-size:11px;"
             "font-weight:700;letter-spacing:0.5px;}"
-            f"QPushButton:hover{{background:{theme.with_alpha(theme.ACCENT, 26)};}}")
+            f"QPushButton:hover{{background:{theme.with_alpha(theme.ACCENT, 28)};border-color:{theme.ACCENT};}}")
         btn.clicked.connect(self._items_cycle_stat_mode)
         return btn
 
@@ -447,9 +441,9 @@ class ItemPageBase:
         nxt = self._STAT_MODE_CYCLE[
             (self._STAT_MODE_CYCLE.index(cur) + 1) % len(self._STAT_MODE_CYCLE)]
         idata.set_stat_display_mode(nxt)
-        self._items_stat_mode_btn.setText(self._STAT_MODE_SAMPLES[nxt])
-        # re-render the open item's stat tables and the farm rows so the
-        # new form shows everywhere immediately
+        self._items_stat_mode_btn.setText(self._STAT_MODE_LABELS[nxt])
+        # Reset shown id so _items_show immediately re-renders the current item's stats
+        self._items_shown_id = None
         self._items_show(self._items_list.currentItem())
         if getattr(self, "_items_mode", "") == "farm":
             self._items_show_farm()

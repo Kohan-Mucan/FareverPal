@@ -9,24 +9,24 @@ from . import theme
 class _TabBtn(QtWidgets.QAbstractButton):
     """Underline tab button with active accent pill."""
 
-    def __init__(self, text: str, parent=None):
+    def __init__(self, text: str, parent=None, font_size: int = 14):
         super().__init__(parent)
+        self._font_size = font_size
         self.setText(text)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setAttribute(QtCore.Qt.WA_Hover, True)
         self._active = False
 
-    @staticmethod
-    def _font() -> QtGui.QFont:
+    def _font(self) -> QtGui.QFont:
         f = QtGui.QFont(theme.MONO_FONT)
-        f.setPixelSize(12)
+        f.setPixelSize(self._font_size)
         f.setBold(True)
         f.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 1)
         return f
 
     def sizeHint(self) -> QtCore.QSize:
         fm = QtGui.QFontMetrics(self._font())
-        return QtCore.QSize(fm.horizontalAdvance(self.text().upper()) + 30, 28)
+        return QtCore.QSize(fm.horizontalAdvance(self.text().upper()) + 30, max(30, self._font_size + 16))
 
     def set_active(self, on: bool) -> None:
         self._active = on
@@ -66,14 +66,16 @@ class UnderlineTabs(QtWidgets.QWidget):
 
     currentChanged = QtCore.Signal(str)
 
-    def __init__(self, options: list[str], current: str | None = None, parent=None):
+    def __init__(self, options: list[str], current: str | None = None,
+                 parent=None, font_size: int = 14):
         super().__init__(parent)
+        self._font_size = font_size
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(0, 4, 0, 5)
         lay.setSpacing(18)
         self._btns: dict[str, _TabBtn] = {}
         for opt in options:
-            b = _TabBtn(opt, self)
+            b = _TabBtn(opt, parent=self, font_size=self._font_size)
             b.clicked.connect(lambda _=False, t=opt: self._pick(t))
             lay.addWidget(b)
             self._btns[opt] = b

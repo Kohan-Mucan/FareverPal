@@ -27,8 +27,13 @@ _USE_ITEM_SOURCE_CAPS = os.environ.get("FAREVER_SOURCE_CAPS") == "1"
 
 
 def _item_scale_cap(item_id: str) -> int:
-    """The top of the gear-scale slider: the global max gear level (35), or the
-    item's real-source cap when the FAREVER_SOURCE_CAPS failsafe is on."""
+    """The top of the gear-scale slider: deliberately LOCKED at 35 until the
+    max-level update ships (~2 months out). The stat curves are authored to
+    L50 (`LevelScalingFormula_EarlyMaxLevel`), but WEAPON upgrade steps stop
+    gaining stats around L45 — at 50 every rarity column collapses to the
+    same base — so previewing 45+ would show fake numbers. Armor is unaffected
+    (no upgrades, base level only), but the shared cap waits for the update.
+    FAREVER_SOURCE_CAPS=1 swaps in the item's real-source cap instead."""
     if _USE_ITEM_SOURCE_CAPS:
         return idata.item_scale_max_level(item_id)
     return 35
@@ -36,6 +41,19 @@ def _item_scale_cap(item_id: str) -> int:
 
 class ItemDetailMixin:
     # --- detail ----------------------------------------------------------
+    def _items_show_id(self, iid: str | None) -> None:
+        """Detail render for an arbitrary item id — the Dungeons tab's
+        tiles jump here instead of going through the list selection."""
+        if getattr(self, "_items_category", "") == "@dungeon":
+            self._dg_pane_state = "item"
+        class _Row:
+            def __init__(self, iid):
+                self._iid = iid
+
+            def data(self, role):
+                return self._iid if role == support.ID_ROLE else None
+        self._items_show(_Row(iid))
+
     def _items_show(self, current):
         if not hasattr(self, "_items_detail_lay"):
             return
@@ -217,8 +235,8 @@ class ItemDetailMixin:
             self._items_stat_block = stat_block
             lay.addWidget(stat_block)
 
-        # drops from — the boss rows when the item has a boss (the random
-        # faction crate/mob rows are noise), else every merged source
+        # drops from — gear with a boss shows its faction's dungeon bosses
+        # (see shown_drops); everything else lists every merged source
         drops = idata.shown_drops(it["id"])
         # mounts/gliders: the codex card authors the exact vendors and mobs
         # (the scan infers loot-table families) — prefer it when the card
@@ -231,8 +249,7 @@ class ItemDetailMixin:
         dl2.setContentsMargins(0, 0, 0, 0)
         dl2.setSpacing(10)
         # the tag counts the sources the body actually shows (node size
-        # variants merged) and pluralizes — boss-only rows are usually a
-        # single source
+        # variants merged) and pluralizes
         shown = len(_deduped_drops(drops))
         dl2.addWidget(C.SectionHeader(
             "Drops From",

@@ -43,7 +43,7 @@ class LoginDialog(QtWidgets.QDialog):
         head = QtWidgets.QLabel("Sign in")
         head.setObjectName("H1")
         v.addWidget(head)
-        sub = QtWidgets.QLabel("Use your farever-pals.com account to sync runs + settings.")
+        sub = QtWidgets.QLabel("Use your legacy farever-pals.com website account to sync runs + settings.")
         sub.setObjectName("Muted")
         sub.setWordWrap(True)
         v.addWidget(sub)
@@ -217,6 +217,7 @@ class AccountMixin:
             btn = QtWidgets.QPushButton("SIGN IN")
             btn.setObjectName("Outline")
             btn.setCursor(QtCore.Qt.PointingHandCursor)
+            btn.setToolTip("Sign in to legacy farever-pals.com website account")
             btn.setMinimumHeight(32)
             btn.clicked.connect(self._open_login)
             self._acct_btn = btn

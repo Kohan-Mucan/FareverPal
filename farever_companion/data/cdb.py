@@ -26,6 +26,16 @@ try:
 except ImportError:
     raw_skills = None
 
+try:
+    from . import raw_craft
+except ImportError:
+    raw_craft = None
+
+try:
+    from . import raw_locs
+except ImportError:
+    raw_locs = None
+
 
 @lru_cache(maxsize=None)
 def sheet(name: str) -> dict:
@@ -57,6 +67,10 @@ def sheet(name: str) -> dict:
             data = raw_items.DATA.get("items")
         elif name in ("skill", "skills") and raw_skills:
             data = raw_skills.DATA.get("skills")
+        elif name in ("craft", "recipes", "jobs") and raw_craft:
+            data = raw_craft.DATA.get(name if name != "craft" else "recipes")
+        elif raw_locs and name in raw_locs.DATA:
+            data = raw_locs.DATA.get(name)
 
     if data is not None:
         if isinstance(data, dict) and name == "ATLAS_DATA":

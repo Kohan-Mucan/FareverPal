@@ -12,6 +12,7 @@ import time
 from PySide6 import QtCore
 
 from .net import _get_farever_pid, _get_ip_country, _get_tcp_connections, _reverse_dns
+from ...workers import register as _register_worker
 
 
 class _PingWorker(QtCore.QThread):
@@ -23,6 +24,7 @@ class _PingWorker(QtCore.QThread):
         self._regions = regions
         self._active_codes = active_codes
         self._running = True
+        _register_worker(self)
 
     def stop(self):
         self._running = False
@@ -96,6 +98,7 @@ class _ConnectionScanWorker(QtCore.QThread):
     def __init__(self):
         super().__init__()
         self._running = False
+        _register_worker(self)
 
     def stop(self):
         self._running = False
@@ -165,6 +168,7 @@ class _TraceWorker(QtCore.QThread):
         self.mode = mode
         self._proc = None
         self._running = True
+        _register_worker(self)
 
     def stop(self):
         self._running = False
@@ -236,6 +240,7 @@ class _SteamPlayerCountWorker(QtCore.QThread):
         super().__init__()
         self._app_id = app_id
         self._running = True
+        _register_worker(self)
 
     def stop(self):
         self._running = False

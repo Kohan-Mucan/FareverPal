@@ -43,7 +43,7 @@ except Exception:
 # --- data: in-repo assets (always present) ---------------------------------
 datas = [
     ("assets/fonts", "assets/fonts"),
-    ("assets/icons_ui", "assets/icons_ui"),
+    ("assets/icons", "assets/icons"),
     ("assets/map", "assets/map"),
     ("assets/app_icon.png", "assets"),
     ("assets/app_icon.ico", "assets"),
@@ -238,6 +238,7 @@ a = Analysis(
         "farever_companion.data.raw_skills",
         "farever_companion.data.raw_craft",
         "farever_companion.data.raw_item_drops",
+        "farever_companion.data.raw_locs",
     ],
     hookspath=[],
     hooksconfig={},

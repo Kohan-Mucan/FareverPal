@@ -41,6 +41,24 @@ class _TitleBar(QtWidgets.QFrame):
         self.codex_btn.setVisible(False)
         lay.addWidget(self.codex_btn, 0, QtCore.Qt.AlignVCenter)
 
+        self.dungeon_btn = QtWidgets.QPushButton()
+        self.dungeon_btn.setObjectName("Icon")
+        self.dungeon_btn.setIcon(QtGui.QIcon(icons.marker(
+            "dungeon", 16, accent=theme.KIND_COLOR.get("dungeon", "#7c3aed"))))
+        self.dungeon_btn.setToolTip("Open Dungeon List")
+        self.dungeon_btn.clicked.connect(window._on_dungeon_list_clicked)
+        self.dungeon_btn.setVisible(False)
+        lay.addWidget(self.dungeon_btn, 0, QtCore.Qt.AlignVCenter)
+
+        self.soulstone_btn = QtWidgets.QPushButton()
+        self.soulstone_btn.setObjectName("Icon")
+        self.soulstone_btn.setIcon(QtGui.QIcon(icons.marker(
+            "soulstone", 16, accent=theme.KIND_COLOR.get("soulstone"))))
+        self.soulstone_btn.setToolTip("Open Soulstone List")
+        self.soulstone_btn.clicked.connect(window._on_soulstones_clicked)
+        self.soulstone_btn.setVisible(False)
+        lay.addWidget(self.soulstone_btn, 0, QtCore.Qt.AlignVCenter)
+
         self.cog_btn = QtWidgets.QPushButton()
         self.cog_btn.setObjectName("Icon")
         self.cog_btn.setIcon(icons.ui_qicon("settings", theme.MUTED, 16))
@@ -128,6 +146,13 @@ class OverlayWindow(QtWidgets.QWidget):
         self.content.setSpacing(6)
 
 
+        if settings is not None:
+            self._is_bare = getattr(settings, f"{self._geo_key}_bare", False)
+            self._is_transparent = getattr(settings, f"{self._geo_key}_transparent", False)
+            if self._is_bare:
+                self.titlebar.setVisible(False)
+            self._update_appearance()
+
         self._apply_style()        # tint to the saved accent (no-op if default)
         self._restore_geometry()
 
@@ -155,17 +180,7 @@ class OverlayWindow(QtWidgets.QWidget):
         self._is_bare = on
         self.titlebar.setVisible(not on)
         self._apply_style()
-        if on:
-            # For list-heavy overlays (Entity, DPS), keep a solid background so 
-            # they remain readable. Speedrun/Map stay fully transparent.
-            bg = "transparent"
-            if self._geo_key in ("entity", "dps", "skills", "droptable"):
-                bg = theme.PANEL
-            self._frame.setStyleSheet(f"background:{bg};border:0;")
-            self.content.setContentsMargins(0, 0, 0, 0)
-        else:
-            self._frame.setStyleSheet("")     # revert to the QSS #Card look
-            self.content.setContentsMargins(8, 6, 8, 8)
+        self._update_appearance()
 
         # Sync the checkbox in the main UI
         if hasattr(self, "_bare_sync_fn") and self._bare_sync_fn is not None:
@@ -177,6 +192,36 @@ class OverlayWindow(QtWidgets.QWidget):
             if hasattr(self._settings, attr):
                 setattr(self._settings, attr, on)
                 self._settings.save()
+
+    def set_transparent(self, on: bool) -> None:
+        """Transparent background mode."""
+        self._is_transparent = on
+        self._update_appearance()
+
+        if hasattr(self, "_transparent_sync_fn") and self._transparent_sync_fn is not None:
+            self._transparent_sync_fn(on)
+
+        if self._settings is not None:
+            attr = f"{self._geo_key}_transparent"
+            if hasattr(self._settings, attr):
+                setattr(self._settings, attr, on)
+                self._settings.save()
+
+    def _update_appearance(self) -> None:
+        bare = getattr(self, "_is_bare", False)
+        trans = getattr(self, "_is_transparent", False)
+        if trans:
+            self._frame.setStyleSheet("background:transparent;border:0;")
+            if bare:
+                self.content.setContentsMargins(0, 0, 0, 0)
+            else:
+                self.content.setContentsMargins(8, 6, 8, 8)
+        elif bare:
+            self._frame.setStyleSheet(f"background:{theme.PANEL};border:0;")
+            self.content.setContentsMargins(0, 0, 0, 0)
+        else:
+            self._frame.setStyleSheet("")     # revert to the QSS #Card look
+            self.content.setContentsMargins(8, 6, 8, 8)
 
     def mouseDoubleClickEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton:
@@ -201,6 +246,12 @@ class OverlayWindow(QtWidgets.QWidget):
 
     def _on_codex_clicked(self) -> None:
         self.request_page.emit("codex")
+
+    def _on_dungeon_list_clicked(self) -> None:
+        self.request_page.emit("codex:Dungeons:list")
+
+    def _on_soulstones_clicked(self) -> None:
+        self.request_page.emit("codex:Dungeons:soulstones")
 
     # --- click-through (Win32) ------------------------------------------
     def set_click_through(self, on: bool) -> None:

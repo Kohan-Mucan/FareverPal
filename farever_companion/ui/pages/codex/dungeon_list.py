@@ -77,7 +77,7 @@ class DungeonListCell(QtWidgets.QFrame):
         if icon_id:
             icon.set_outlined("units", icon_id, accent=theme.GOLD, border=2)
         else:
-            icon.set_marker("dungeon", theme.GOLD, outlined=True)
+            icon.set_marker("dungeon", theme.KIND_COLOR.get("dungeon", "#7c3aed"), outlined=True)
         lay.addWidget(icon)
 
         txt = QtWidgets.QVBoxLayout()

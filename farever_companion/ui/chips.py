@@ -4,74 +4,7 @@ from __future__ import annotations
 from PySide6 import QtCore, QtWidgets
 
 from . import theme
-
-
-class _FlowLayout(QtWidgets.QLayout):
-    """Wrapping layout for chip controls."""
-
-    def __init__(self, parent=None, spacing: int = 6):
-        super().__init__(parent)
-        self.setSpacing(spacing)
-        self._items: list = []
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def itemAt(self, index):
-        return self._items[index] if 0 <= index < len(self._items) else None
-
-    def takeAt(self, index):
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
-
-    def expandingDirections(self):
-        return QtCore.Qt.Orientations(QtCore.Qt.Orientation(0))
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self._do_layout(QtCore.QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        parent = self.parentWidget()
-        width = parent.width() if parent is not None else 0
-        return self.minimumSize() if width <= 0 else QtCore.QSize(width, self.heightForWidth(width))
-
-    def minimumSize(self):
-        size = QtCore.QSize()
-        for it in self._items:
-            w = it.widget()
-            if w is not None and not w.isHidden():
-                size = size.expandedTo(it.minimumSize())
-        return size
-
-    def _do_layout(self, rect: QtCore.QRect, test_only: bool) -> int:
-        x, y = rect.x(), rect.y()
-        line_h, used = 0, 0
-        space = self.spacing()
-        right = rect.right()
-        for it in self._items:
-            w = it.widget()
-            if w is None or w.isHidden():
-                continue
-            hint = w.sizeHint()
-            if x + hint.width() > right and line_h > 0:
-                x = rect.x()
-                y += line_h + space
-                line_h = 0
-            if not test_only:
-                it.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), hint))
-            x += hint.width() + space
-            line_h = max(line_h, hint.height())
-            used = max(used, y + hint.height())
-        return used
+from .layout import FlowLayout
 
 
 class ChoiceChips(QtWidgets.QWidget):
@@ -88,7 +21,7 @@ class ChoiceChips(QtWidgets.QWidget):
             lbl = QtWidgets.QLabel(label.upper())
             lbl.setObjectName("FieldLabel")
             v.addWidget(lbl)
-        row = _FlowLayout()
+        row = FlowLayout(spacing=6)
         row.setContentsMargins(0, 0, 0, 0)
         v.addLayout(row)
         self._data = [""] + [d for d, _ in options]

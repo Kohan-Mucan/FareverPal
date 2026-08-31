@@ -55,6 +55,8 @@ class EntityGatherMixin:
                 self._orbs = []
                 self._gatherables = []
                 self._chests = []
+                self._loots = []
+                self._foods = []
                 self._static_pois = []
                 return
         except Exception:
@@ -367,12 +369,41 @@ class EntityGatherMixin:
                     changed = True
 
         # 2. World Orbs (RedOrb_World)
-        # Glow disappears reliably when collected
-        for oid, glow in self.model.world_orb_fx():
+        # Glow disappears reliably when collected. Live elements resolve to
+        # the nearest STATIC placement (instance ids don't correspond to the
+        # prefab ids done lists / the entity-list filter key on).
+        for oid, glow, ox, oy in self.model.world_orb_fx():
+            orb = geo_orbs.nearest_orb(ox, oy)
+            if orb is None:
+                continue
+            sid = orb.orb_id
             if not glow:
-                if oid not in done_list:
-                    done_list.append(oid)
+                newly_collected = sid not in done_list
+                if newly_collected:
+                    done_list.append(sid)
                     changed = True
+                # Tracking hand-off: picked up the orb the compass is
+                # tracking -> clear it and auto-track the next nearest
+                # uncollected orb. Guarded by distance so a LOD-missing
+                # glow far away can't yank the needle across the map.
+                if (newly_collected and self._tracker is not None
+                        and self.s.track_kind == "orb"
+                        and self.s.track_id == sid):
+                    near_enough = orb.dist2d(xyz[0], xyz[1]) <= 30.0
+                    if near_enough:
+                        nxt = min(
+                            (o for o in geo_orbs.load_orbs()
+                             if o.orb_id != sid and o.orb_id not in done_list),
+                            key=lambda o: o.dist2d(xyz[0], xyz[1]),
+                            default=None)
+                        if nxt is not None:
+                            self._tracker.track("orb", nxt.orb_id)
+                        else:
+                            self._tracker.clear()
+            elif sid in done_list:
+                # glowing again = live truth says not collected after all
+                done_list.remove(sid)
+                changed = True
             # Note: We don't automatically un-mark orbs because glow can be missing
             # during load transitions or distance LOD. Manual reset only.
 
@@ -465,6 +496,19 @@ class EntityGatherMixin:
             raw_chests = [c for c in raw_chests if not _is_done(c.chest_id)]
 
         self._chests = raw_chests[:self.s.chest_count]
+
+        # Dropped loot on the ground (ent.interactible.LootDrop) — the
+        # dungeon HUD owns rift loot; the overworld list shows the rest
+        self._loots = self.model.loot_drops(
+            max_dist=eff_max_dist, use_2d=True) \
+            if getattr(self.s, "show_loot", True) else []
+
+        # Player-placed food (Plainswalker Feast, alchemist cauldrons, ...)
+        try:
+            self._foods = self.model.food_stations(
+                max_dist=eff_max_dist, use_2d=True)
+        except Exception:
+            self._foods = []
 
         if self.s.track_kind == "chest" and self.s.track_id:
             try:

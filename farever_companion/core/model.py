@@ -18,7 +18,11 @@ from .damage_source import DamageSourceManager
 from .rift_tracker import RiftTracker, RiftStatus
 from . import attributes
 from ..combat.dps import DpsMeter
-from ..constants import OFF_HERO_OWNERPLAYER
+from ..constants import (OFF_HERO_OWNERPLAYER, OFF_FOE_TARGET_OBJ,
+                         OFF_FOE_TARGET_HERO, OFF_FOE_TARGET_ALT,
+                         OFF_FOE_TARGET_DIRECT, OFF_FOE_RECENT_HATE,
+                         OFF_FOE_HATE_LIST, AGGRO_SWEEP_BYTES,
+                         FOE_TARGET_HOLD_S, OFF_OWNER, OFF_PLAYER_NAME)
 from ..data import units as udata, encounters as encdata
 
 XYZ = tuple[float, float, float]
@@ -264,6 +268,186 @@ class LiveModel:
             pass
         return None
 
+    def _hero_player_ptr(self, hero_addr: int) -> int:
+        """ent.Hero -> st.Player, verified by runtime class. The owner slot
+        drifts between builds (0x498 historically; the 2026-08-24 diag shows
+        refl(ownerPlayer)=0x10 and refl(player)=0x4C0 both holding a live
+        st.Player while 0x498 holds garbage), so try every candidate and
+        trust only one whose class checks out."""
+        try:
+            tp = self.hl.ptr(hero_addr)
+        except Exception:
+            return 0
+        offs: list[int] = []
+        if tp:
+            for fname in ("ownerPlayer", "player"):
+                try:
+                    off = self.hl.field_offset(tp, fname)
+                    if off:
+                        offs.append(off)
+                except Exception:
+                    pass
+        offs += [OFF_HERO_OWNERPLAYER, OFF_OWNER]
+        seen: set[int] = set()
+        for off in offs:
+            if off in seen:
+                continue
+            seen.add(off)
+            try:
+                p = self.hl.ptr(hero_addr + off)
+                if p and self.hl.class_of(p) == "st.Player":
+                    return p
+            except Exception:
+                continue
+        return 0
+
+    def _player_name_at(self, player_ptr: int) -> str | None:
+        """Character name off a verified st.Player: reflection 'name' field
+        first, then the legacy 0xa8 fallback, then OFF_PLAYER_NAME."""
+        try:
+            ptype = self.hl.ptr(player_ptr)
+            refl = self.hl.field_offset(ptype, "name") if ptype else None
+            for off in (refl, 0xa8, OFF_PLAYER_NAME):
+                if not off:
+                    continue
+                strobj = self.hl.ptr(player_ptr + off)
+                if not strobj:
+                    continue
+                s = self.hl.hl_string(strobj)
+                if s:
+                    return s
+        except Exception:
+            pass
+        return None
+
+    def foe_target_line(self, el) -> str | None:
+        """Combined row text: '◎ Tank · ⚡ Hater' — target glyph follows the
+        boss's live target (never-blank fallback only), lightning marks the
+        top hate-list entry when it's someone else."""
+        disp, hate = self._foe_target_state(el)
+        parts = []
+        if disp:
+            parts.append(f"◎ {disp}")
+        if hate and hate != disp:
+            parts.append(f"⚡{hate}")
+        line = " · ".join(parts)
+        return line or None
+
+    def _foe_target_state(self, el):
+        """Full aggro read: (display_name, hate_name).
+
+        FOLLOWS LIVE: the row shows the boss's real current target every tick
+        (no debounce, no stale hold) so genuine retargets are visible at once.
+        The only smoothing is a never-blank fallback — if the live read comes
+        up empty on a tick (MAIN nulled between swings, transient read miss),
+        it keeps the last confirmed name for at most FOE_TARGET_HOLD_S before
+        clearing."""
+        import struct as _struct
+        try:
+            units = self.units()
+            heroes = {u.addr: u for u in units
+                      if getattr(u, "is_hero", False)}
+            if not heroes:
+                return None, None
+
+            seen: dict[int, int] = {}   # hero addr -> highest hate slot
+
+            # memoized per tick: the same hero can resolve twice (MAIN target
+            # and the top hate entry) without re-reading names from memory
+            names: dict[int, str | None] = {}
+
+            def resolve(hero) -> str | None:
+                addr = hero.addr
+                if addr in names:
+                    return names[addr]
+                # same proven resolution as the PLAYERS rows (player_name)
+                name = self.player_name(addr)
+                if not name:
+                    p = self._hero_player_ptr(addr)
+                    if p:
+                        name = self._player_name_at(p)
+                name = name or hero.unit_id or None
+                names[addr] = name
+                return name
+
+            def sweep(obj) -> None:
+                blk = self.proc.read(obj, AGGRO_SWEEP_BYTES)
+                for o2 in range(8, len(blk) - 7, 8):
+                    v = _struct.unpack_from("<Q", blk, o2)[0]
+                    if v in heroes and o2 > seen.get(v, -1):
+                        seen[v] = o2
+
+            # 1. MAIN target slot (+ BIG-BOSS direct slot fallback)
+            target_hero = None
+            try:
+                obj = self.hl.ptr(el.addr + OFF_FOE_TARGET_OBJ)
+                if obj:
+                    try:
+                        v = self.hl.ptr(obj + OFF_FOE_TARGET_HERO)
+                        if v in heroes:
+                            target_hero = heroes[v]
+                    except Exception:
+                        target_hero = None
+                    sweep(obj)
+            except Exception:
+                pass
+            if target_hero is None:
+                try:
+                    v = self.hl.ptr(el.addr + OFF_FOE_TARGET_DIRECT)
+                    if v in heroes:
+                        target_hero = heroes[v]
+                except Exception:
+                    target_hero = None
+
+            # 2. hate-list sweeps (also feed the hate_name column)
+            if not seen:
+                for base in (OFF_FOE_RECENT_HATE, OFF_FOE_HATE_LIST,
+                             OFF_FOE_TARGET_ALT):
+                    try:
+                        obj = self.hl.ptr(el.addr + base)
+                        if obj:
+                            sweep(obj)
+                    except Exception:
+                        continue
+
+            # 3. LIVE target this tick: the boss's real aggro.  Falls back to
+            #    the top hate-list entry when MAIN is empty.
+            now = time.time()
+            top_hate = None
+            if seen:
+                top_hate = heroes[max(seen.items(), key=lambda kv: kv[1])[0]]
+            cand = target_hero if target_hero is not None else top_hate
+            live_name = resolve(cand) if cand else None
+
+            # never-blank fallback: keep the last confirmed name for a short
+            # while if this tick read nothing (transient null between swings)
+            last = getattr(self, "_tgt_last", None)
+            if last is None:
+                last = self._tgt_last = {}
+            if live_name:
+                last[el.addr] = (now, live_name)
+            held = last.get(el.addr)
+            disp_name = live_name
+            if not disp_name and held \
+                    and now - held[0] < FOE_TARGET_HOLD_S:
+                disp_name = held[1]
+
+            # forget cache of foes that left the scene
+            live_addrs = {u.addr for u in units}
+            for k in [k for k in last if k not in live_addrs]:
+                last.pop(k, None)
+
+            # top hate entry that differs from the displayed target (⚡), only
+            # when the display is the live read — never a stale hold
+            hate_name = None
+            if top_hate and live_name and live_name == disp_name:
+                hn = resolve(top_hate)
+                if hn and hn != disp_name:
+                    hate_name = hn
+            return disp_name, hate_name
+        except Exception:
+            return None, None
+
     def are_in_same_group(self, other_hero_addr: int) -> bool:
         try:
             local_hero = self.player_addr
@@ -417,6 +601,40 @@ class LiveModel:
         except ProcError:
             return []
 
+    def loot_drops(self, max_dist: float = 0.0, use_2d: bool = False) -> list:
+        """Dropped loot (ent.interactible.LootDrop) in the loaded scene,
+        item ids resolved via st.Item.kind."""
+        try:
+            pxyz = self.player_xyz()
+            out = []
+            for d in self.scene.loot_drops(self.player_addr):
+                if max_dist > 0 and pxyz:
+                    dist = d.dist2d(pxyz[0], pxyz[1]) if use_2d \
+                        else d.dist(*pxyz)
+                    if dist > max_dist:
+                        continue
+                out.append(d)
+            return out
+        except ProcError:
+            return []
+
+    def food_stations(self, max_dist: float = 0.0, use_2d: bool = False) -> list:
+        """Player-placed food/consumables (WorldConsumable) in the scene,
+        display names resolved off their st.skill.Skill."""
+        try:
+            pxyz = self.player_xyz()
+            out = []
+            for f in self.scene.food_stations(self.player_addr):
+                if max_dist > 0 and pxyz:
+                    dist = f.dist2d(pxyz[0], pxyz[1]) if use_2d \
+                        else f.dist(*pxyz)
+                    if dist > max_dist:
+                        continue
+                out.append(f)
+            return out
+        except ProcError:
+            return []
+
     def live_orbs(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         """Dungeon secret orbs (InstanceOrb) in the loaded scene."""
         try:
@@ -496,16 +714,19 @@ class LiveModel:
 
     _FX_OFF_CACHE: dict[int, int | None] = {}
 
-    def world_orb_fx(self) -> list[tuple[str, bool]]:
-        """(orb_id, glow-fx present) for loaded world secret orbs. The fx
-        pointer is the reliable collected signal (collected = no fx)."""
+    def world_orb_fx(self) -> list[tuple[str, bool, float, float]]:
+        """(elem_id, glow-fx present, x, y) for loaded world secret orbs. The
+        fx pointer is the reliable collected signal (collected = no fx); the
+        position lets callers resolve the live element to the STATIC placement
+        id (instance ids don't correspond to prefab ids) done lists key on."""
         from ..constants import OFF_ELEM_FX
         out = []
         try:
             for e in self.scene.elements(self.player_addr):
                 if not (e.elem_id and e.elem_id.startswith("RedOrb_World")):
                     continue
-                out.append((e.elem_id, bool(self.hl.u64(e.addr + OFF_ELEM_FX))))
+                out.append((e.elem_id, bool(self.hl.u64(e.addr + OFF_ELEM_FX)),
+                            e.x, e.y))
         except ProcError:
             return []
         return out
@@ -597,6 +818,10 @@ class LiveModel:
             return self.scene.is_rift(self.player_addr)
         except ProcError:
             return False
+
+    def is_in_dungeon_or_rift(self) -> bool:
+        """True inside any dungeon or rift instance (dungeon overlay gate)."""
+        return self.is_in_dungeon() or self.is_in_rift()
 
     def rift_status(self) -> RiftStatus:
         return self.rift_tracker.get_status()

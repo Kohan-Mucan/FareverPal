@@ -12,6 +12,21 @@ from functools import lru_cache
 from .. import paths
 from . import raw_data
 
+# Dev-only source switch: when bypassed, `find_entry` returns None so every
+# icon renderer falls through to the loose fallback folder instead of the
+# compiled atlas. Driven by the (git-ignored) dev icon-preview page so a new
+# icon can be tested from the fallback folder before it is compiled in.
+_BYPASS = False
+
+
+def set_bypass(value: bool) -> None:
+    global _BYPASS
+    _BYPASS = bool(value)
+
+
+def bypass() -> bool:
+    return _BYPASS
+
 try:
     from . import raw_units
 except ImportError:
@@ -33,15 +48,40 @@ def data():
     """Atlas sprite-sheet coordinates. Merges all JSONs in the atlas folder.
     Returns a nested dict: {category_lower: {id_lower: entry_dict}}.
     Fallbacks and individual files without category go into a 'misc' category.
+    The embedded raw_* payloads and the bundled atlas JSONs ship in the same
+    coordinate space as the sheets (compiler.py compiles them together), so
+    no resolution scaling is needed here.
     """
     combined = {}
     atlas_dir = paths.atlas_dir()
     
     def _add_entry(entry_id, entry_val):
         cat = str(entry_val.get("category", "misc")).lower()
-        if cat not in combined:
-            combined[cat] = {}
-        combined[cat][entry_id.lower()] = entry_val
+        clean_id = str(entry_id).lower()
+        if clean_id.startswith("[") and "]" in clean_id:
+            clean_id = clean_id.split("]", 1)[1].strip()
+            
+        target_cats = {cat}
+        if cat.startswith("enemies") or cat in ("enemies", "units", "unit", "enemy"):
+            target_cats.update(["enemies", "units", "unit", "enemy"])
+        if cat.startswith("dungeon"):
+            target_cats.update(["dungeons", "dungeon", "enemies", "units", "unit"])
+        if cat.startswith("collection"):
+            target_cats.update(["collection", "units", "unit"])
+        if cat.startswith("item"):
+            target_cats.update(["items", "item"])
+        if cat.startswith("skill"):
+            target_cats.update(["skills", "skill"])
+        if cat.startswith("minimap") or cat in ("minimap", "map"):
+            target_cats.update(["minimap", "map", "map_icons", "map_icon"])
+            
+        clean_nodash = clean_id.replace("_", "").replace("-", "").replace(" ", "")
+        for c in target_cats:
+            if c not in combined:
+                combined[c] = {}
+            combined[c][clean_id] = entry_val
+            combined[c][str(entry_id).lower()] = entry_val
+            combined[c][clean_nodash] = entry_val
 
     # 1. Start with lazy-loaded module fallbacks (Lowest priority)
     from . import cdb
@@ -63,54 +103,86 @@ def data():
     for k, v in fallback.items():
         _add_entry(k, v)
                 
-    # 3. Merge all JSON files found in the atlas directory (Highest priority - Dev overrides)
+    # 3. Merge atlas JSON files found in the atlas directory (Highest priority - Dev overrides).
     if atlas_dir.exists():
-        for p in atlas_dir.glob("*.json"):
-            if "index" in p.name:
-                continue
+        _CATS = ("enemies", "items", "skills", "collection", "minimap", "dungeons", "units")
+        sheet_files = [
+            p for p in atlas_dir.glob("atlas_*.json")
+            if "index" not in p.name
+            and any(p.name.startswith(f"atlas_{c}") for c in _CATS)
+        ]
+        if not sheet_files:
+            legacy = atlas_dir / "atlas_map.json"
+            if legacy.exists():
+                sheet_files = [legacy]
+        for path in sorted(sheet_files):
             try:
-                content = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(content, dict):
-                    for key, value in content.items():
-                        _add_entry(key, value)
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                for k, v in entries.items():
+                    if isinstance(v, dict):
+                        _add_entry(k, v)
             except Exception:
-                continue
+                pass
             
     return combined
 
 _SHEET_MAP = {
-    "units": "enemies",
-    "unit": "enemies",
-    "enemies": "enemies",
-    "enemy": "enemies",
+    "units": "units",
+    "unit": "units",
+    "enemies": "units",
+    "enemy": "units",
     "items": "items",
     "item": "items",
     "skills": "skills",
     "skill": "skills",
+    "dungeons": "dungeons",
+    "dungeon": "dungeons",
     "collection": "collection",
+    "minimap": "minimap",
+    "map": "minimap",
+    "map_icons": "minimap",
+    "map_icon": "minimap",
 }
 
 def find_entry(category: str | None, entry_id: str):
-    """Search for an icon ID in the atlas, optionally preferring a category."""
+    """Search for an icon ID in the atlas, strictly scoping to the category when given."""
+    if _BYPASS:
+        return None
+    if not entry_id:
+        return None
     all_data = data()
-    entry_id = entry_id.lower()
+    entry_id = str(entry_id).lower().strip()
+    clean_id = entry_id
+    if clean_id.startswith("[") and "]" in clean_id:
+        clean_id = clean_id.split("]", 1)[1].strip()
+    clean_nodash = clean_id.replace("_", "").replace("-", "").replace(" ", "")
+
+    def _lookup(d):
+        if not d: return None
+        for k in (clean_id, entry_id, clean_nodash):
+            if k in d: return d[k]
+        return None
     
-    # 1. Try specified category (mapped to canonical plural if applicable)
+    # 1. Try specified category
     if category:
         cat = category.lower()
         cat = _SHEET_MAP.get(cat, cat)
-        if cat in all_data and entry_id in all_data[cat]:
-            return all_data[cat][entry_id]
-            
-    # 2. Try 'misc' or 'minimap' as common fallbacks
-    for fallback in ("misc", "minimap"):
-        if fallback in all_data and entry_id in all_data[fallback]:
-            return all_data[fallback][entry_id]
+        res = _lookup(all_data.get(cat))
+        if res:
+            return res
+        # Unit-family fallback (enemies / collection / dungeons)
+        if cat in ("units", "enemies", "collection", "dungeons", "unit", "enemy"):
+            for fallback in ("units", "enemies", "collection", "dungeons"):
+                res = _lookup(all_data.get(fallback))
+                if res:
+                    return res
+        return None
 
-    # 3. Last resort: search all categories
+    # 2. Only when no category is specified at all: search all categories
     for cat_dict in all_data.values():
-        if entry_id in cat_dict:
-            return cat_dict[entry_id]
+        res = _lookup(cat_dict)
+        if res:
+            return res
     return None
 
 @lru_cache(maxsize=None)

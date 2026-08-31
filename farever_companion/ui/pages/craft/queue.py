@@ -49,7 +49,7 @@ def _craft_source_hint(lay, drops: list[dict], on_codex_click,
         lbl = WrapLabel(f"← {_row_label(d)} · {spots} "
                         f"{'spot' if spots == 1 else 'spots'}")
         lbl.setStyleSheet(
-            f"color:{theme.MUTED};font-size:12px;background:transparent;")
+            f"color:{theme.MUTED};font-size:14px;background:transparent;")
         lbl.setContentsMargins(34, 0, 0, 0)
         lay.addWidget(lbl)
         return
@@ -71,7 +71,7 @@ class _TrashButton(QtWidgets.QPushButton):
     def __init__(self):
         super().__init__()
         self.setObjectName("TrashButton")
-        self.setFixedSize(26, 26)
+        self.setFixedSize(28, 28)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setStyleSheet(
             f"QPushButton{{background:transparent;"
@@ -82,8 +82,8 @@ class _TrashButton(QtWidgets.QPushButton):
         self._apply(theme.MUTED)
 
     def _apply(self, color: str) -> None:
-        self.setIcon(icons.ui_qicon("trash", color, 14))
-        self.setIconSize(QtCore.QSize(14, 14))
+        self.setIcon(icons.ui_qicon("trash", color, 16))
+        self.setIconSize(QtCore.QSize(16, 16))
 
     def enterEvent(self, e):
         self._apply(theme.DANGER)
@@ -104,7 +104,7 @@ def _crafted_tag(item_id: str, jump) -> QtWidgets.QPushButton:
         f"QPushButton{{color:{theme.ACCENT};"
         f"background:{theme.with_alpha(theme.ACCENT, 22)};"
         f"border:1px solid {theme.with_alpha(theme.ACCENT, 80)};"
-        "border-radius:4px;padding:1px 7px;font-size:10px;"
+        "border-radius:4px;padding:2px 8px;font-size:12px;"
         "font-weight:700;letter-spacing:1px;}"
         f"QPushButton:hover{{color:{theme.TEXT};"
         f"background:{theme.with_alpha(theme.ACCENT, 45)};}}")
@@ -229,20 +229,27 @@ class CraftQueueMixin:
         for it in bill["items"]:
             row = QtWidgets.QHBoxLayout()
             row.setSpacing(10)
+
+            b_it = idata.item(it["item"]) or {}
+            b_col = theme.rarity_color(b_it.get("rarity") or "")
+            b_tile = QtWidgets.QLabel()
+            b_tile.setFixedSize(28, 28)
+            b_tile.setPixmap(icons.item_tile(it["item"], it["name"], 28, b_col))
+
             done_cnt = fulfilled.get(it["item"], 0)
             gathered = done_cnt >= it["count"]
             rem = max(0, it["count"] - done_cnt)
             txt = QtWidgets.QLabel(self._craft_bill_row_text(
                 it["count"], rem, it["name"], gathered))
             txt.setTextFormat(QtCore.Qt.RichText)
-            txt.setStyleSheet(f"color:{theme.TEXT};background:transparent;")
+            txt.setStyleSheet(f"color:{theme.TEXT};font-size:15px;font-weight:600;background:transparent;")
             box = None
             if checkable:
                 box = QtWidgets.QCheckBox()
                 box.setChecked(gathered)
                 box.setStyleSheet(
                     f"QCheckBox{{background:transparent;}}"
-                    f"QCheckBox::indicator{{width:14px;height:14px;"
+                    f"QCheckBox::indicator{{width:16px;height:16px;"
                     f"border:1px solid {theme.BORDER};border-radius:3px;"
                     f"background:{theme.PANEL};}}"
                     f"QCheckBox::indicator:checked{{background:{theme.ACCENT};"
@@ -251,13 +258,14 @@ class CraftQueueMixin:
                     lambda checked, mid=it["item"], head=head, bill=bill, bl=bl, gdict=got:
                     self._craft_bill_flip(mid, head, bill, checked, bl, gdict))
                 row.addWidget(box, 0, QtCore.Qt.AlignVCenter)
+            row.addWidget(b_tile, 0, QtCore.Qt.AlignVCenter)
             row.addWidget(txt, 1)
             got_tag = QtWidgets.QLabel("✓")
             got_tag.setStyleSheet(
                 f"color:{theme.GOOD};background:{theme.with_alpha(theme.GOOD, 16)};"
                 f"border:1px solid {theme.with_alpha(theme.GOOD, 70)};"
                 "border-radius:3px;padding:1px 6px;font-weight:700;"
-                "font-size:11px;")
+                "font-size:13px;")
             got_tag.setVisible(gathered)
             row.addWidget(got_tag, 0, QtCore.Qt.AlignVCenter)
             if it["crafted"]:
@@ -528,16 +536,16 @@ class CraftQueueMixin:
             rar = idata.item_display_rarity(iid)
             col = theme.rarity_color(rar)
             row = QtWidgets.QHBoxLayout()
-            row.setSpacing(8)
+            row.setSpacing(10)
             icon = QtWidgets.QLabel()
-            icon.setFixedSize(34, 34)
+            icon.setFixedSize(36, 36)
 
             # Smart icon resolution (Centralized in icons.item_tile)
-            icon.setPixmap(icons.item_tile(iid, iname, 34, col))
+            icon.setPixmap(icons.item_tile(iid, iname, 36, col))
             row.addWidget(icon, 0, QtCore.Qt.AlignVCenter)
             nm = WrapLabel(
                 f'<a href="open" style="color:{theme.ACCENT};'
-                'text-decoration:none;">'
+                'text-decoration:none;font-size:15px;font-weight:700;">'
                 f"{html.escape(e['name'])}</a>")
             nm.setOpenExternalLinks(False)
             nm.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
@@ -545,7 +553,7 @@ class CraftQueueMixin:
                 lambda _=None, mid=e["item"]: self._craft_jump_to_recipe(mid))
             row.addWidget(nm, 1)
             step = C.Stepper(value=e["qty"], lo=1, hi=999)
-            step.setFixedWidth(84)
+            step.setFixedWidth(90)
             step.valueChanged.connect(
                 lambda v, idx=i: self._craft_queue_set_qty(idx, v))
             row.addWidget(step, 0, QtCore.Qt.AlignVCenter)
@@ -562,24 +570,24 @@ class CraftQueueMixin:
         bill = idata.craft_bill_many(
             tuple((e["item"], e["qty"]) for e in queue))
         footer = QtWidgets.QHBoxLayout()
-        footer.setSpacing(8)
+        footer.setSpacing(10)
         self._craft_rail_total_gold = None
         if bill:
             total = QtWidgets.QLabel(f"TOTAL GOLD · {bill['gold']:,.0f}" if bill.get("gold") else "")
             total.setStyleSheet(
                 f'color:{theme.ORANGE};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
-                "font-size:12px;font-weight:700;background:transparent;")
+                "font-size:14px;font-weight:700;background:transparent;")
             self._craft_rail_total_gold = total
             footer.addWidget(total)
         footer.addStretch(1)
         clear = QtWidgets.QPushButton("CLEAR")
-        clear.setIcon(icons.ui_qicon("trash", theme.DANGER, 14))
-        clear.setIconSize(QtCore.QSize(14, 14))
+        clear.setIcon(icons.ui_qicon("trash", theme.DANGER, 16))
+        clear.setIconSize(QtCore.QSize(16, 16))
         clear.setCursor(QtCore.Qt.PointingHandCursor)
         clear.setStyleSheet(
             f"QPushButton{{color:{theme.DANGER};background:transparent;"
             f"border:1px solid {theme.with_alpha(theme.DANGER, 80)};"
-            "border-radius:4px;padding:5px 10px;font-size:11px;"
+            "border-radius:4px;padding:6px 12px;font-size:13px;"
             "font-weight:700;letter-spacing:1px;}"
             f"QPushButton:hover{{background:{theme.with_alpha(theme.DANGER, 18)};}}")
         clear.clicked.connect(self._craft_queue_clear)

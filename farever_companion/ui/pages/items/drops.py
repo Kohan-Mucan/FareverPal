@@ -12,69 +12,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ... import theme
 from ....data import icons
 from ....data import names
+from ....data.items.sources import (_CHEST_COUNT_RE, _CHEST_GROUP_IDS,
+                                    _CHEST_SINGLE_RE, _KIND_GROUP_LABEL,
+                                    _KIND_LABEL, _NODE_SIZE_SUFFIXES,
+                                    chest_source_label as _chest_source_label,
+                                    chest_zone_name as _chest_zone_name)
 from . import support
 from .support import GLYPH_DOWN, GLYPH_UP, GLYPH_RIFT
-
-_KIND_LABEL = {"unit": "MOB", "chest": "CHEST", "npc": "VENDOR",
-               "gatherable": "GATHER",
-               "achievement": "ACHIEVEMENT",
-               # generator-token kinds the scan stamps (world-generated
-               # drops marked by the mechanic that produces them)
-               "worldloot_affinity": "WORLD GEAR",
-               "worldrecipe": "WORLD RECIPE"}
-# plural group headers for the expanded rows ('MOBS · 13', 'CHESTS · 6' —
-# GATHER stays)
-_KIND_GROUP_LABEL = {"unit": "MOBS", "chest": "CHESTS", "npc": "VENDORS",
-                     "gatherable": "GATHER",
-                     "achievement": "ACHIEVEMENTS",
-                     "worldloot_affinity": "WORLD GEAR",
-                     "worldrecipe": "WORLD RECIPES"}
-# size suffixes the scan stamps on gathering nodes ('CopperOre_Large') —
-# collapsed in the grouped rows so both node sizes read as one source
-_NODE_SIZE_SUFFIXES = ("_Large", "_Small", "_Medium")
-
-# The scan stamps a count on chest sources ('W1_Siagarta_WorldChest_54 (x2)',
-# 'World Crates (x158)') taken from the loot entry's roll number — every
-# Scrolls entry rolls 2x, so the count is the TABLE's roll count, never how
-# many chests exist. The '(xN)' is therefore dropped from every chest row;
-# single chests additionally get human 'Zone · World Chest N' names.
-_CHEST_COUNT_RE = re.compile(r"\s*\(x\d+\)\s*$")
-# group tokens (WorldCrate, BeeCrate, the Activities) have no per-chest row
-# in the codex Chests list — only the concrete single-chest ids link there
-_CHEST_GROUP_IDS = re.compile(r"(?i)(Crate|Activity|BonusChest|Bosschest|Tier\d+)$")
-_CHEST_SINGLE_RE = re.compile(r"(?i)(WorldChest|VaultChest|FightStone|ChestOrb)")
-
-
-@lru_cache(maxsize=1024)
-def _chest_zone_name(chest_id: str) -> str | None:
-    """The readable zone name a chest sits in ('Lower Ramburg') via the chest
-    index's world position — None when it can't be resolved."""
-    try:
-        from ....geo import zones as geo_zones
-        from ....data import dungeons
-        zid = geo_zones.chest_zone(chest_id)
-        if zid and dungeons.zone_tag_from_zone_id(zid):
-            return names.zone_name(zid)
-    except Exception:
-        pass
-    return None
-
-
-def _chest_source_label(d: dict) -> str:
-    """Human label for a chest drop source: the scan's '(xN)' roll count is
-    dropped (it's the loot table's roll number, not chest count), and
-    single chests read as 'Zone · World Chest N' from their world position."""
-    nm = d["source"]
-    sid = d.get("source_id") or ""
-    m = _CHEST_COUNT_RE.search(nm)
-    if m:
-        nm = nm[: m.start()].strip()
-    if sid and _CHEST_SINGLE_RE.search(sid):
-        label = names.poi_label(sid)
-        if label:
-            zone = _chest_zone_name(sid)
-            return f"{zone} · {label}" if zone else label
-    return nm
 
 
 def _boss_cell(d: dict, on_codex_click) -> QtWidgets.QWidget:

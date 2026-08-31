@@ -94,11 +94,24 @@ def main() -> int:
     if settings.hud_accent:
         theme.set_accent(settings.hud_accent)
         app.setStyleSheet(theme.QSS)
+    # Every work-thread registers itself; join them all before the app is torn
+    # down (fires for window close AND programmatic quit) so no QThread is
+    # destroyed while its thread is still running.
+    from .ui.workers import shutdown_all
+    app.aboutToQuit.connect(shutdown_all)
     win = ControlPanel(settings)
     _probe("control panel built")
     win.setWindowIcon(_app_icon())
     win.show()
     _probe("window shown")
+    # dev-only idle-memory probe (ai/workspace/, never shipped): samples RSS +
+    # tracemalloc growth into mem_probe_log.txt while the app runs.
+    if os.environ.get("FAREVER_MEM_PROBE", "").strip():
+        try:
+            _install_mem_probe(win)
+        except Exception as e:
+            print(f"[mem-probe] failed to start: {e}", file=sys.stderr,
+                  flush=True)
     # test hook: FAREVER_OPEN_PAGE=craft opens a page at startup so the
     # frozen exe can be smoke-tested headlessly (e.g. CI / build verify).
     # Adding FAREVER_SCREENSHOT=<path.png> dumps a PNG of the window after
@@ -114,6 +127,33 @@ def main() -> int:
         _probe(f"page state applied ok={state_ok}")
         _schedule_screenshot(win, app, state_ok=state_ok)
     return app.exec()
+
+
+def _install_mem_probe(win: QtWidgets.QWidget) -> None:
+    """Load ai/workspace/opencode/mem_probe/mem_probe.py by path (same pattern
+    as the optional dev_scanner) and start its sampler against the panel."""
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[1] / "ai" / "workspace" / "opencode" / "mem_probe"
+        / "mem_probe.py",
+        Path.cwd() / "ai" / "workspace" / "opencode" / "mem_probe"
+        / "mem_probe.py",
+    ]
+    for p in candidates:
+        if not p.exists():
+            continue
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("farever_mem_probe", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        probe_cls = getattr(mod, "install", None)
+        if probe_cls is None:
+            raise RuntimeError(f"{p} has no install()")
+        win._mem_probe = probe_cls(win)    # keep a reference: no GC
+        print(f"[mem-probe] active -> {p}", flush=True)
+        return
+    raise FileNotFoundError(
+        "mem_probe.py not found (expected ai/workspace/opencode/mem_probe/)")
 
 
 def _apply_open_page_state(win: QtWidgets.QWidget, page: str) -> bool:

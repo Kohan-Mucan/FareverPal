@@ -285,3 +285,82 @@ class RiftTracker:
             in_range=in_range,
             at_any_rift=at_any_rift
         )
+
+
+def rift_summary() -> dict:
+    """Standalone next-rift predictor summary. Pure clock + LCG algorithm —
+    zero memory reads, works while the game is closed.
+
+    Returns {"state", "color", "label", "zone", "status", "formatted",
+             "follow_zone", "follow_in"} for the settings rift tab and the
+    sidebar rift widget.
+    """
+    tracker = RiftTracker(None)
+    st = tracker.get_status()
+
+    # Active / Next Rift with timer combined on one line
+    if st.state in ("ACTIVE", "CLOSING"):
+        label = "Active Rift"
+        status = "LIVE NOW" if st.state == "ACTIVE" else f"Closing in {st.formatted_time}"
+        color = "#EF5350"  # Red during active / closing window
+    elif st.state == "WARNING":
+        label = "Next Rift"
+        status = f"Starting in {st.formatted_time}"
+        color = "#66BB6A"  # Green during 15m warning window
+    else:
+        label = "Next Rift"
+        status = f"Starts in {st.formatted_time}"
+        color = "#4FC3F7"  # Default Cyan
+
+    # Following Rift (the hour after the upcoming one)
+    now_ts = time.time()
+    struct_utc = time.gmtime(now_ts)
+    secs_into_hour = struct_utc.tm_min * 60 + struct_utc.tm_sec
+    secs_until_current_window = 3600 - secs_into_hour if struct_utc.tm_min >= 3 else 0
+
+    following_ts = now_ts + secs_until_current_window + 3600
+    fol_secs = int(following_ts - now_ts)
+    fol_m = fol_secs // 60
+    fol_h = fol_m // 60
+    fol_timer_str = f"{fol_h}h {fol_m % 60}m" if fol_h > 0 else f"{fol_m}m"
+
+    fol_zone_raw = predict_rift_zone_id(following_ts)
+    fol_name = names.zone_name(fol_zone_raw) or names.humanize(fol_zone_raw) if fol_zone_raw else "Unknown"
+    if fol_name.lower().startswith("rift "):
+        fol_name = fol_name[5:].strip()
+
+    return {"state": st.state, "color": color, "label": label,
+            "zone": st.rift_name or "Unknown", "status": status,
+            "formatted": st.formatted_time,
+            "secs_until": st.secs_until_start,
+            "follow_zone": fol_name, "follow_in": fol_timer_str}
+
+
+def upcoming_rifts(count: int = 9, offset: int = 0) -> list[dict]:
+    """List of upcoming hourly rift events, pure clock + LCG — no memory.
+
+    Each entry: {"ts", "zone", "clock", "in"}. `clock` is the local 12-hour
+    spawn time (e.g. "2:30 PM"), `in` a relative countdown string
+    (e.g. "12m" / "1h 3m"). `offset` skips N future events (e.g. offset=1 skips
+    the immediate next rift already highlighted in the hero header).
+    """
+    import math
+
+    now = time.time()
+    # First rift boundary at or after now (rifts spawn on the :00 each hour).
+    base = int(math.ceil(now / 3600.0)) * 3600
+    out = []
+    for i in range(offset, offset + max(0, count)):
+        ts = base + i * 3600
+        zid = predict_rift_zone_id(ts)
+        zname = names.zone_name(zid) or names.humanize(zid) if zid else "Unknown"
+        if zname.lower().startswith("rift "):
+            zname = zname[5:].strip()
+        delta = int(ts - now)
+        m = max(0, delta) // 60
+        h = m // 60
+        in_str = f"{h}h {m % 60}m" if h > 0 else f"{m}m"
+        # Local 12-hour clock with AM/PM (strip the leading zero from %I).
+        clock = time.strftime("%I:%M %p", time.localtime(ts)).lstrip("0")
+        out.append({"ts": ts, "zone": zname, "clock": clock, "in": in_str})
+    return out

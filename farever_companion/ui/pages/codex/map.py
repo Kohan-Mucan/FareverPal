@@ -47,12 +47,15 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
 
         is_chest = bool(item.get("chest_loc") or item.get("chest_locs"))
         is_vendor = bool(item.get("vendor_npc") or item.get("vendor_npcs"))
-        is_dung = bool((item.get("is_dungeon") or item.get("is_rift")) and not is_vendor and not is_chest)
+        is_rift = bool(item.get("is_rift"))
+        is_dung = bool(item.get("is_dungeon") and not is_rift and not is_vendor and not is_chest)
 
         if is_chest:
             m_col = QtGui.QColor(theme.GOLD)
         elif is_vendor:
             m_col = QtGui.QColor(theme.ACCENT)
+        elif is_rift:
+            m_col = QtGui.QColor(theme.KIND_COLOR.get("rift", "#a855f7"))
         elif is_dung:
             m_col = QtGui.QColor(theme.KIND_COLOR.get("dungeon", "#7c3aed"))
         elif item.get("is_boss"):
@@ -75,6 +78,7 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
                 "name": pin_name,
                 "show_label": bool(c.get("name")),
                 "is_dungeon": is_dung,
+                "is_rift": is_rift,
                 "is_vendor": is_vendor,
                 "is_chest": is_chest
             })
@@ -171,6 +175,11 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
             dungeon_pm = None
 
         try:
+            rift_pm = icons.marker("rift", 22, accent=theme.KIND_COLOR.get("rift", "#a855f7"))
+        except Exception:
+            rift_pm = None
+
+        try:
             vendor_pm = icons.marker("shop", 22, accent=theme.GOLD)
             if not vendor_pm or vendor_pm.isNull():
                 vendor_pm = icons.marker("currency", 22, accent=theme.GOLD)
@@ -190,6 +199,7 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
             glow_col = QtGui.QColor(main_col)
             glow_col.setAlpha(80)
             is_dung = pin.get("is_dungeon", False)
+            is_rift = pin.get("is_rift", False)
             is_vend = pin.get("is_vendor", False)
             is_chst = pin.get("is_chest", False)
 
@@ -200,7 +210,9 @@ class CodexZoneMapCanvas(QtWidgets.QWidget):
             px = ox + (ix / map_w) * target_w
             py = oy + (iy / map_h) * target_h
 
-            if is_dung and dungeon_pm and not dungeon_pm.isNull():
+            if is_rift and rift_pm and not rift_pm.isNull():
+                p.drawPixmap(int(px - rift_pm.width() / 2), int(py - rift_pm.height() / 2), rift_pm)
+            elif is_dung and dungeon_pm and not dungeon_pm.isNull():
                 p.drawPixmap(int(px - dungeon_pm.width() / 2), int(py - dungeon_pm.height() / 2), dungeon_pm)
             elif is_vend and vendor_pm and not vendor_pm.isNull():
                 p.drawPixmap(int(px - vendor_pm.width() / 2), int(py - vendor_pm.height() / 2), vendor_pm)

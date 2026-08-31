@@ -88,6 +88,16 @@ _MARKER = {
     "soulstone": "soulstone",
 }
 
+# Done-state (collected) sprite names for markers that have a distinct
+# collected look. Single source of truth so the Entity HUD, the minimap
+# (Dungeon HUD) and the dev icon preview all stay in sync when a name changes.
+DONE_MARKER = {"chest": "chestopen", "orb": "orbdone"}
+
+
+def done_marker(name: str) -> str:
+    """Return the collected/done sprite name for `name` (or `name` unchanged)."""
+    return DONE_MARKER.get(name, name)
+
 
 def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
     if USE_HERO_SVGS and kind.startswith("hero_"):
@@ -95,6 +105,10 @@ def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
 
     if kind in ("enemy", "companion", "spark_enemy") and label:
         sheet = "collection" if kind == "companion" else "Units"
+        if not icons.has_icon(sheet, label):
+            other_sheet = "Units" if sheet == "collection" else "collection"
+            if icons.has_icon(other_sheet, label):
+                sheet = other_sheet
         if icons.has_icon(sheet, label):
             is_special = False
             if kind == "companion":
@@ -112,24 +126,25 @@ def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
 
             if (kind == "enemy" or kind == "spark_enemy") and not tracked and not is_special:
                 return icons.pixmap(sheet, label, size)
-            # 2px outline for tracked/special mobs
-            return icons.outlined(sheet, label, size, col, border=3)
+            # Clean 1px outline for tracked/special mobs
+            return icons.outlined(sheet, label, size, col, border=1)
 
     # Determine accent for outlines on other items
     accent = None
     is_gather = kind in ("flower", "ore")
 
-    if tracked:
-        # Tracked gatherables use green, Chests use Gold, everything else uses HUD accent
-        if is_gather:
-            accent = theme.GOOD
-        elif kind in ("chest",):
+    if tracked and not is_gather:
+        # Gatherables keep their own baked-in art when tracked — the track
+        # state is shown as a halo circle in minimap.py instead.
+        if kind in ("chest",):
             accent = theme.CHEST
         else:
             accent = cv.s.hud_accent or theme.ACCENT
 
     if kind in ("flower", "ore") and label:
-        m_name = label.lower() if icons.has_icon("minimap", label.lower()) else geo_gatherables.get_icon_name(label)
+        m_name = geo_gatherables.get_icon_name(label)
+        if not icons.has_icon("minimap", m_name):
+            m_name = "ore" if kind == "ore" else "flower"
 
         # Use marker style for gatherables (glow/accent) instead of thick solid outline
         pm = icons.marker(m_name, size, accent=accent if (not done or tracked) else None)
@@ -138,20 +153,22 @@ def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
 
     name = _MARKER.get(kind)
     if name:
-        m_name = name + ("2" if done and name in ("chest", "orb") else "")
+        m_name = done_marker(name) if (done and name in DONE_MARKER) else name
         # Apply thin gold border to all uncollected chests as requested; shop
         # vendors (pet/mount) render the gold $ marker from the minimap atlas.
         # Soulstone summon points always carry their magenta outline so they
         # read as click-to-summon markers even when untracked.
         if kind == "soulstone":
             eff_accent = theme.KIND_COLOR.get("soulstone", theme.ACCENT)
+        elif kind == "rift":
+            eff_accent = theme.KIND_COLOR.get("rift", "#a855f7")
         else:
             eff_accent = theme.GOLD if (not done and kind in ("chest", "petshop", "mountshop", "vendor")) else accent
         pm = icons.marker(m_name, size, accent=eff_accent)
         if pm:
             return pm
 
-    glyph = {"chest": "box", "obelisk": "radio", "checkpoint": "radio", "flower": "dice-5", "ore": "dice-5", "enemy": "swords", "orb": "broadcast", "activity": "box", "dungeon": "map", "rift": "map", "companion": "heart", "pos": "map-pin", "recipe": "box", "chest_orb": "broadcast", "soulstone": "gem"}.get(kind)
+    glyph = {"chest": "box", "obelisk": "radio", "checkpoint": "radio", "flower": "flower", "ore": "ore", "enemy": "swords", "orb": "broadcast", "activity": "box", "dungeon": "dungeon", "rift": "rift", "companion": "heart", "pos": "map-pin", "recipe": "box", "chest_orb": "broadcast", "soulstone": "gem"}.get(kind)
     return icons.ui_icon(glyph, theme.KIND_COLOR.get(kind, theme.TEXT), size) if glyph else None
 
 
@@ -261,12 +278,10 @@ def is_waypoint(cv, kind, label, poi_id, wx, wy, track_pos) -> bool:
 
     # 3. Position-based tracking (everything else: Chests, Recipes, Gatherables, Static POIs)
     # These usually have coordinates in the track_id, e.g., "123.4,567.8,90.1|Chest Name"
+    # NOTE: type-level gather tracking (display name only, no coords) deliberately
+    # does NOT become a waypoint — otherwise every node of that type on the map
+    # would clamp itself to the minimap edge.
     if tk in ("chest", "recipe", "chest_orb", "gather", "dungeon", "rift", "obelisk", "pos", "soulstone"):
-        if tk == "gather" and "|" not in str(tid):
-            if kind in ("flower", "ore"):
-                if geo_gatherables.get_display_name(label) == tid:
-                    return True
-
         if "|" in str(tid):
             try:
                 coords_part = str(tid).split("|", 1)[0]
@@ -289,6 +304,19 @@ def is_waypoint(cv, kind, label, poi_id, wx, wy, track_pos) -> bool:
         return abs(wx - track_pos[0]) < 1.0 and abs(wy - track_pos[1]) < 1.0
 
     return False
+
+
+def gather_type_tracked(cv, kind: str, label: str) -> bool:
+    """True while tracking a gatherable TYPE (display name, no coords).
+
+    Matched nodes get the green track halo, but unlike real waypoints they
+    must never clamp to the minimap edge (that flooded it with every node
+    of the tracked type)."""
+    tk, tid = cv.s.track_kind, cv.s.track_id
+    if tk != "gather" or not tid or "|" in str(tid):
+        return False
+    return (kind in ("flower", "ore")
+            and geo_gatherables.get_display_name(label) == tid)
 
 
 _CLICK_PRIORITY = {

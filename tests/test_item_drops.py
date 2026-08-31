@@ -29,6 +29,33 @@ def test_items_loaded():
     assert items == sorted(items, key=lambda r: (r["name"] or r["id"]).lower())
 
 
+def test_item_id_by_name_resolves_placed_food():
+    """Placed food resolves its display name off a Skill and carries no id in
+    memory; the catalog reverse-lookup maps the name back to the item id."""
+    assert idata.item_id_by_name("Plainswalker Feast") == "Feast"
+    assert idata.item_id_by_name("Minor Alchemist Cauldron") == \
+        "SmallAlchemistCauldron"
+    # case-insensitive and tolerant of stray whitespace
+    assert idata.item_id_by_name("  plainswalker feast ") == "Feast"
+    # unknown names degrade to None, never raise
+    assert idata.item_id_by_name("No Such Dish") is None
+    assert idata.item_id_by_name(None) is None
+
+
+def test_resolve_food_info():
+    """resolve_food_info maps display names, item IDs, skill IDs, and missing values."""
+    assert idata.resolve_food_info("Plainswalker Feast") == ("Plainswalker Feast", "Feast")
+    assert idata.resolve_food_info("Feast") == ("Plainswalker Feast", "Feast")
+    assert idata.resolve_food_info("PlainswalkerFeast") == ("Plainswalker Feast", "Feast")
+    assert idata.resolve_food_info("PrepareWorldConsumable") == ("Plainswalker Feast", "Feast")
+    assert idata.resolve_food_info("Minor Alchemist Cauldron") == ("Minor Alchemist Cauldron", "SmallAlchemistCauldron")
+    assert idata.resolve_food_info("SmallAlchemistCauldron") == ("Minor Alchemist Cauldron", "SmallAlchemistCauldron")
+    assert idata.resolve_food_info("Cook_1") == ("Wild Boar Stew", "Cook_1")
+    assert idata.resolve_food_info("Wild Boar Stew") == ("Wild Boar Stew", "Cook_1")
+    assert idata.resolve_food_info(None) == ("Plainswalker Feast", "Feast")
+    assert idata.resolve_food_info("Food") == ("Plainswalker Feast", "Feast")
+
+
 def test_catalog_includes_crafted_and_non_droppable():
     # non-droppable gear / materials have no drop rows but still resolve;
     # the zone sets (Reinforced Hauberk of the Exile) are WorldLoot-flagged
@@ -657,12 +684,14 @@ def test_zone_gear_shown_drops_collapsed():
     rows = idata.shown_drops("Chest_Z2U2_Fig")
     assert rows[1]["source"] == "Crimson mobs · Kobold mobs · Manfish mobs"
     assert rows[-1]["source"] == "Zone activities"
-    # dungeon sets / Demon pieces don't hit the collapse (no affinity rows)
-    assert [r["source"] for r in idata.shown_drops("Trinket_Kobold")] == \
-        ["Reblochonk"]
+    # dungeon sets / Demon pieces show their faction's DUNGEON BOSSES ONLY:
+    # one stamped row per same-family dungeon (alphabetical after the merge)
+    kob = idata.shown_drops("Trinket_Kobold")
+    assert [r["source"] for r in kob] == \
+        ["Golcano", "King Ratsar", "Munster Chuck", "Reblochonk"]
+    assert all(r["boss"] and r.get("dungeon") for r in kob)
     ga = idata.shown_drops("GA_Demon")
-    assert [r["source"] for r in ga] == ["Nightking Maat Demon",
-                                          "Mira, Demon Huntress"]
+    assert [r["source"] for r in ga] == ["Nightking Maat Demon"]
     # plain gear groups its per-mob rows per faction instead of listing
     # every mob variant (see test_mob_rows_group_per_faction)
     cloth = idata.shown_drops("Cloth_Z1")
@@ -671,19 +700,25 @@ def test_zone_gear_shown_drops_collapsed():
 
 
 def test_shown_drops_headlines_the_boss():
-    """The Drops From list shows only the boss rows when the item has a
-    boss: the random faction crate/mob/upgrade rows every set piece shares
-    are hidden. Vendor rows (guaranteed purchases) stay — GA_Demon shows
-    its boss and Mira, and boss-less items show every source unchanged."""
-    # Kobold set piece: just the boss (the crafted chest — Cantal Goya's
-    # Breastplate — is recipe gear with no drops, so the non-crafted
-    # Raclette Pan stands in for the set)
-    rows = idata.shown_drops("Trinket_Kobold")
-    assert [r["source"] for r in rows] == ["Reblochonk"]
-    # boss + vendor both stay
-    ga = idata.shown_drops("GA_Demon")
-    assert [r["source"] for r in ga] == ["Nightking Maat Demon",
-                                          "Mira, Demon Huntress"]
+    """Gear with a boss shows its faction's DUNGEON BOSSES ONLY — one row
+    per dungeon whose boss or mobs roll the same loot table as the
+    recorded boss (all the bee dungeons drop bee gear). The shared crate /
+    mob / vendor rows every set piece carries never show; non-gear items
+    keep every source unchanged."""
+    # Kobold set piece: one boss row per kobold-family dungeon (Kobold
+    # Mines, King Ratsar Lair, Abandoned Mines, Gorgons Hollow), merged
+    # into alphabetical order — no crates/mobs/vendors survive the collapse
+    kob = idata.shown_drops("Trinket_Kobold")
+    srcs = [r["source"] for r in kob]
+    assert set(srcs) == {"Reblochonk", "King Ratsar", "Golcano",
+                          "Munster Chuck"}
+    assert all(r["boss"] for r in kob)
+    assert not any("Crates" in s or "mobs" in s for s in srcs)
+    assert not any("Mira" in s for s in srcs)
+    # a weapon keeps just its own boss (its signature table rolls nothing
+    # else, so no family expansion)
+    assert [r["source"] for r in idata.shown_drops("GA_Demon")] \
+        == ["Nightking Maat Demon"]
     # no boss -> the per-mob rows group per faction (see
     # test_mob_rows_group_per_faction), so the list stays short
     cloth = idata.shown_drops("Cloth_Z1")
@@ -709,9 +744,12 @@ def test_materials_keep_their_mob_sources_alongside_the_boss():
     for iid in ("DemonicHorn", "TailSlice", "FiendishEye"):
         more = idata.shown_drops(iid)
         assert len(more) > 1, (iid, [r["source"] for r in more])
-    # gear still collapses to the boss — the rule's original purpose
-    assert [r["source"] for r in idata.shown_drops("Trinket_Kobold")] \
-        == ["Reblochonk"]
+    # gear lists only its faction's dungeon bosses — all four of them now
+    kob = idata.shown_drops("Trinket_Kobold")
+    assert len(kob) == 4
+    assert {r["source"] for r in kob} == \
+        {"Reblochonk", "King Ratsar", "Golcano", "Munster Chuck"}
+    assert all(r["boss"] for r in kob)
 
 
 def test_mob_rows_group_per_faction():

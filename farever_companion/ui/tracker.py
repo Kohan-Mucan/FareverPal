@@ -73,6 +73,25 @@ def _game_window_rect(pid: int):
     return (x, y, w, h)
 
 
+class _VolatileTrackSettings:
+    """Attribute proxy for a SECOND TrackController (the Dungeon HUD needle):
+    every attribute reads through to the real Settings EXCEPT track_kind /
+    track_id, which live only in memory, and save() is a no-op. This keeps the
+    dungeon needle's target fully separate from the main compass target and
+    out of settings.json."""
+
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+        self.track_kind = ""
+        self.track_id = ""
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def save(self):
+        pass
+
+
 class TrackController(QtCore.QObject):
     changed = QtCore.Signal()     # target set/cleared -> overlays re-render rows
 
@@ -335,7 +354,25 @@ class TrackController(QtCore.QObject):
                     if key in comp_ids:
                         self.clear()
                         return None
+                # Inside a dungeon/rift, allow up to 90s (1.5m) for boss intermissions/transitions;
+                # in the open world, keep a 3s grace for dead/despawned mobs.
+                in_dg = False
+                try:
+                    in_dg = self.model is not None and self.model.is_in_dungeon_or_rift()
+                except Exception:
+                    pass
+                limit = 90.0 if in_dg else 3.0
+
+                now = time.monotonic()
+                since = getattr(self, "_miss_since", None)
+                if since is None:
+                    self._miss_since = now
+                elif now - since >= limit:
+                    self._miss_since = None
+                    self.clear()
+                    return None
                 return ("searching", label)
+            self._miss_since = None
             if xyz is None:
                 e = cands[0]
             else:

@@ -29,9 +29,11 @@ POLL_MS = 350
 
 class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
     def __init__(self, model, settings, parent=None):
-        super().__init__("Entity", settings, geo_key="entity", parent=parent)
-        self._page_key = "entity"
+        super().__init__("HUD", settings, geo_key="entity", parent=parent)
+        self._page_key = "settings:HUD's"
         self.titlebar.codex_btn.setVisible(True)
+        self.titlebar.dungeon_btn.setVisible(True)
+        self.titlebar.soulstone_btn.setVisible(True)
         self.model = model
         self.s = settings
         self._enemies: list = []          # [(entity, dist)]
@@ -60,13 +62,18 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self.gather_box = _Section("GATHERABLES", "#c2c6d0")
         self.orb_box = _Section("SECRET ORBS", theme.KIND_COLOR["orb"])
         self.chest_box = _Section("CHESTS", theme.CHEST)
+        self.loot_box = _Section("LOOT", "#4ADE80")
+        self.food_box = _Section("PLAYER FOOD", "#FB923C")
+        # label-less sections: rows speak for themselves
+        for b in (self.enemy_box, self.loot_box, self.food_box):
+            b.header.hide()
         self.static_box = _Section("WAYPOINT", theme.ACCENT)
-        for b in (self.rift_box, self.static_box, self.enemy_box, self.spark_box, self.comp_box, self.group_box, self.gather_box, self.orb_box, self.chest_box):
+        for b in (self.rift_box, self.food_box, self.static_box, self.enemy_box, self.spark_box, self.comp_box, self.group_box, self.gather_box, self.orb_box, self.chest_box, self.loot_box):
             self._body.addWidget(b)
 
-        # Add a fixed spacer at the bottom (1-2 extra rows) to help auto-expand logic
-        # when lists update slowly. Updated dynamically in _refresh.
-        self._bottom_spacer = QtWidgets.QSpacerItem(0, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
+        # Add a fixed spacer at the bottom for clean padding / line break.
+        # Updated dynamically in _check_auto_height.
+        self._bottom_spacer = QtWidgets.QSpacerItem(0, 6, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self._body.addSpacerItem(self._bottom_spacer)
         self._body.addStretch(1)
 
@@ -85,10 +92,14 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._sel = None
         self._enemies = []
         self._group_members = []
+        self._player_deaths = {}
+        self._player_prev_alive = {}
         self._comps = []
         self._gatherables = []
         self._orbs = []
         self._chests = []
+        self._loots = []
+        self._foods = []
         self._static_pois = []
 
     # --- selection -------------------------------------------------------
@@ -487,15 +498,15 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             sys.stderr.flush()
 
     def _check_auto_height(self):
-        # Update bottom spacer to provide ~1.5 extra rows of breathing room
-        # to help auto-expand logic when lists update slowly.
-        isz = round(self.s.icon_size * self._scale)
-        self._bottom_spacer.changeSize(0, int(isz * 1.5), QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
+        # Maintain a clean bottom padding (subtle line break) for breathing room
+        bottom_pad = max(3, round(6 * self._scale))
+        self._bottom_spacer.changeSize(0, bottom_pad, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self._body.invalidate()
 
         # Fingerprint includes counts and visibility state of items
         # Also include waypoint labels as they can have multi-line subtext
         grouped_enemy_count = len(set(names.unit_name(e.unit_id) for e, _ in self._enemies))
+        grouped_spark_count = len(set(names.unit_name(e.unit_id) for e, _ in self._spark_mobs))
 
         # Undo row visibility
         profile = self.model.player_profile()
@@ -509,9 +520,12 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         wp_fingerprint = tuple((p[4], p[8]) for p, _ in self._static_pois)
 
         curr = (
-            grouped_enemy_count, len(self._comps), len(self._group_members),
+            grouped_enemy_count, grouped_spark_count, len(self._comps), len(self._group_members),
             len(self._gatherables), len(self._orbs), len(self._chests),
+            len(self._loots) if hasattr(self, "_loots") else 0,
+            len(self._foods) if hasattr(self, "_foods") else 0,
             len(self._static_pois), wp_fingerprint, has_undo_u, has_undo_c, rift_vis,
+            self._sel,
             self.s.icon_size, self.s.entity_font_size, self.s.entity_width
         )
 
@@ -533,19 +547,21 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             QtCore.QTimer.singleShot(0, self._do_auto_height)
 
     def _do_auto_height(self):
-        # Use Qt's own layout measurement: ask the scroll body for its
-        # preferred height, then add the fixed chrome overhead:
-        #   frame border (2) + title bar (34) + content margins top+bot (14) = 50
-        CHROME = 50
-        body_hint = self._body.sizeHint().height()
-        target_h = body_hint + CHROME
-        # Clamp to usable screen height
-        screen_h = QtWidgets.QApplication.primaryScreen().availableGeometry().height()
-        target_h = min(target_h, screen_h - 40)
-        target_h = max(target_h, 160)
-        if target_h != self.height():
-            self._base_h = target_h
-            self.resize(self.width(), target_h)
+        try:
+            if not hasattr(self, "_body") or self._body is None:
+                return
+            body_hint = self._body.sizeHint().height()
+            CHROME = 50
+            target_h = body_hint + CHROME
+            screen = QtWidgets.QApplication.primaryScreen()
+            screen_h = screen.availableGeometry().height() if screen else 900
+            target_h = min(target_h, screen_h - 40)
+            target_h = max(target_h, 60)
+            if target_h != self.height():
+                self._base_h = target_h
+                self.resize(self.width(), target_h)
+        except (RuntimeError, AttributeError):
+            pass
 
     def closeEvent(self, e):
         self._timer.stop()

@@ -39,17 +39,23 @@ class RowSpec:
     sub: str = ""
     sub_color: str | None = None
     value: str = ""
+    value_color: str | None = None
     bold: bool = False
     highlight: bool = False
     cb: object = None
     right_cb: object = None
     marker: str = ""      # map-marker icon name instead of a game-sheet icon
+    marker_tint: str | None = None  # force-recolor the marker sprite (ores)
+    icon_pixmap: object = None  # raw QPixmap to draw directly (merged custom icons)
     ui_icon: str = ""     # UI SVG icon name instead of a game-sheet icon
     outlined: bool = False   # use outlined style (minimap style) instead of tile
     outline_border: int = 2
     border_color: str | None = None  # draw a CSS border of this color around the icon
     extra_icon: object = None  # tuple: (sheet, id, marker, outlined)
     key: object = None         # (kind, key) for selection mapping
+    bg_tint: str | None = None  # subtle full-row wash (e.g. faint accent tint)
+    thin_ring: bool = False     # skip the dark halo on tinted-marker rings (thinner outline)
+    ring: bool = True           # draw the accent ring around tinted markers (False = none)
     font_size: int | None = None
     size_override: int | None = None
 
@@ -62,6 +68,7 @@ class _EntityRow(QtWidgets.QFrame):
     def __init__(self, icon_size: int):
         super().__init__()
         self._highlight, self._cb, self._right_cb = "", None, None
+        self._bg_tint = None
         lay = QtWidgets.QHBoxLayout(self)
         lay.setContentsMargins(6, 2, 6, 2)
         lay.setSpacing(9)
@@ -107,10 +114,18 @@ class _EntityRow(QtWidgets.QFrame):
         for i, (t, s, id_, m, u, o, a, b) in enumerate(icons_to_draw):
             t.set_size(isz)
             t.show()
-            if u:
+            if spec.icon_pixmap is not None:
+                t.setPixmap(spec.icon_pixmap.scaled(
+                    isz, isz, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+            elif u:
                 t.set_ui_icon(u, a or theme.ACCENT)
             elif m:
-                t.set_marker(m, a, o)
+                if spec.marker_tint and t is self.tile:
+                    t.set_tinted_marker(m, spec.marker_tint, a,
+                                        border=spec.outline_border,
+                                        keyline=spec.thin_ring, ring=spec.ring)
+                else:
+                    t.set_marker(m, a, o, spec.outline_border)
             elif o:
                 t.set_outlined(s, id_, a or theme.ACCENT, border=b)
             else:
@@ -121,15 +136,20 @@ class _EntityRow(QtWidgets.QFrame):
         weight = "700" if spec.bold else "500"
         fs = f"font-size:{spec.font_size}px;" if (spec.font_size or 0) > 0 else ""
         self.name.setText(spec.name)
-        self.name.setStyleSheet(f"color:{spec.name_color};font-weight:{weight};{fs}background:transparent;")
+        if "<font" in spec.name or "<span" in spec.name:
+            self.name.setStyleSheet(f"font-weight:{weight};{fs}background:transparent;")
+        else:
+            self.name.setStyleSheet(f"color:{spec.name_color};font-weight:{weight};{fs}background:transparent;")
         self.sub.setText(spec.sub)
         self.sub.setVisible(bool(spec.sub))
         if spec.sub:
             scol = spec.sub_color or theme.MUTED
             self.sub.setStyleSheet(f"color:{scol};{fs}background:transparent;")
+        vcol = getattr(spec, "value_color", None) or spec.name_color
         self.value.setText(spec.value)
-        self.value.setStyleSheet(f"color:{spec.name_color};{fs}background:transparent;")
+        self.value.setStyleSheet(f"color:{vcol};{fs}background:transparent;")
         self._highlight = spec.accent if spec.highlight else ""
+        self._bg_tint = spec.bg_tint
         # Colored border via stylesheet — reliable, survives child-widget repaint
         bcol = getattr(spec, "border_color", None)
         if bcol != getattr(self, "_border_color", "__RESET__"):
@@ -162,6 +182,12 @@ class _EntityRow(QtWidgets.QFrame):
 
     def paintEvent(self, e):
         super().paintEvent(e)          # draw QSS background/frame first
+        if self._bg_tint:
+            p = QtGui.QPainter(self)
+            c = QtGui.QColor(self._bg_tint)
+            c.setAlpha(16)
+            p.fillRect(self.rect(), c)
+            p.end()
         if self._highlight:
             p = QtGui.QPainter(self)
             p.setRenderHint(QtGui.QPainter.Antialiasing, False)

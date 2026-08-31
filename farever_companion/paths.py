@@ -31,13 +31,43 @@ def display_data_dir() -> Path:
     """Folder for the consolidated display JSON files (items, enemies, etc)."""
     return _game_data_dir()
 
-def icons_dir() -> Path:
-    """Folder containing Items/Units/Skills subfolders with PNGs/WebPs."""
+_FB_OVERRIDE = None
+
+
+def set_fallback_override(path) -> None:
+    """Dev-only: point the loose-icon fallback folder at an alternate dir
+    (e.g. assets/icons2) so the icon-preview page can render icons that have
+    not yet been compiled into the atlas. Pass None to restore default."""
+    global _FB_OVERRIDE
+    _FB_OVERRIDE = Path(path) if path is not None else None
+
+
+def fallback_override():
+    return _FB_OVERRIDE
+
+
+def fallback_icons_dir() -> Path:
+    """Single unified fallback folder for all loose icons (.svg, .webp, .png)."""
+    if _FB_OVERRIDE is not None:
+        return _FB_OVERRIDE
     return assets_dir() / "icons"
 
+def icons_dir() -> Path:
+    """Unified fallback folder for loose assets."""
+    return fallback_icons_dir()
+
+def svgs_dir() -> Path:
+    """Unified fallback folder for loose assets."""
+    return fallback_icons_dir()
+
+def images_dir() -> Path:
+    """Unified fallback folder for loose assets."""
+    return fallback_icons_dir()
+
 def map_icons_dir() -> Path:
-    """Folder containing map markers (chests, orbs, etc) as SVGs/WebPs."""
-    return assets_dir() / "map_icons"
+    """Unified fallback folder for loose assets."""
+    return fallback_icons_dir()
+
 
 def atlas_dir() -> Path:
     """Folder containing the atlas sprite-sheets and index."""

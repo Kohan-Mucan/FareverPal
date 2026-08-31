@@ -9,6 +9,8 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
+from ..tile_delegate import (mono_meta_font, paint_accent_header,
+                             paint_indicator_ring)
 
 # list-row roles
 ID_ROLE = QtCore.Qt.UserRole
@@ -21,15 +23,15 @@ QUEUED_ROLE = QtCore.Qt.UserRole + 7
 HEADER_W = 3000
 HEADER_H = 26
 
-LIST_ICON = 34
-LIST_ROW_H = 28
+LIST_ICON = 42
+LIST_ROW_H = 32
 
 
 def _craft_row_height(font: QtGui.QFont | None = None) -> int:
     """List-row height sized for the item name wrapping up to TWO rows."""
     f = font or QtWidgets.QApplication.font()
     fm = QtGui.QFontMetrics(f)
-    return max(LIST_ROW_H * 2, LIST_ICON + 4 + 2 * fm.lineSpacing())
+    return max(52, LIST_ICON + 10, LIST_ICON + fm.lineSpacing())
 
 
 class CraftTileDelegate(QtWidgets.QStyledItemDelegate):
@@ -40,7 +42,7 @@ class CraftTileDelegate(QtWidgets.QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         if index.data(HEADER_ROLE):
-            self._paint_header(painter, option, index)
+            paint_accent_header(painter, option, index.data() or "")
             return
         self._paint_row(painter, option, index)
 
@@ -62,31 +64,39 @@ class CraftTileDelegate(QtWidgets.QStyledItemDelegate):
         self.initStyleOption(opt, index)
         opt.decorationSize = QtCore.QSize(LIST_ICON, LIST_ICON)
         opt.displayAlignment = (QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        mf = self._meta_font(option.font)
+        mf = mono_meta_font(12)
         mw = QtGui.QFontMetrics(mf).horizontalAdvance(meta) if meta else 0
         name = opt.text
         opt.text = ""          # the style draws bg + icon only; text is ours
         widget = option.widget
         style = widget.style() if widget else QtWidgets.QApplication.style()
         style.drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, widget)
-        name_w = 230
+
         tr = style.subElementRect(
             QtWidgets.QStyle.SE_ItemViewItemText, opt, widget)
-        name_left = tr.left()
+        name_left = tr.left() + 4
+        # Dynamic name width filling the full block up to the right-aligned meta
+        right_reserve = mw + (36 if index.data(QUEUED_ROLE) else 20)
+        name_w = max(160, option.rect.right() - name_left - right_reserve)
+
         if name:
             painter.save()
-            painter.setFont(opt.font)
+            nf = QtGui.QFont(opt.font)
+            nf.setPixelSize(14)
+            nf.setBold(True)
+            painter.setFont(nf)
             painter.setPen(QtGui.QColor(
                 opt.palette.color(QtGui.QPalette.Text)))
             name_rect = QtCore.QRect(name_left, option.rect.top(), name_w, option.rect.height())
             painter.drawText(name_rect, (QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
                                          | QtCore.Qt.TextWordWrap), name)
             painter.restore()
-        meta_x = name_left + name_w + 12
+
+        meta_x = option.rect.right() - right_reserve + 8
         if meta:
             painter.save()
             painter.setFont(mf)
-            painter.setPen(QtGui.QColor(theme.MUTED))
+            painter.setPen(QtGui.QColor(theme.ACCENT if r.get("job") == "Blacksmith" else theme.MUTED))
             meta_rect = QtCore.QRect(meta_x, option.rect.top(), mw + 4, option.rect.height())
             painter.drawText(meta_rect,
                              (QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter),
@@ -94,38 +104,7 @@ class CraftTileDelegate(QtWidgets.QStyledItemDelegate):
             painter.restore()
         if not index.data(QUEUED_ROLE):
             return
-        ring_x = meta_x + (mw + 14 if meta else 0)
+        ring_x = meta_x + mw + 14
         c = QtCore.QPointF(ring_x, option.rect.center().y())
-        painter.save()
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        pen = QtGui.QPen(QtGui.QColor(theme.GOLD), 1.5)
-        painter.setPen(pen)
-        painter.setBrush(QtCore.Qt.NoBrush)
-        painter.drawEllipse(c, 2.5, 2.5)
-        painter.restore()
+        paint_indicator_ring(painter, c, radius=3.5, color=theme.GOLD, line_width=1.5)
 
-    @staticmethod
-    def _meta_font(base: QtGui.QFont) -> QtGui.QFont:
-        """The mono meta font for the row's job · LV text."""
-        f = QtGui.QFont(theme.MONO_FONT, 11)
-        f.setPixelSize(11)
-        return f
-
-    def _paint_header(self, painter, option, index):
-        """The full-width job bar grouping a search's results."""
-        painter.save()
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        r = option.rect
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor(
-            theme.with_alpha(theme.ACCENT, 14)))
-        painter.drawRoundedRect(r, 4, 4)
-        f = QtGui.QFont(option.font)
-        f.setBold(True)
-        f.setPixelSize(12)
-        painter.setFont(f)
-        painter.setPen(QtGui.QColor(theme.MUTED))
-        painter.drawText(r.adjusted(8, 0, -8, 0),
-                         QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-                         index.data() or "")
-        painter.restore()

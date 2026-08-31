@@ -157,7 +157,10 @@ class GameAppLocator:
         this is then re-attempted each call so the anchor self-heals in-world."""
         wanted: dict[str, str] = {}
         if self.off_hero is None:
-            wanted[CLS_HERO] = "hero"
+            for h_cls in (CLS_HERO, "ent.hero.Warrior", "ent.hero.Priest", "ent.hero.Mage",
+                          "ent.hero.Rogue", "ent.hero.Paladin", "ent.hero.Hunter",
+                          "ent.hero.Bard", "ent.hero.Druid"):
+                wanted[h_cls] = "hero"
         if self.off_me is None:
             wanted[CLS_PLAYER] = "me"
         if self.off_layer is None:

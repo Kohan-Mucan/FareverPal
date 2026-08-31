@@ -46,8 +46,7 @@ Until this is resolved, treat the bundled map image as provisional.
 
 ## Bundled fonts & icons
 
-- **Inter** — SIL Open Font License 1.1
-- **JetBrains Mono** — SIL Open Font License 1.1
+- **Roboto Condensed** — SIL Open Font License 1.1
 - **Lucide** icons — ISC License
 
 Their license texts ship alongside the font/icon files in `assets/`.

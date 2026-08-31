@@ -357,11 +357,18 @@ def soulstone_pois() -> tuple[dict, ...]:
     compiled raw_data shim first (the frozen build has no loose JSONs),
     falling back to the JSON file in dev checkouts with a stale shim."""
     try:
-        from . import raw_data
-        rows = getattr(raw_data, "DATA", None)
+        from . import raw_locs
+        rows = getattr(raw_locs, "DATA", None)
         rows = rows.get("poi_locs") if isinstance(rows, dict) else None
     except Exception:
         rows = None
+    if not rows:
+        try:
+            from . import raw_data
+            rows = getattr(raw_data, "DATA", None)
+            rows = rows.get("poi_locs") if isinstance(rows, dict) else None
+        except Exception:
+            rows = None
     if not rows:
         try:
             data = json.loads(paths.poi_locs_path().read_text(encoding="utf-8"))

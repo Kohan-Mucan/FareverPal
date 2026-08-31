@@ -78,14 +78,17 @@ docs/*
 Run_Scripts.bat
 
 
-# --- local tooling / editor config ---
-CLAUDE.md
-**/CLAUDE.md
+# --- AI tools & local editor config ---
+# One wildcard covers every dotfile/dot-dir (.claude/, .cursor/, .aider*,
+# .antigravityrules, .freebuff, ...) — plus the exceptions git needs tracked.
+.*
+!/.gitignore
+!/.gitattributes
+!/.github/
+# Non-dotfile names still excluded separately:
+/ai/
 AGENTS.md
-.claude/
-.cursor/
-.cursorrules
-.aider*
-.antigravityrules
-.github/copilot-instructions.md
-.freebuff
+
+# --- git-ignored dev icon-preview page (dev/run-mode only testing tool) ---
+farever_companion/ui/pages/devicons.py
+

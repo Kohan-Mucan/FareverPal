@@ -43,19 +43,19 @@ _ICON_MAPPING = {
     "r2plantrare": "lavendula",
 }
 
-_SETTING_MAPPING = {
-    "lavendula": "show_lavendula",
-    "r2plant": "show_lavendula",
-    "r2plant1": "show_lavendula",
-    "r2plant2": "show_lavendula",
-    "r2plant3": "show_lavendula",
-    "r2plantrare": "show_lavendula",
-    "madrigold": "show_madrigold",
-    "zealotus": "show_zealotus",
-    "ancientthyme": "show_ancientthyme",
-    "copperore": "show_copperore",
-    "tinore": "show_tinore",
-    "tungstene": "show_tungstene",
+_GATHER_TYPE_KEYS = {
+    "lavendula": "lavendula",
+    "r2plant": "lavendula",
+    "r2plant1": "lavendula",
+    "r2plant2": "lavendula",
+    "r2plant3": "lavendula",
+    "r2plantrare": "lavendula",
+    "madrigold": "madrigold",
+    "zealotus": "zealotus",
+    "ancientthyme": "ancientthyme",
+    "copperore": "copperore",
+    "tinore": "tinore",
+    "tungstene": "tungstene",
 }
 
 def get_base_name(label: str) -> str:
@@ -74,11 +74,15 @@ def get_icon_name(label: str) -> str:
     base_lower = base_name.lower()
     return _ICON_MAPPING.get(base_lower, base_lower)
 
-def get_setting_attr(label: str) -> str | None:
-    """Get settings attribute name for filtering a gatherable type."""
+def get_type_key(label: str) -> str | None:
+    """Get the canonical gatherable type key for filtering (e.g. "lavendula").
+
+    Used by the overlays together with Settings.show_gatherable_types to decide
+    whether a node of this type should be shown.
+    """
     base_name = get_base_name(label)
     base_lower = base_name.lower()
-    return _SETTING_MAPPING.get(base_lower)
+    return _GATHER_TYPE_KEYS.get(base_lower)
 
 @lru_cache(maxsize=1)
 def load_nodes() -> list[GatherableNode]:

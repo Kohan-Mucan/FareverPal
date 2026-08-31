@@ -176,10 +176,14 @@ def test_farm_tab_renders_rows_with_class_stats_boss():
         assert "Rogue" in sh_lbls and "Warrior" in sh_lbls, sh_lbls
         assert any(t == "Abyssal Shoulderplates" for t in lbls)
         # the row shows the rounded value with the TRUE computed float in
-        # parens (e.g. 'Armor 78 (78.2…)') — not just the lossy integer
-        assert any("Armor 78" in t and "Armor Penetration 5" in t
+        # parens (e.g. 'Armor 208 (207.x…)') — not just the lossy integer.
+        # L25: dungeon-scaled gear previews at char max (hard mode drops it
+        # there), not the per-family dungeon level.
+        assert any("Armor 208" in t and "Armor Penetration 11" in t
                    and "(" in t for t in lbls)
-        assert any(t == "Nepsilon" for t in lbls)          # the boss
+        assert any("Nepsilon" in t for t in lbls)          # the bosses:
+        assert any("Crabgantua" in t for t in lbls)        # one stack per
+        assert any("Sponge Blob" in t for t in lbls)       # family boss
         assert any("Faith 2" in t and "Armor 144" in t for t in lbls)
         # each row shows its game icon (a real rendered tile) and the class
         tiles = _farm_body(d).findChildren(C.IconTile)
@@ -196,7 +200,7 @@ def test_farm_tab_renders_rows_with_class_stats_boss():
         row = next(w for w in body.findChildren(QtWidgets.QFrame)
                    if w.objectName() == "Cell")
         boss = next(l for l in row.findChildren(QtWidgets.QLabel)
-                    if l.text() == "Nepsilon")
+                    if l.text() == "Sponge Blob")
         hdr_right = head_lbls["DROPS FROM"].x() + \
             head_lbls["DROPS FROM"].width()
         # the boss label lives inside the row's source cell, so its right
@@ -242,13 +246,16 @@ def test_farm_rows_show_drop_source_cell():
             return any(all(p in t for p in parts)
                        for t in row_labels(row))
 
-        # shoulders: gold boss name + dungeon sub-line + a 32px boss sprite
+        # shoulders: one boss stack per family dungeon — sprite, gold name,
+        # dungeon sub-line
         sh = next(r for r in rows if has_label(r, "Abyssal Shoulderplates"))
         rl = row_labels(sh)
-        assert "Nepsilon" in rl and "Manfish Ruins" in rl
+        assert "Nepsilon" in rl and "Crabgantua" in rl and "Sponge Blob" in rl
+        assert "Manfish Ruins" in rl and "Nepsid Boss" in rl \
+            and "Manfish Abyss" in rl
         pics = [l for l in sh.findChildren(QtWidgets.QLabel)
                 if l.pixmap() and not l.pixmap().isNull()]
-        assert len(pics) == 2         # the item tile + the boss sprite
+        assert len(pics) == 4         # the item tile + 3 boss sprites
 
         # hauberk: the world-drop source with its kind icon (no boss)
         hb = next(r for r in rows if has_label(r, "Blessed Hauberk"))
@@ -337,7 +344,8 @@ def test_farm_copy_button_exports_list_with_bosses():
         lines = clip.splitlines()
         assert lines[0] == "**GEAR FARM**"
         assert ("- Abyssal Shoulderplates (Rogue · Warrior) — "
-                "Nepsilon (Manfish Ruins)") in clip
+                "Crabgantua (Nepsid Boss) · Nepsilon (Manfish Ruins) · "
+                "Sponge Blob (Manfish Abyss)") in clip
         assert "- Blessed Hauberk of the Adventurer (Priest · Warrior)" in clip
         non_empty = [ln for ln in clip.splitlines() if ln]
         assert non_empty[-1].startswith("Exported ")   # timestamp

@@ -303,26 +303,33 @@ def _reverse_dns(ip: str) -> str:
 
 
 _COUNTRY_CACHE = {}
+# Legacy read-only location: older builds cached flags here. Newer builds
+# keep downloaded flags in RAM only (_FLAG_PIXMAPS) and never write to disk.
 FLAGS_DIR = Path(config_dir()) / "cache" / "flags"
-FLAGS_DIR.mkdir(parents=True, exist_ok=True)
+_FLAG_FETCHING = set()  # codes mid-download (recursion guard in _get_flag_pixmap)
+_FLAG_PIXMAPS = {}      # code -> source QPixmap — downloaded flags live in RAM only
 
 
-def _download_flag(code: str) -> Path | None:
+def _download_flag(code: str) -> bool:
+    """Fetch a flag into the in-memory cache. Never writes to disk."""
     if not code or len(code) != 2:
-        return None
+        return False
     code = code.lower()
-    path = FLAGS_DIR / f"{code}.png"
-    if path.exists():
-        return path
+    if code in _FLAG_PIXMAPS:
+        return True
     try:
         # Using flagcdn.com for high quality small flags
         url = f"https://flagcdn.com/w40/{code}.png"
         req = urllib.request.Request(url, headers={"User-Agent": "FareverPal/1.0"})
         with urllib.request.urlopen(req, timeout=2.0) as response:
-            path.write_bytes(response.read())
-        return path
+            data = response.read()
+        pm = QtGui.QPixmap()
+        if pm.loadFromData(data) and not pm.isNull():
+            _FLAG_PIXMAPS[code] = pm
+            return True
     except Exception:
-        return None
+        pass
+    return False
 
 
 def _get_ip_country(ip: str) -> tuple[str, str]:
@@ -341,7 +348,6 @@ def _get_ip_country(ip: str) -> tuple[str, str]:
             if data.get("status") == "success":
                 code = data.get("countryCode", "").lower()
                 name = data.get("country", "Unknown")
-                _download_flag(code)
                 res = (name, code)
                 _COUNTRY_CACHE[ip] = res
                 return res
@@ -354,9 +360,58 @@ def _get_ip_country(ip: str) -> tuple[str, str]:
 def _get_flag_pixmap(code: str, size: int = 24):
     if not code:
         return None
-    p = FLAGS_DIR / f"{code.lower()}.png"
-    if p.exists():
-        pm = QtGui.QPixmap(str(p))
+    code = code.lower()
+    # 1. Minimap-atlas cell — the sheet stays resident in RAM, so this
+    #    path never touches the disk at runtime. Accepts both 'flag_us'
+    #    and bare 'us' cell names.
+    try:
+        from ....data import icons
+        for cell in (f"flag_{code}", code):
+            pm = icons.asset_icon(cell, size)
+            if pm and not pm.isNull():
+                return pm
+    except Exception:
+        pass
+    # 2. Cached SVG — render at any size without raster blur.
+    svg = FLAGS_DIR / f"{code}.svg"
+    if svg.exists():
+        try:
+            from PySide6.QtSvg import QSvgRenderer
+            r = QSvgRenderer(str(svg))
+            if r.isValid():
+                sz = r.defaultSize()
+                if sz.isValid() and sz.width() > 0:
+                    scale = min(size / sz.width(), size / sz.height())
+                    w, h = max(1, int(sz.width() * scale)), max(1, int(sz.height() * scale))
+                    box = QtCore.QRectF((size - w) / 2, (size - h) / 2, w, h)
+                else:
+                    box = QtCore.QRectF(0, 0, size, size)
+                pm = QtGui.QPixmap(size, size)
+                pm.fill(QtGui.QColor(0, 0, 0, 0))
+                p = QtGui.QPainter(pm)
+                p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+                p.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+                r.render(p, box)
+                p.end()
+                return pm
+        except Exception:
+            pass
+    # 3. Legacy cached PNG.
+    png = FLAGS_DIR / f"{code}.png"
+    if png.exists():
+        pm = QtGui.QPixmap(str(png))
         if not pm.isNull():
             return pm.scaled(size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    # 4. Not in the atlas and not on disk — fetch once into RAM, no file.
+    if code in _FLAG_PIXMAPS:
+        return _FLAG_PIXMAPS[code].scaled(
+            size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    if code not in _FLAG_FETCHING:
+        _FLAG_FETCHING.add(code)
+        try:
+            if _download_flag(code):
+                return _FLAG_PIXMAPS[code].scaled(
+                    size, size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        finally:
+            _FLAG_FETCHING.discard(code)
     return None

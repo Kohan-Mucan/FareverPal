@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from ... import components as C
+from ...layout import clear_layout
 from ....data import icons, skills
 from .support import GLYPH_DOWN, GLYPH_UP
 
@@ -129,42 +130,6 @@ def _meta_text(s: dict) -> str | None:
     return " · ".join(parts)
 
 
-class _LinkLabel(QtWidgets.QLabel):
-    """A label that reads as a link: skill-colored, pointing hand, underline
-    on hover. Emits `clicked` — the focused skill's name opens the popup;
-    `size` gives the chain block's show-all toggle the same look at 10px."""
-    clicked = QtCore.Signal()
-
-    def __init__(self, text: str, color: str, size: int = 12, parent=None):
-        super().__init__(text, parent)
-        self._color = color
-        self._size = size
-        self._hover = False
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self._apply()
-
-    def _apply(self) -> None:
-        deco = "underline" if self._hover else "none"
-        self.setStyleSheet(
-            f"color:{self._color};font-weight:700;font-size:{self._size}px;"
-            f"text-decoration:{deco};background:transparent;")
-
-    def enterEvent(self, e):
-        self._hover = True
-        self._apply()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self._apply()
-        super().leaveEvent(e)
-
-    def mousePressEvent(self, e):
-        if e.button() == QtCore.Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(e)
-
-
 class _ChainBlock(QtWidgets.QWidget):
     """The merged base chain's per-hit breakdown, clamped to a few hits
     with an inline show-all toggle. Each hit is one discrete row, so
@@ -184,9 +149,9 @@ class _ChainBlock(QtWidgets.QWidget):
             row = self._build_hit(i, hit, chain_desc)
             self._rows.append(row)
             lay.addWidget(row)
-        self._more = _LinkLabel(
-            f"show all {len(hits)} hits {GLYPH_DOWN}", theme.ACCENT, size=10)
-        self._more.clicked.connect(self._toggle)
+        self._more = C.ClickableLabel(
+            f"show all {len(hits)} hits {GLYPH_DOWN}", theme.ACCENT, size=10,
+            on_click=self._toggle)
         self._more.hide()
         lay.addWidget(self._more, 0, QtCore.Qt.AlignRight)
         self._apply()
@@ -431,10 +396,19 @@ class SkillBar(QtWidgets.QWidget):
         self.focus_sid(self._default_focus(skills, self._matched).get("id"))
 
     def update_highlight(self, matched: set[str]) -> None:
-        """Re-apply the matched-search rings as the query changes."""
+        """Re-apply the matched-search rings as the query changes.
+        Prunes rows whose C++ objects were already deleted (a detail-pane
+        rebuild can outlive this bar's buttons) instead of raising."""
         self._matched = set(matched)
+        alive = []
         for s, btn, col in self._rows:
-            btn.setStyleSheet(_tile_style(col, _matches(s, self._matched)))
+            try:
+                btn.setStyleSheet(
+                    _tile_style(col, _matches(s, self._matched)))
+            except RuntimeError:
+                continue          # button deleted — drop the row
+            alive.append((s, btn, col))
+        self._rows = alive
 
     def focus_sid(self, sid: str) -> None:
         """Focus a skill by id: its full effect renders in the detail bar,
@@ -491,7 +465,12 @@ class SkillBar(QtWidgets.QWidget):
         """Fill the detail bar: name + type chip, the stat line and the
         resolved description, with the type color's left accent tying it
         to the focused tile."""
-        _clear_layout(self._focus_lay)
+        clear_layout(self._focus_lay)
+        if not s:
+            self._focus_name = None
+            self._focus.setStyleSheet(
+                f"QFrame{{border-left:3px solid {theme.DIM};}}")
+            return
         col = self._force or skill_color(s.get("type"))
         self._focus.setStyleSheet(
             f"QFrame{{border-left:3px solid {col};}}")
@@ -501,8 +480,7 @@ class SkillBar(QtWidgets.QWidget):
         hd.setSpacing(8)
         # the name is a link — clicking opens the full skill popup (it
         # already reads as a link: underlined on hover, pointing hand)
-        nm = _LinkLabel(s["name"], col)
-        nm.clicked.connect(lambda _s=s: self._open_popup(_s))
+        nm = C.ClickableLabel(s["name"], col, on_click=lambda _s=s: self._open_popup(_s))
         self._focus_name = nm
         hd.addWidget(nm)
         if s.get("type"):
@@ -551,17 +529,3 @@ class SkillBar(QtWidgets.QWidget):
             ncol.addWidget(_ChainBlock(s.get("hits") or [],
                                        s.get("description")))
         self._focus_lay.addLayout(ncol)
-
-
-def _clear_layout(lay: QtWidgets.QLayout) -> None:
-    """Detach + schedule deletion of every widget in a layout, recursing
-    into nested sub-layouts (the focus bar's rows live in one)."""
-    while lay.count():
-        item = lay.takeAt(0)
-        w = item.widget()
-        if w is not None:
-            w.hide()
-            w.setParent(None)
-            w.deleteLater()
-        elif item.layout() is not None:
-            _clear_layout(item.layout())

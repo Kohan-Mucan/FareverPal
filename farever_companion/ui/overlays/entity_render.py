@@ -12,8 +12,10 @@ from collections import defaultdict
 
 from .. import theme
 from ...data import icons, names, units as udata
+from ... import paths
 from ...geo import orbs as geo_orbs
 from .entity_rows import RowSpec
+from .minimap_render import done_marker
 
 
 def _static_waypoint_marker(kind: str) -> str:
@@ -57,9 +59,10 @@ class EntityRenderMixin:
                 # but use the Accent for the name color and tracking status.
                 icon_col = theme.KIND_COLOR.get(e.kind, theme.DANGER)
                 name_col = self.s.hud_accent or theme.ACCENT
+                spark_sheet = "collection" if (icons.has_icon("collection", e.unit_id) and not icons.has_icon("Units", e.unit_id)) else "Units"
 
                 specs.append(RowSpec(
-                    "Units", e.unit_id, icon_col, name if count <= 1 else f"{name} (x{count})", name_col,
+                    spark_sheet, e.unit_id, icon_col, name if count <= 1 else f"{name} (x{count})", name_col,
                     sub="◈ TRACKING" if tracked else "",
                     value=f"{d:>6.0f}m", bold=tracked, highlight=tracked,
                     outlined=True, outline_border=1,
@@ -155,6 +158,28 @@ class EntityRenderMixin:
         # 3.5) render group members
         if getattr(self.s, "show_group_members", False):
             self.group_box.show()
+            # per-session death tracking: alive(>0) -> dead(<=0) transition
+            from ...core import attributes as _attr
+            deaths = getattr(self, "_player_deaths", {})
+            prev_alive = getattr(self, "_player_prev_alive", {})
+            for e, _d in self._group_members:
+                addr = getattr(e, "addr", None)
+                if not addr:
+                    continue
+                try:
+                    hp = _attr.health(self.model.hl, e.addr)
+                except Exception:
+                    continue
+                if hp is None:
+                    continue
+                alive = hp > 0
+                was = prev_alive.get(addr)
+                if was is True and not alive:
+                    deaths[addr] = deaths.get(addr, 0) + 1
+                prev_alive[addr] = alive
+            self._player_deaths = deaths
+            self._player_prev_alive = prev_alive
+
             specs = []
             for e, d in self._group_members:
                 addr = getattr(e, "addr", None)
@@ -186,6 +211,11 @@ class EntityRenderMixin:
                     cb=(lambda k=key: self._select(*k)) if addr is not None else None,
                     key=key))
             self.group_box.fill(specs, isz)
+            n_dead = sum(deaths.values())
+            # +1 = you (the rows only list other members)
+            total = len(specs) + 1
+            hdr = f"PLAYERS · {total}" + (f" · ☠{n_dead}" if n_dead else "")
+            self.group_box.header.set_text(hdr)
             tag = ""
             if not getattr(self.model, "units_ok", True):
                 tag = "READ FAILED · RETRYING"
@@ -284,8 +314,23 @@ class EntityRenderMixin:
 
                 name_l = label.lower()
                 is_ore = "ore" in name_l or "tungstene" in name_l or "tin" in name_l or "copper" in name_l
-                accent = theme.KIND_COLOR["ore" if is_ore else "flower"]
-                col = self.s.hud_accent if tracked else accent
+                # Per-type ore color (used to tint the fallback ore sprite).
+                # Ores keep a grey icon ring + grey text so the icon reads clearly.
+                ore_color = None
+                if is_ore:
+                    ore_base = geo_gatherables.get_base_name(label).lower()
+                    ore_color = theme.ORE_COLOR.get(ore_base)
+                if is_ore:
+                    accent = theme.KIND_COLOR.get("ore", "#c2c6d0")  # grey icon ring
+                    text_col = ore_color or theme.KIND_COLOR.get("ore", "#c2c6d0")
+                else:
+                    # Flowers: one generic shape, no ring, GREEN text so the
+                    # label reads clearly without any background wash.
+                    accent = theme.KIND_COLOR["flower"]
+                    flower_base = geo_gatherables.get_base_name(label).lower()
+                    flower_color = theme.FLOWER_COLOR.get(flower_base, theme.KIND_COLOR["flower"])
+                    text_col = theme.KIND_COLOR["flower"]
+                col = self.s.hud_accent if tracked else text_col
 
                 # Auto-scale logic match (for sub-text or visual emphasis)
                 is_large = "_large" in name_l or "_big" in name_l or "tungstene" in name_l
@@ -294,26 +339,47 @@ class EntityRenderMixin:
                 marker = geo_gatherables.get_icon_name(label)
 
                 # Check if this gatherable type is enabled in settings
-                setting_attr = geo_gatherables.get_setting_attr(label)
-                if setting_attr and not getattr(self.s, setting_attr, True):
+                type_key = geo_gatherables.get_type_key(label)
+                if type_key and type_key not in self.s.show_gatherable_types:
                     continue
 
-                # Fallback to generic flower/ore if icon not found
-                if not icons.asset_icon(marker, 16):
-                    marker = "ore" if is_ore else "flower"
-
+                # If the per-type sprite isn't actually resolvable from the atlas
+                # (e.g. the minimap sheet was renamed), fall back to the single
+                # generic "ore"/"flower" sprite, tinted per-item to its type color
+                # (1 ore / 1 flower — the same sprite recolored per variant).
+                marker_tint = None
+                icon_pixmap = None
+                border_color = None
+                if not icons.atlas_sprite_resolvable("minimap", marker):
+                    if is_ore:
+                        marker = "ore"
+                        marker_tint = ore_color or accent
+                    else:
+                        marker = "flower"
+                        marker_tint = flower_color
                 sub = ""
                 if tracked:
                     sub = "◈ TRACKING"
 
                 specs.append(RowSpec(
-                    None, None, accent, display_name, col,
+                    None, None,
+                    # Ores use their per-type color; plants use the single flower
+                    # sprite tinted to their per-plant color (1:1 with the atlas).
+                    accent,
+                    display_name, col,
                     sub=sub,
                     value=f"{d:>6.0f}m", bold=tracked or is_large,
                     highlight=tracked, outlined=True,
-                    outline_border=2,
+                    # Ores keep a thin grey ring; flowers get NO outline — just the
+                    # tinted sprite (cleaner, and the green ring read as ~2px thick).
+                    outline_border=1 if not is_ore else 2,
+                    ring=True,
+                    thin_ring=True,
                     cb=(lambda k=key: self._select(*k)),
                     marker=marker,
+                    marker_tint=marker_tint,
+                    icon_pixmap=icon_pixmap,
+                    border_color=border_color,
                     key=key))
             self.gather_box.fill(specs, isz)
             self.gather_box.header.set_tag("")
@@ -339,7 +405,7 @@ class EntityRenderMixin:
                     highlight=tracked, outlined=True,
                     outline_border=2,
                     cb=(lambda oid=o.orb_id: self._select("orb", oid)),
-                    marker="orb2" if done else "orb",
+                    marker=done_marker("orb") if done else "orb",
                     key=("orb", o.orb_id)))
             self.orb_box.fill(specs, isz)
             self.orb_box.header.set_tag(
@@ -366,9 +432,10 @@ class EntityRenderMixin:
                              self._is_tracked("pos", f"{cx:.1f},{cy:.1f},{cz:.1f}|{label}")
 
                 accent = theme.CHEST
-                marker = "Recipe" if is_recipe else "chest"
-                if done:
-                    marker += "2"
+                if is_recipe:
+                    marker = "Recipe2" if done else "Recipe"
+                else:
+                    marker = done_marker("chest") if done else "chest"
 
                 sub = ""
                 if is_tracked:
@@ -391,6 +458,50 @@ class EntityRenderMixin:
         else:
             self.chest_box.hide()
 
+        # --- LOOT (dropped loot on the ground; rarity floor + best first) --
+        if getattr(self, "_loots", None):
+            from .loot_rows import build_loot_specs
+            xyz = self.model.player_xyz() or (0.0, 0.0, 0.0)
+            loot_specs = build_loot_specs(
+                self._loots, xyz, getattr(self.s, "loot_filter", "Off"),
+                is_tracked=self._is_tracked, track=self._track,
+                accent=self.s.hud_accent)
+            if loot_specs:
+                self.loot_box.show()
+                self.loot_box.fill(loot_specs, isz)
+                self.loot_box.header.set_tag("")
+                self.loot_box.setVisible(True)
+            else:
+                self.loot_box.hide()
+        else:
+            self.loot_box.hide()
+
+        # --- PLAYER FOOD (placed feasts / cauldrons) ------------------------
+        if getattr(self, "_foods", None):
+            xyz = self.model.player_xyz() or (0.0, 0.0, 0.0)
+            from ...data.items import catalog as _cat
+
+            def _fdist(f):
+                return f.dist2d(xyz[0], xyz[1])
+
+            food_specs = []
+            for f in sorted(self._foods, key=_fdist)[:4]:
+                disp_name, iid = _cat.resolve_food_info(f.name)
+                common = dict(
+                    accent="#FB923C", name=disp_name, name_color="#FDBA74",
+                    value=f"{_fdist(f):>6.0f}m",
+                    key=("food", getattr(f, "addr", None)))
+                food_specs.append(RowSpec("item", iid, **common))
+            if food_specs:
+                self.food_box.show()
+                self.food_box.fill(food_specs, isz)
+                self.food_box.header.set_tag("")
+                self.food_box.setVisible(bool(food_specs))
+            else:
+                self.food_box.hide()
+        else:
+            self.food_box.hide()
+
         rift_mode = self._get_rift_mode()
 
         rst = self.model.rift_status() if rift_mode != "Off" else None
@@ -412,36 +523,42 @@ class EntityRenderMixin:
 
                 area = subzone if subzone and subzone != "Rift" else ""
                 t = rst.formatted_time
+                time_html = f'<font color="{theme.GOOD}">{t}</font>' if t else ""
+
+                def _fmt_rift_label(prefix: str) -> str:
+                    if time_html:
+                        return f'<font color="{r_col}">{prefix} · </font>{time_html}'
+                    return f'<font color="{r_col}">{prefix}</font>'
 
                 # Determine labels based on range and state (7 granular states)
                 if rst.state == "ACTIVE":
-                    r_label = rst.status_label or (f"Rift · {area} (Active)" if area else "Rift Active")
+                    r_label = f'<font color="{r_col}">{rst.status_label or (f"Rift · {area} (Active)" if area else "Rift Active")}</font>'
                     r_sub = f"WRONG LOCATION · Head to {area}" if (area and not in_range and at_any_rift) else ""
                 elif in_range:
                     if rst.state == "CLOSING":
                         # 3. CLOSING (In Range)
-                        r_label = f"Rift · {area} Closing In · {t}" if area else f"Rift Closing In · {t}"
+                        r_label = _fmt_rift_label(f"Rift · {area} Closing In" if area else "Rift Closing In")
                         r_sub = ""
                     elif rst.state == "WARNING":
                         # 2. WARNING (In Range)
-                        r_label = f"Rift · {area} Starting In · {t}" if area else f"Rift Starting In · {t}"
+                        r_label = _fmt_rift_label(f"Rift · {area} Starting In" if area else "Rift Starting In")
                         r_sub = ""
                     else:
                         # 1. SCHEDULED (In Range)
-                        r_label = f"Next Rift · Starting In · {t}"
+                        r_label = _fmt_rift_label("Next Rift · Starting In")
                         r_sub = ""
                 else:
                     if rst.state == "CLOSING":
                         # 6. CLOSING (Out of Range)
-                        r_label = f"Rift · {area} Closing In · {t}" if area else f"Rift Closing In · {t}"
+                        r_label = _fmt_rift_label(f"Rift · {area} Closing In" if area else "Rift Closing In")
                         r_sub = f"WRONG LOCATION · Head to {area}" if (area and at_any_rift) else ""
                     elif rst.state == "WARNING":
                         # 5. WARNING (Out of Range)
-                        r_label = f"Rift · {area} Starting In · {t}" if area else f"Rift Starting In · {t}"
+                        r_label = _fmt_rift_label(f"Rift · {area} Starting In" if area else "Rift Starting In")
                         r_sub = f"Rift is at {area}" if (area and at_any_rift) else ""
                     else:
                         # 4. SCHEDULED (Out of Range)
-                        r_label = f"Next Rift · {area} · {t}" if area else f"Next Rift In · {t}"
+                        r_label = _fmt_rift_label(f"Next Rift · {area}" if area else "Next Rift In")
                         r_sub = ""
 
                 r_val = ""

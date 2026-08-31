@@ -243,6 +243,7 @@ class SegmentedControl(QtWidgets.QFrame):
         self._btns: dict[str, QtWidgets.QPushButton] = {}
         for opt in options:
             b = QtWidgets.QPushButton(opt)
+            b.setObjectName("SegmentBtn")
             b.setCheckable(True)
             b.setCursor(QtCore.Qt.PointingHandCursor)
             b.setStyleSheet(self._btn_qss(opt))
@@ -265,20 +266,21 @@ class SegmentedControl(QtWidgets.QFrame):
     def _btn_qss(self, opt: str = "") -> str:
         col = self._colors.get(opt)
         if col:
-            # per-option color (e.g. rarity chips): the chip wears its own
-            # color — dimmed when idle, full color when checked
+            # per-option color (e.g. rarity chips): clean colored chip
             return (
-                f"QPushButton{{background:transparent;border:0;padding:7px 10px;"
-                f"color:{theme.with_alpha(col, 150)};font-weight:600;}}"
-                f"QPushButton:hover{{color:{col};}}"
-                f"QPushButton:checked{{background:{theme.with_alpha(col, 40)};"
-                f"color:{col};}}")
+                f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+                f"color: {col}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+                f"QPushButton#SegmentBtn:hover {{ background: {theme.with_alpha(col, 30)}; color: {col}; }}"
+                f"QPushButton#SegmentBtn:checked {{ background: {theme.with_alpha(col, 45)}; "
+                f"border: 0; color: {col}; font-weight: 600; }}"
+                f"QPushButton#SegmentBtn:checked:hover {{ background: {theme.with_alpha(col, 60)}; }}")
         return (
-            f"QPushButton{{background:transparent;border:0;padding:7px 10px;"
-            f"color:{theme.MUTED};font-weight:600;}}"
-            f"QPushButton:hover{{color:{theme.TEXT};}}"
-            f"QPushButton:checked{{background:{theme.with_alpha(theme.ACCENT,40)};"
-            f"color:{theme.ACCENT};}}")
+            f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+            f"color: {theme.MUTED}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+            f"QPushButton#SegmentBtn:hover {{ color: {theme.TEXT}; background: {theme.with_alpha(theme.PANEL_HI, 90)}; }}"
+            f"QPushButton#SegmentBtn:checked {{ background: {theme.with_alpha(theme.ACCENT, 40)}; "
+            f"border: 0; color: {theme.ACCENT}; font-weight: 600; }}"
+            f"QPushButton#SegmentBtn:checked:hover {{ background: {theme.with_alpha(theme.ACCENT, 55)}; }}")
 
     def setCurrentText(self, text: str) -> None:
         if not text:
@@ -318,6 +320,71 @@ class SegmentedControl(QtWidgets.QFrame):
         (or each option's own color when one is set)."""
         for opt, b in self._btns.items():
             b.setStyleSheet(self._btn_qss(opt))
+
+
+# --- multi-select segmented control (same smooth flat feel, many on) ------
+class MultiSegmentedControl(QtWidgets.QFrame):
+    """Like SegmentedControl but non-exclusive: any number of segments can be
+    checked at once (used for the Gatherables flower / ore type picker)."""
+
+    optionToggled = QtCore.Signal(str, bool)
+
+    def __init__(self, options: list[str], parent=None,
+                 colors: dict[str, str] | None = None):
+        super().__init__(parent)
+        self.setObjectName("Cell")
+        self._colors = colors or {}
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(3)
+        self._btns: dict[str, QtWidgets.QPushButton] = {}
+        for opt in options:
+            b = QtWidgets.QPushButton(opt)
+            b.setObjectName("SegmentBtn")
+            b.setCheckable(True)
+            b.setCursor(QtCore.Qt.PointingHandCursor)
+            b.setStyleSheet(self._btn_qss(opt))
+            lay.addWidget(b, 1)
+            b.toggled.connect(lambda on, o=opt: self.optionToggled.emit(o, on))
+            self._btns[opt] = b
+
+    def _btn_qss(self, opt: str = "") -> str:
+        col = self._colors.get(opt)
+        if col:
+            return (
+                f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+                f"color: {col}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+                f"QPushButton#SegmentBtn:hover {{ background: {theme.with_alpha(col, 30)}; color: {col}; }}"
+                f"QPushButton#SegmentBtn:checked {{ background: {theme.with_alpha(col, 45)}; "
+                f"border: 0; color: {col}; font-weight: 600; }}"
+                f"QPushButton#SegmentBtn:checked:hover {{ background: {theme.with_alpha(col, 60)}; }}")
+        return (
+            f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+            f"color: {theme.MUTED}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+            f"QPushButton#SegmentBtn:hover {{ color: {theme.TEXT}; background: {theme.with_alpha(theme.PANEL_HI, 90)}; }}"
+            f"QPushButton#SegmentBtn:checked {{ background: {theme.with_alpha(theme.ACCENT, 40)}; "
+            f"border: 0; color: {theme.ACCENT}; font-weight: 600; }}"
+            f"QPushButton#SegmentBtn:checked:hover {{ background: {theme.with_alpha(theme.ACCENT, 55)}; }}")
+
+    def set_checked(self, opt: str, on: bool, silent: bool = False) -> None:
+        b = self._btns.get(opt)
+        if b is None:
+            return
+        if silent:
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+        else:
+            b.setChecked(on)
+
+    def checked(self, opt: str) -> bool:
+        b = self._btns.get(opt)
+        return b.isChecked() if b is not None else False
+
+    def restyle(self) -> None:
+        for opt, b in self._btns.items():
+            b.setStyleSheet(self._btn_qss(opt))
+
 
 # --- underline tabs (left-accent, sharp) — extracted to ui/tabs.py ---------
 from .tabs import UnderlineTabs  # noqa: F401  (re-exported component)
@@ -446,14 +513,51 @@ class IconTile(QtWidgets.QLabel):
         Matches the minimap style."""
         self.setPixmap(icons.outlined(sheet, id_, self._size, accent, border=border))
 
-    def set_marker(self, name: str, accent: str | None = None, outlined: bool = False) -> None:
+    def set_marker(self, name: str, accent: str | None = None, outlined: bool = False,
+                   border: int = 2) -> None:
         """A map-marker icon (assets/map_icons) instead of a game-sheet icon."""
         acc = accent if outlined else (accent or theme.ACCENT)
-        pm = icons.tile_marker(name, self._size, acc, outlined=outlined)
+        pm = icons.tile_marker(name, self._size, acc, outlined=outlined,
+                               border=border)
         # Missing marker assets degrade to an empty pixmap, never None
         # (a None here would crash QLabel.setPixmap in the Entity HUD).
         if pm is not None:
             self.setPixmap(pm)
+
+    def set_tinted_marker(self, name: str, color: str, accent: str | None = None,
+                           border: int = 2, keyline: bool = True,
+                           ring: bool = True) -> None:
+        """A map-marker sprite force-recolored to `color`, shape preserved
+        (the single grey ore sprite becoming per-type copper/tin/… art),
+        with an optional accent ring drawn around it for readability.
+
+        `border` sets the ring thickness; `keyline=False` drops the dark halo
+        so the ring reads as a single thin colored line instead of ~2px.
+        `ring=False` skips the ring entirely — just the tinted sprite."""
+        pm = icons.tinted_asset(name, color, self._size)
+        if pm is None or pm.isNull():
+            if accent:
+                self.set_marker(name, accent)
+            return
+        QtGui, QtCore = icons._qt()
+        if accent and ring:
+            ox, oy = (self._size - pm.width()) // 2, (self._size - pm.height()) // 2
+            out = QtGui.QPixmap(self._size, self._size)
+            out.fill(QtGui.QColor(0, 0, 0, 0))
+            p = QtGui.QPainter(out)
+            p.setRenderHint(QtGui.QPainter.Antialiasing)
+            ring = icons._silhouette(pm, accent)
+            b = border
+            if keyline:
+                keyline_px = icons._silhouette(pm, "#0b0e14")
+                for dx, dy in icons._disk_offsets(b + 1):
+                    p.drawPixmap(ox + dx, oy + dy, keyline_px)
+            for dx, dy in icons._disk_offsets(b):
+                p.drawPixmap(ox + dx, oy + dy, ring)
+            p.drawPixmap(ox, oy, pm)
+            p.end()
+            pm = out
+        self.setPixmap(pm)
 
     def set_ui_icon(self, name: str, accent: str = theme.ACCENT) -> None:
         """A UI SVG icon (assets/icons_ui) instead of a game-sheet icon."""
@@ -531,56 +635,117 @@ class NavItem(QtWidgets.QWidget):
 
 
 # --- overlay card (big toggle) --------------------------------------------
+# --- overlay card (modular container frame) -------------------------------
 class OverlayCard(QtWidgets.QFrame):
     toggled = QtCore.Signal(bool)
     bareToggled = QtCore.Signal(bool)
+    transparentToggled = QtCore.Signal(bool)
 
     def __init__(self, icon_name: str, title: str, desc: str, bare_checked: bool = False,
-                 has_bare: bool = True, bare_label: str = "Borderless", parent=None):
+                 has_bare: bool = True, bare_label: str = "Borderless",
+                 transparent_checked: bool = False, has_transparent: bool = False,
+                 parent=None):
         super().__init__(parent)
-        self.setObjectName("Card")
+        self.setObjectName("OverlayCardFrame")
+        self.setStyleSheet(
+            f"QFrame#OverlayCardFrame {{ background-color: {theme.PANEL}; "
+            f"border: 1px solid {theme.BORDER}; border-radius: 6px; }}")
         self._active = False
         self._icon_name = icon_name
 
         main_v = QtWidgets.QVBoxLayout(self)
-        main_v.setContentsMargins(16, 16, 16, 16)
+        main_v.setContentsMargins(12, 10, 12, 10)
         main_v.setSpacing(8)
 
-        row1 = QtWidgets.QHBoxLayout()
-        row1.setSpacing(12)
-        self._icon = QtWidgets.QLabel()
-        self._icon.setFixedSize(28, 28)
-        self._icon.setPixmap(icons.ui_icon(icon_name, theme.ACCENT, 28))
-        row1.addWidget(self._icon, 0, QtCore.Qt.AlignVCenter)
+        # Header Row: Icon + Title + Main Switch
+        hdr_row = QtWidgets.QHBoxLayout()
+        hdr_row.setSpacing(8)
 
-        title_lbl = QtWidgets.QLabel(title.upper())
-        title_lbl.setStyleSheet(f"color:{theme.TEXT};font-weight:700;font-size:16px;background:transparent;")
-        row1.addWidget(title_lbl, 1, QtCore.Qt.AlignCenter)
+        self._icon = QtWidgets.QLabel()
+        self._icon.setFixedSize(20, 20)
+        pm = icons.ui_icon(icon_name, theme.ACCENT, 20)
+        if not pm or pm.isNull():
+            pm = icons.marker(icon_name, 20, accent=theme.ACCENT)
+        self._icon.setPixmap(pm)
+        hdr_row.addWidget(self._icon, 0, QtCore.Qt.AlignVCenter)
+
+        self._title_lbl = QtWidgets.QLabel(title)
+        self._title_lbl.setStyleSheet(
+            f"color:{theme.TEXT};font-weight:700;font-size:15px;background:transparent;border:0;")
+        hdr_row.addWidget(self._title_lbl, 1, QtCore.Qt.AlignVCenter)
+
+        # Main Switch
         self._toggle = ToggleSwitch()
         self._toggle.toggled.connect(self._on_toggle)
-        row1.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
-        main_v.addLayout(row1)
-        self._bare_toggle = None
-        if has_bare:
-            row2 = QtWidgets.QHBoxLayout()
-            row2.addStretch(1)
-            bare_h = QtWidgets.QHBoxLayout()
-            bare_h.setSpacing(8)
-            bare_lbl = QtWidgets.QLabel(bare_label)
-            bare_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:11px;background:transparent;")
-            self._bare_toggle = ToggleSwitch(bare_checked)
-            self._bare_toggle.toggled.connect(self.bareToggled.emit)
-            bare_h.addWidget(bare_lbl)
-            bare_h.addWidget(self._bare_toggle)
-            row2.addLayout(bare_h)
-            main_v.addLayout(row2)
+        hdr_row.addWidget(self._toggle, 0, QtCore.Qt.AlignVCenter)
+        main_v.addLayout(hdr_row)
 
-        main_v.addSpacing(4)
+        # Divider line
+        div = QtWidgets.QFrame()
+        div.setFixedHeight(1)
+        div.setStyleSheet(f"background:{theme.BORDER};border:none;")
+        main_v.addWidget(div)
 
+        # Description
         desc_lbl = QtWidgets.QLabel(desc)
         desc_lbl.setWordWrap(True)
-        desc_lbl.setStyleSheet(f"color:{theme.MUTED};font-size:12px;background:transparent;")
+        desc_lbl.setStyleSheet(f"color:{theme.TEXT};font-size:12px;background:transparent;line-height:1.3;")
         main_v.addWidget(desc_lbl)
+
+        # Options Row: Borderless / Transparent pills
+        self._bare_toggle = None
+        self._transparent_toggle = None
+        if has_bare or has_transparent:
+            opt_row = QtWidgets.QHBoxLayout()
+            opt_row.setSpacing(6)
+            opt_row.addStretch(1)
+
+            if has_bare:
+                self._bare_toggle = QtWidgets.QPushButton(bare_label)
+                self._bare_toggle.setCheckable(True)
+                self._bare_toggle.setChecked(bare_checked)
+                self._bare_toggle.setCursor(QtCore.Qt.PointingHandCursor)
+                self._bare_toggle.setFixedHeight(24)
+                self._bare_toggle.setStyleSheet(self._pill_qss())
+                self._bare_toggle.toggled.connect(self.bareToggled.emit)
+                self._bare_toggle.toggled.connect(lambda _on, b=self._bare_toggle: b.setStyleSheet(self._pill_qss()))
+                opt_row.addWidget(self._bare_toggle)
+
+            if has_transparent:
+                self._transparent_toggle = QtWidgets.QPushButton("Transparent")
+                self._transparent_toggle.setCheckable(True)
+                self._transparent_toggle.setChecked(transparent_checked)
+                self._transparent_toggle.setCursor(QtCore.Qt.PointingHandCursor)
+                self._transparent_toggle.setFixedHeight(24)
+                self._transparent_toggle.setStyleSheet(self._pill_qss())
+                self._transparent_toggle.toggled.connect(self.transparentToggled.emit)
+                self._transparent_toggle.toggled.connect(lambda _on, b=self._transparent_toggle: b.setStyleSheet(self._pill_qss()))
+                opt_row.addWidget(self._transparent_toggle)
+
+            main_v.addLayout(opt_row)
+
+    def _pill_qss(self) -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: {theme.with_alpha(theme.PANEL_HI, 40)};"
+            f"  border: 1px solid {theme.BORDER};"
+            f"  border-radius: 4px;"
+            f"  padding: 3px 8px;"
+            f"  color: {theme.MUTED};"
+            f"  font-size: 11px;"
+            f"  font-weight: 600;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color: {theme.TEXT};"
+            f"  background: {theme.with_alpha(theme.PANEL_HI, 90)};"
+            f"  border-color: {theme.with_alpha(theme.ACCENT, 60)};"
+            f"}}"
+            f"QPushButton:checked {{"
+            f"  background: {theme.with_alpha(theme.ACCENT, 45)};"
+            f"  border: 1px solid {theme.ACCENT};"
+            f"  color: {theme.ACCENT};"
+            f"  font-weight: 600;"
+            f"}}")
 
     def _on_toggle(self, on: bool) -> None:
         self._active = on
@@ -601,17 +766,38 @@ class OverlayCard(QtWidgets.QFrame):
 
     def set_bare_checked_silent(self, on: bool) -> None:
         if self._bare_toggle:
-            self._bare_toggle.set_checked_silent(on)
+            self._bare_toggle.blockSignals(True)
+            self._bare_toggle.setChecked(on)
+            self._bare_toggle.blockSignals(False)
+            self._bare_toggle.setStyleSheet(self._pill_qss())
+
+    def setTransparentChecked(self, on: bool) -> None:
+        if self._transparent_toggle:
+            self._transparent_toggle.setChecked(on)
+
+    def set_transparent_checked_silent(self, on: bool) -> None:
+        if self._transparent_toggle:
+            self._transparent_toggle.blockSignals(True)
+            self._transparent_toggle.setChecked(on)
+            self._transparent_toggle.blockSignals(False)
+            self._transparent_toggle.setStyleSheet(self._pill_qss())
 
     def isChecked(self) -> bool:
         return self._toggle.isChecked()
 
     def restyle(self) -> None:
         """Re-tint the card icon after the theme accent changes."""
-        self._icon.setPixmap(icons.ui_icon(self._icon_name, theme.ACCENT, 28))
+        pm = icons.ui_icon(self._icon_name, theme.ACCENT, 20)
+        if not pm or pm.isNull():
+            pm = icons.marker(self._icon_name, 20, accent=theme.ACCENT)
+        self._icon.setPixmap(pm)
+        if self._bare_toggle:
+            self._bare_toggle.setStyleSheet(self._pill_qss())
+        if self._transparent_toggle:
+            self._transparent_toggle.setStyleSheet(self._pill_qss())
         self.update()
 
-    def setEnabled(self, on: bool) -> None:        # dim + disable the toggle when locked
+    def setEnabled(self, on: bool) -> None:
         super().setEnabled(on)
         self._toggle.setEnabled(on)
         if on:
@@ -620,17 +806,6 @@ class OverlayCard(QtWidgets.QFrame):
             eff = QtWidgets.QGraphicsOpacityEffect(self)
             eff.setOpacity(0.4)
             self.setGraphicsEffect(eff)
-
-    def paintEvent(self, e):
-        super().paintEvent(e)
-        if self._active and self.isEnabled():
-            p = QtGui.QPainter(self)
-            w, h = self.width(), self.height()
-            p.setPen(QtGui.QPen(QtGui.QColor(theme.ACCENT), 1))
-            p.setBrush(QtCore.Qt.NoBrush)
-            p.drawRect(0, 0, w - 1, h - 1)
-            p.fillRect(0, 0, 3, h, QtGui.QColor(theme.ACCENT))   # left accent bar
-            p.end()
 
 
 # --- info card (icon + label + value) -------------------------------------
@@ -800,6 +975,143 @@ class FilterChip(QtWidgets.QPushButton):
                 f"border:1px solid {theme.BORDER};border-radius:0;padding:4px 10px;}}"
                 f"QPushButton:hover{{border-color:{theme.MUTED};color:{theme.TEXT};}}")
 
+    def set_checked_silent(self, on: bool) -> None:
+        self.blockSignals(True)
+        self.setChecked(on)
+        self.blockSignals(False)
+        self.restyle()
+
+
+# --- chip toggle (matches SegmentedControl / Entity Loot Filter style) ----
+class ChipToggle(QtWidgets.QPushButton):
+    """A checkable button matching the exact SegmentedControl / Entity Loot Filter style.
+    Active (checked): background rgba(ACCENT, 40), border 1px solid ACCENT, text color ACCENT, font-weight 600.
+    Inactive (unchecked): background PANEL_LOW, border 1px solid BORDER, text color MUTED, font-weight 600.
+    """
+
+    def __init__(self, text: str, checked: bool = False, parent=None, color: str | None = None):
+        super().__init__(text, parent)
+        self._color = color
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFixedHeight(32)
+        self.toggled.connect(lambda _on: self.restyle())
+        self.restyle()
+
+    def restyle(self) -> None:
+        col = self._color or theme.ACCENT
+        if self.isChecked():
+            self.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {theme.with_alpha(col, 40)};"
+                f"  border: 1px solid {col};"
+                f"  color: {col};"
+                f"  font-size: 11px;"
+                f"  font-weight: 600;"
+                f"  padding: 4px 8px;"
+                f"}}"
+                f"QPushButton:hover {{"
+                f"  background-color: {theme.with_alpha(col, 55)};"
+                f"}}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {theme.PANEL_LOW};"
+                f"  border: 1px solid {theme.BORDER};"
+                f"  color: {theme.MUTED};"
+                f"  font-size: 11px;"
+                f"  font-weight: 600;"
+                f"  padding: 4px 8px;"
+                f"}}"
+                f"QPushButton:hover {{"
+                f"  background-color: {theme.PANEL_HI};"
+                f"  color: {theme.TEXT};"
+                f"  border-color: {theme.BORDER};"
+                f"}}"
+            )
+
+    def set_checked_silent(self, on: bool) -> None:
+        self.blockSignals(True)
+        self.setChecked(on)
+        self.blockSignals(False)
+        self.restyle()
+
+
+# --- segmented grid (multi-row toggle grid in a QFrame#Cell container) -----
+class SegmentedGrid(QtWidgets.QFrame):
+    """A multi-row / multi-column grid of toggle buttons housed in a QFrame#Cell
+    container with exact SegmentedControl / Entity Loot Filter styling and inset padding."""
+
+    def __init__(self, items: list[tuple[str, str, bool, callable]], cols: int = 3, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Cell")
+        grid = QtWidgets.QGridLayout(self)
+        grid.setContentsMargins(3, 3, 3, 3)
+        grid.setHorizontalSpacing(3)
+        grid.setVerticalSpacing(3)
+        self._btns: dict[str, QtWidgets.QPushButton] = {}
+
+        for i, (key, label, checked, cb) in enumerate(items):
+            b = QtWidgets.QPushButton(label)
+            b.setCheckable(True)
+            b.setCursor(QtCore.Qt.PointingHandCursor)
+            b.setFixedHeight(32)
+            b.setStyleSheet(self._btn_qss())
+            b.setChecked(checked)
+            if cb:
+                b.toggled.connect(cb)
+            b.toggled.connect(lambda _on, btn=b: btn.setStyleSheet(self._btn_qss()))
+            # Provide set_checked_silent on the button itself for easy sync & test compatibility
+            b.set_checked_silent = lambda on, btn=b: (
+                btn.blockSignals(True),
+                btn.setChecked(on),
+                btn.blockSignals(False),
+                btn.setStyleSheet(self._btn_qss()),
+            )
+            grid.addWidget(b, i // cols, i % cols)
+            self._btns[key] = b
+
+    def _btn_qss(self) -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 0;"
+            f"  padding: 6px 10px;"
+            f"  color: {theme.MUTED};"
+            f"  font-size: 13px;"
+            f"  font-weight: 600;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color: {theme.TEXT};"
+            f"  background: {theme.with_alpha(theme.PANEL_HI, 90)};"
+            f"}}"
+            f"QPushButton:checked {{"
+            f"  background: {theme.with_alpha(theme.ACCENT, 40)};"
+            f"  color: {theme.ACCENT};"
+            f"  font-weight: 600;"
+            f"}}"
+            f"QPushButton:checked:hover {{"
+            f"  background: {theme.with_alpha(theme.ACCENT, 60)};"
+            f"}}"
+        )
+
+    def btn(self, key: str) -> QtWidgets.QPushButton | None:
+        return self._btns.get(key)
+
+    def set_checked_silent(self, key: str, on: bool) -> None:
+        b = self._btns.get(key)
+        if b is not None:
+            b.blockSignals(True)
+            b.setChecked(on)
+            b.blockSignals(False)
+            b.setStyleSheet(self._btn_qss())
+
+    def restyle(self) -> None:
+        for b in self._btns.values():
+            b.setStyleSheet(self._btn_qss())
+
 
 # --- field (label above a control) ----------------------------------------
 class Field(QtWidgets.QWidget):
@@ -815,3 +1127,108 @@ class Field(QtWidgets.QWidget):
         lay.addWidget(lbl)
         lay.addWidget(control)
         self.control = control
+
+
+# --- clickable wrappers --------------------------------------------------
+class ClickableCard(QtWidgets.QFrame):
+    """Clickable container frame emitting `clicked` on mouse press."""
+
+    clicked = QtCore.Signal()
+
+    def __init__(self, parent=None, on_click=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        if on_click is not None:
+            self.clicked.connect(on_click)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
+class ClickableLabel(QtWidgets.QLabel):
+    """A label that reads as an interactive link: pointer cursor and hover underline."""
+
+    clicked = QtCore.Signal()
+
+    def __init__(self, text: str, color: str | None = None, size: int = 12,
+                 bold: bool = True, parent=None, on_click=None):
+        super().__init__(text, parent)
+        self._color = color or theme.ACCENT
+        self._size = size
+        self._bold = bold
+        self._hover = False
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        if on_click is not None:
+            self.clicked.connect(on_click)
+        self._apply()
+
+    def _apply(self) -> None:
+        deco = "underline" if self._hover else "none"
+        weight = "700" if self._bold else "400"
+        self.setStyleSheet(
+            f"color:{self._color};font-weight:{weight};font-size:{self._size}px;"
+            f"text-decoration:{deco};background:transparent;")
+
+    def set_color(self, color: str) -> None:
+        self._color = color
+        self._apply()
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self._apply()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self._apply()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
+        if e.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+
+# --- sign-in banner card -------------------------------------------------
+class SignInCard(QtWidgets.QFrame):
+    """Account sign-in prompt card used on pages that require an authenticated account."""
+
+    def __init__(self, message: str, on_sign_in, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Card")
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        lbl = QtWidgets.QLabel(message)
+        lbl.setObjectName("Muted")
+        lbl.setWordWrap(True)
+        lay.addWidget(lbl)
+
+        btn = QtWidgets.QPushButton("Sign in")
+        btn.setObjectName("Accent")
+        btn.setMinimumHeight(32)
+        btn.setCursor(QtCore.Qt.PointingHandCursor)
+        btn.setFocusPolicy(QtCore.Qt.NoFocus)
+        btn.clicked.connect(on_sign_in)
+        lay.addWidget(btn, 0, QtCore.Qt.AlignLeft)
+
+
+# --- search input --------------------------------------------------------
+class SearchInput(QtWidgets.QLineEdit):
+    """Standardized search line edit with clear button and placeholder text."""
+
+    def __init__(self, placeholder: str = "Search…", on_text_changed=None,
+                 parent=None):
+        super().__init__(parent)
+        self.setPlaceholderText(placeholder)
+        self.setClearButtonEnabled(True)
+        if on_text_changed is not None:
+            self.textChanged.connect(on_text_changed)

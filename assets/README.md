@@ -9,13 +9,12 @@ UI typography, loaded at startup via `QFontDatabase.addApplicationFont`
 (`ui/theme.load_fonts`). The QSS lists Segoe UI / Consolas as fallbacks, so the
 app still runs if these are removed.
 
-| File                          | Family         | License | Source |
-|-------------------------------|----------------|---------|--------|
-| `Inter-Variable.ttf`          | Inter          | OFL 1.1 | github.com/rsms/inter (via google/fonts) |
-| `JetBrainsMono-Variable.ttf`  | JetBrains Mono | OFL 1.1 | github.com/JetBrains/JetBrainsMono (via google/fonts) |
+| File                          | Family           | License | Source |
+|-------------------------------|------------------|---------|--------|
+| `RobotoCondensed-Variable.ttf` | Roboto Condensed | OFL 1.1 | github.com/googlefonts/roboto-3-classic (via google/fonts) |
 
-Full license texts: `Inter-OFL.txt`, `JetBrainsMono-OFL.txt`. Both are variable
-fonts; Qt selects weights from the `wght` axis via QSS `font-weight`.
+Full license text: `RobotoCondensed-OFL.txt`. It is a variable font; Qt selects
+weights from the `wght` axis via QSS `font-weight`.
 
 ## `icons_ui/`
 Monochrome stroke glyphs for UI chrome (nav rail, buttons, brand). 24×24

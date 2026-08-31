@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
+from shiboken6 import isValid
 
 from ... import components as C
 from ... import theme
@@ -12,7 +13,8 @@ from .card import CodexUnitCard
 class CodexGridMixin:
     def _refresh_codex_grid(self, reset_scroll: bool = False) -> None:
         """Re-build the grid based on active tab, search query, and status filter."""
-        if not hasattr(self, "_codex_grid") or not self._codex_grid:
+        # the Codex page may have been evicted while the search debounce fired
+        if not hasattr(self, "_codex_grid") or not isValid(self._codex_grid):
             return
 
         scroll_val = self._codex_scroll.verticalScrollBar().value() if (hasattr(self, "_codex_scroll") and self._codex_scroll) else 0

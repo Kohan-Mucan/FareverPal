@@ -11,6 +11,7 @@ from __future__ import annotations
 import webbrowser
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from .. import theme
 from .. import components as C
@@ -40,23 +41,9 @@ class CollectionPageMixin:
         v.addWidget(intro)
 
         # signed-out card (same shape as Friends)
-        self._col_signedout = QtWidgets.QFrame()
-        self._col_signedout.setObjectName("Card")
-        so = QtWidgets.QVBoxLayout(self._col_signedout)
-        so.setContentsMargins(16, 16, 16, 16)
-        so.setSpacing(10)
-        so_lbl = QtWidgets.QLabel("Sign in to your Farever Pal account to track "
-                                  "your collection across the app and the website.")
-        so_lbl.setObjectName("Muted")
-        so_lbl.setWordWrap(True)
-        so_btn = QtWidgets.QPushButton("Sign in")
-        so_btn.setObjectName("Accent")
-        so_btn.setMinimumHeight(32)
-        so_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        so_btn.setFocusPolicy(QtCore.Qt.NoFocus)   # mouse-only: no Space/Enter trigger
-        so_btn.clicked.connect(self._open_login)
-        so.addWidget(so_lbl)
-        so.addWidget(so_btn, 0, QtCore.Qt.AlignLeft)
+        self._col_signedout = C.SignInCard(
+            "Sign in to your Farever Pal account to track your collection across the app and the website.",
+            self._open_login)
         v.addWidget(self._col_signedout)
 
         self._col_main = QtWidgets.QWidget()
@@ -85,9 +72,7 @@ class CollectionPageMixin:
         self._col_state = QtWidgets.QComboBox(page)
         for label, val in (("All", ""), ("Missing", "missing"), ("Collected", "collected")):
             self._col_state.addItem(label, val)
-        self._col_search = QtWidgets.QLineEdit()
-        self._col_search.setPlaceholderText("Search name, type or source…")
-        self._col_search.setClearButtonEnabled(True)
+        self._col_search = C.SearchInput("Search name, type or source…")
         refresh = QtWidgets.QPushButton("Refresh")
         refresh.setObjectName("Outline")
         refresh.setCursor(QtCore.Qt.PointingHandCursor)
@@ -262,7 +247,11 @@ class CollectionPageMixin:
         url = f"{self.s.api_base}/collection.php?{urlencode(params)}"
         QtWidgets.QApplication.clipboard().setText(url)
         self._col_share_btn.setText("Copied!")
-        QtCore.QTimer.singleShot(1500, lambda: self._col_share_btn.setText("Copy share link"))
+        QtCore.QTimer.singleShot(1500, lambda: (
+            self._col_share_btn.setText("Copy share link")
+            if getattr(self, "_widget_alive", lambda w: False)(
+                getattr(self, "_col_share_btn", None))
+            else None))
 
     # --- account sync ------------------------------------------------------
     def _refresh_collection_gating(self):
@@ -313,6 +302,10 @@ class CollectionPageMixin:
     def _col_done(self, tag: str, res: dict, add: list | None = None,
                   rem: list | None = None):
         self._col_worker = None
+        # the Collection page may have been evicted while the worker ran
+        if not getattr(self, "_widget_alive", lambda w: False)(
+                getattr(self, "_col_sync_lbl", None)):
+            return
         if not isinstance(res, dict) or not res.get("ok"):
             if tag == "push":
                 # re-queue, retry on the next toggle / refresh

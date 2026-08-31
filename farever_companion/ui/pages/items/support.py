@@ -10,8 +10,11 @@ from functools import lru_cache
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
+from ...layout import (CardScroll, FlowLayout, FlowRow, HScrollCard,
+                       WrapLabel, clear_layout)
 from ....data import items as idata
 from ....data import names
+from ..tile_delegate import paint_accent_header, paint_tag_chips
 
 
 # toggle / marker glyphs shared by the items pages — the right chevron (a
@@ -28,8 +31,10 @@ GLYPH_RIFT = "◆"
 # --- quick gear-category tabs -------------------------------------------
 # tab label -> category value: the app speaks "Jewelry" (the main page's
 # equipment-tab name) where the data layer calls the category "Accessory".
+# "@dungeon" is not a data category — the Dungeons tab swaps in the faction
+# accordion view instead of the item list.
 QUICK_TABS = (("Weapons", "Weapons"), ("Armor", "Armor"),
-              ("Jewelry", "Accessory"))
+              ("Jewelry", "Accessory"), ("Dungeons", "@dungeon"))
 CAT_LABEL = {"Accessory": "Jewelry"}   # category display names
 # jewelry slots read as Ring / Neck / Trinket rather than the raw
 # 'GearFinger' style ids — used for the type chips and sub-sections
@@ -162,11 +167,8 @@ def chip_style(color: str, size: int = 11) -> str:
 # icon-above-name tiles (the codex look); type headers are full-width items
 # whose huge width makes the icon grid wrap to a fresh row (the classic
 # grouped-icon-view trick: a header wider than the viewport takes its line)
-TILE_W = 84             # tile width — 4 fit per row in the list column
-# (84px + 6px spacing = 354px of flow width; with the scrollbar
-# reserve that's any window >= ~1028px wide, incl. the 1180px default.
-# The old 108px tiles only fit 3 rows at the default window)
-TILE_ICON = 40          # icon size inside the tile (matches setIconSize)
+TILE_W = 74             # tile width — 5 fit per row in the list column
+TILE_ICON = 64        # icon size inside the tile (matches setIconSize)
 TILE_TEXT_MAX = 4       # hard cap — longer names elide instead of growing
 # header class-line font: fixed PIXEL size (DPI-independent)
 _CLASS_FONT_PX = 11
@@ -180,7 +182,7 @@ def tile_height(name: str, font: QtGui.QFont | None = None) -> int:
     QTextLayout so the count never clips the last line."""
     f = font or QtWidgets.QApplication.font()
     fm = QtGui.QFontMetrics(f)
-    avail = TILE_W - 16 - 4     # 8px padding each side, minus safety
+    avail = TILE_W - 12 - 4     # 6px padding each side, minus safety
     tl = QtGui.QTextLayout(name or "", f)
     tl.beginLayout()
     lines = 0
@@ -192,7 +194,7 @@ def tile_height(name: str, font: QtGui.QFont | None = None) -> int:
         lines += 1
     tl.endLayout()
     lines = min(max(lines, 1), TILE_TEXT_MAX)
-    return TILE_ICON + 6 + lines * fm.lineSpacing() + 10
+    return TILE_ICON + 6 + lines * fm.lineSpacing() + 16
 
 
 def prewarm_tiles(parent=None, batch: int = 160) -> QtCore.QTimer | None:
@@ -232,7 +234,8 @@ class TileDelegate(QtWidgets.QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         if index.data(TYPE_HEADER_ROLE):
-            self._paint_header(painter, option, index)
+            segs = index.data(HEADER_CLASS_ROLE) or ()
+            paint_accent_header(painter, option, index.data() or "", segs)
             return
         opt = QtWidgets.QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
@@ -242,83 +245,7 @@ class TileDelegate(QtWidgets.QStyledItemDelegate):
                           widget)
         tags = index.data(TAG_ROLE) or ()
         if tags:
-            self._paint_tags(painter, option, tags)
-
-    def _paint_header(self, painter, option, index):
-        """A full-width accent-tinted bar: the type label, with a per-class
-        count line under it when the section has class gear."""
-        painter.save()
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        r = option.rect
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor(theme.with_alpha(theme.ACCENT, 14)))
-        painter.drawRoundedRect(r, 4, 4)
-        f = QtGui.QFont(option.font)
-        f.setBold(True)
-        f.setPixelSize(12)
-        painter.setFont(f)
-        painter.setPen(QtGui.QColor(theme.MUTED))
-        title = index.data() or ""
-        segs = index.data(HEADER_CLASS_ROLE) or ()
-        if not segs:
-            painter.drawText(r.adjusted(8, 0, -8, 0),
-                             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-                             title)
-            painter.restore()
-            return
-        painter.drawText(r.adjusted(8, 3, -8, -r.height() // 2),
-                         QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop, title)
-        cf = QtGui.QFont(option.font)
-        cf.setPixelSize(_CLASS_FONT_PX)
-        fm = QtGui.QFontMetrics(cf)
-        y = r.bottom() - fm.height() - 3
-        x = r.left() + 8
-        painter.setFont(cf)
-        for i, (lbl, col, n) in enumerate(segs):
-            txt = f"{lbl} {n}"
-            tr = QtCore.QRect(x, y, fm.horizontalAdvance(txt) + 2, fm.height())
-            painter.setPen(QtGui.QColor(col))
-            painter.drawText(tr, QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop, txt)
-            x += tr.width()
-            if i < len(segs) - 1:
-                sep = " · "
-                sr = QtCore.QRect(x, y, fm.horizontalAdvance(sep) + 2,
-                                  fm.height())
-                painter.setPen(QtGui.QColor(theme.MUTED))
-                painter.drawText(sr, QtCore.Qt.AlignLeft
-                                | QtCore.Qt.AlignTop, sep)
-                x += sr.width()
-        painter.restore()
-
-    def _paint_tags(self, painter, option, tags):
-        """The matched-stat chips at the tile's top-right corner."""
-        f = QtGui.QFont(option.font)
-        f.setPixelSize(10)
-        f.setBold(True)
-        fm = QtGui.QFontMetrics(f)
-        x = option.rect.right() - 8
-        y = option.rect.top() + 4
-        painter.save()
-        for t in tags[:2]:
-            w = fm.horizontalAdvance(t) + 10
-            r = QtCore.QRect(x - w, y, w, 16)
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(theme.with_alpha(theme.ACCENT, 25))))
-            painter.setPen(QtGui.QPen(QtGui.QColor(theme.with_alpha(theme.ACCENT, 90))))
-            painter.drawRoundedRect(r, 3, 3)
-            painter.setFont(f)
-            painter.setPen(QtGui.QColor(theme.ACCENT))
-            painter.drawText(r, QtCore.Qt.AlignCenter, CHIP_SHORT.get(t, t))
-            x -= w + 4
-        if len(tags) > 2:
-            more = "+%d" % (len(tags) - 2)
-            w = fm.horizontalAdvance(more) + 10
-            r = QtCore.QRect(x - w, y, w, 16)
-            painter.setBrush(QtGui.QBrush(QtGui.QColor(theme.with_alpha(theme.MUTED, 30))))
-            painter.setPen(QtGui.QPen(QtGui.QColor(theme.with_alpha(theme.MUTED, 70))))
-            painter.drawRoundedRect(r, 3, 3)
-            painter.setPen(QtGui.QColor(theme.MUTED))
-            painter.drawText(r, QtCore.Qt.AlignCenter, more)
-        painter.restore()
+            paint_tag_chips(painter, option, tags, CHIP_SHORT)
 
 
 def quick_pick(page, text: str) -> None:
@@ -328,6 +255,15 @@ def quick_pick(page, text: str) -> None:
     page._items_type_filter.clear()
     for chip in getattr(page, "_items_type_chips", {}).values():
         chip.setChecked(False)
+    # the Dungeons tab swaps the faction accordion in place of the tile list
+    on = page._items_category == "@dungeon"
+    if hasattr(page, "_items_dungeon_view"):
+        page._items_dungeon_view.setVisible(on)
+        page._items_list.setVisible(not on)
+        if on:
+            # first show (or returning from another tab): make sure the
+            # right pane shows the active faction's gear card
+            page._items_dungeon_view.ensure_card()
     page._items_refilter()
     if hasattr(page, "_items_list"):
         page._items_list.scrollToTop()
@@ -345,212 +281,12 @@ def sync_quick_tabs(page) -> None:
     page._items_quick.clear()
 
 
-class CardScroll(QtWidgets.QScrollArea):
-    """Detail-pane scroll area whose card hugs its content: it fills the
-    pane width, sizes to the content's sizeHint, and only scrolls when the
-    content is genuinely taller than the pane."""
-
-    def __init__(self, card: QtWidgets.QWidget):
-        super().__init__()
-        self.setWidgetResizable(False)
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.setStyleSheet(
-            "QScrollArea{background:transparent;border:0;}")
-        self.setWidget(card)
-        self._card = card
-
-    def _fit(self) -> None:
-        """Card = pane width x content height, sized from the layout's real
-        heightForWidth (sizeHint only reports single-line label heights)."""
-        if self._card is None:
-            return
-        w = self.viewport().width()
-        if w <= 0:
-            return
-        card = self._card
-        lay = card.layout()
-        # size from the layout's real heightForWidth (sizeHint only reports
-        # single-line label heights, which squashed wrapped Drops From text)
-        h = -1
-        if lay is not None and lay.hasHeightForWidth():
-            h = lay.heightForWidth(w)
-        if h <= 0:
-            h = card.sizeHint().height()
-        card.resize(w, max(h, 1))
-        if lay is not None:
-            lay.activate()
-        deficit = 0
-        for lbl in card.findChildren(QtWidgets.QLabel):
-            if lbl.isHidden() or not lbl.wordWrap() or not lbl.text():
-                continue
-            w_lbl = lbl.width()
-            if w_lbl <= 30:
-                continue
-            need = lbl.heightForWidth(w_lbl)
-            if need > 0 and lbl.height() < need:
-                deficit = max(deficit, need - lbl.height())
-        if deficit > 2:
-            card.resize(w, card.height() + deficit)
-            if lay is not None:
-                lay.activate()
-
-    def resizeEvent(self, ev):
-        super().resizeEvent(ev)
-        self._fit()
-
-
-class WrapLabel(QtWidgets.QLabel):
-    """Word-wrapping label that enforces its wrapped text height at the
-    ACTUAL assigned width as a minimum height, so nested box/grid layouts
-    can never squash its lines. Plain QLabels report a single-line sizeHint
-    and QGridLayout's heightForWidth is only approximate through nested
-    layouts, so Drops From source names and location lists would clip
-    their last line otherwise."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setWordWrap(True)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # once the layout assigns the width, pin the height to the real
-        # wrapped height — updateGeometry reflows the row above so it grows
-        # instead of squeezing the text, and relaxes when the pane widens
-        # (the column width is layout-stable, so this converges)
-        w = self.width()
-        if w > 30 and self.text():
-            need = self.heightForWidth(w)
-            if need > 0 and abs(need - self.minimumHeight()) > 1:
-                self.setMinimumHeight(need)
-
-
-class FlowLayout(QtWidgets.QLayout):
-    """Wrapping horizontal layout — active-filter chips flow onto a new line
-    when the row fills (the classic Qt flow layout)."""
-
-    def __init__(self, parent=None, margin=0, spacing=4):
-        super().__init__(parent)
-        if parent is not None:
-            self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
-        self._items: list = []
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def itemAt(self, index):
-        return self._items[index] if 0 <= index < len(self._items) else None
-
-    def takeAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
-        return None
-
-    def expandingDirections(self):
-        return QtCore.Qt.Orientations(QtCore.Qt.Orientation(0))
-
-    def hasHeightForWidth(self) -> bool:
-        return True
-
-    def heightForWidth(self, width: int) -> int:
-        return self._do_layout(QtCore.QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        """Height for the layout's CURRENT width — a flow layout wraps, so
-        the height depends on how many chips fit per line."""
-        parent = self.parentWidget()
-        width = parent.width() if parent is not None else 0
-        m = self.contentsMargins()
-        if width <= 0:
-            return self.minimumSize()
-        return QtCore.QSize(width, self.heightForWidth(width))
-
-    def minimumSize(self):
-        size = QtCore.QSize()
-        for it in self._items:
-            w = it.widget()
-            if w is None or w.isHidden():
-                continue                # hidden chips take no space
-            size = size.expandedTo(it.minimumSize())
-        m = self.contentsMargins()
-        return size + QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
-
-    def _do_layout(self, rect: QtCore.QRect, test_only: bool) -> int:
-        m = self.contentsMargins()
-        x, y = rect.x() + m.left(), rect.y() + m.top()
-        line_h, used = 0, 0
-        space = self.spacing()
-        right = rect.right() - m.right()
-        for it in self._items:
-            w = it.widget()
-            if w is None or w.isHidden():
-                continue                # hidden chips take no space
-            hint = w.sizeHint()
-            if x + hint.width() > right and line_h > 0:
-                x = rect.x() + m.left()
-                y += line_h + space
-                line_h = 0
-            if not test_only:
-                it.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), hint))
-            x += hint.width() + space
-            line_h = max(line_h, hint.height())
-            used = max(used, y + hint.height() + m.bottom())
-        return used
-
-
-class FlowRow(QtWidgets.QWidget):
-    """A widget hosting a wrapping FlowLayout whose sizeHint mirrors its
-    container's width (the grandparent widget, less that container's layout
-    margins), so nested wrapping layouts can't size it to a stale or
-    default width. The collapsible drop-kind groups use this for their
-    revealed name rows: under a plain QVBoxLayout the group already spans
-    full width, and inside a wrapping FlowLayout the expanded group
-    reports the container width — taking its own full-width line instead
-    of squeezing the names into the collapsed header's width."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._flow = FlowLayout(self)
-        self._flow.setContentsMargins(0, 0, 0, 0)
-        self._flow.setSpacing(6)
-        self.setLayout(self._flow)
-
-    def layout(self) -> FlowLayout:
-        return self._flow
-
-    def sizeHint(self):
-        gp = self.parentWidget()
-        container = gp.parentWidget() if gp is not None else None
-        w = container.width() if container is not None else self.width()
-        lm = QtCore.QMargins()
-        if container is not None and container.layout() is not None:
-            lm = container.layout().contentsMargins()
-        m = self._flow.contentsMargins()
-        avail = max(0, w - lm.left() - lm.right() - m.left() - m.right())
-        if avail <= 0:
-            return self.minimumSize()
-        return QtCore.QSize(avail, self._flow.heightForWidth(avail))
-
-
 def rebuild_filter_chips(box: QtWidgets.QWidget, lay, active: list,
                          on_clear, clear_all: bool = False) -> None:
     """Rebuild the removable filter-chip row: one chip per active filter
     plus a Clear all link. `active` is [(control, label, value)]; the row
     hides itself when nothing is active unless `clear_all`."""
-    while lay.count():
-        item = lay.takeAt(0)
-        w = item.widget()
-        if w is not None:
-            w.hide()
-            w.setParent(None)
-            w.deleteLater()
+    clear_layout(lay)
     for entry in active:
         combo, label, val = entry[0], entry[1], entry[2]
         chip = QtWidgets.QPushButton(f"{label.upper()} · {val}  ×")
@@ -647,31 +383,5 @@ def is_listable_item(it: dict) -> bool:
     artifacts with raw-id names and no acquisition data."""
     return _listable(it.get("id") or "")
 
-
-class HScrollCard(QtWidgets.QScrollArea):
-    """Horizontal-only scroll card for a wide stat table: the content keeps
-    its natural width (scrolling when the pane is narrower) and its height
-    plus the scrollbar's reserve so the last row never clips."""
-
-    def __init__(self, widget: QtWidgets.QWidget):
-        super().__init__()
-        self.setWidgetResizable(True)
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.setStyleSheet(
-            "QScrollArea{background:transparent;border:0;}")
-        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.setMinimumWidth(0)
-        widget.setMinimumWidth(widget.sizeHint().width())
-        self.setWidget(widget)
-        self._content = widget
-        # reserve the scrollbar height so the last row never clips
-        self.setFixedHeight(widget.sizeHint().height()
-                            + self.horizontalScrollBar().sizeHint().height())
-
-    def sizeHint(self) -> QtCore.QSize:
-        sh = super().sizeHint()
-        return QtCore.QSize(sh.width(), sh.height()
-                            + self.horizontalScrollBar().sizeHint().height())
 
 

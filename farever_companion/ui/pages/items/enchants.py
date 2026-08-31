@@ -92,12 +92,10 @@ class EnchantsPageBase(EnchantsRowsMixin):
         # search: matches scrolls / gems / conversions by item name or stat
         # text — composes with the stat chips below (narrows within them);
         # sits left beside the heading, the stretch pushes it to the start
-        self._ench_search = QtWidgets.QLineEdit()
-        self._ench_search.setPlaceholderText("Search name or stat…")
-        self._ench_search.setClearButtonEnabled(True)
+        self._ench_search = C.SearchInput(
+            "Search name or stat…", on_text_changed=self._ench_refilter)
         self._ench_search.setFixedWidth(240)
         self._ench_search.setFixedHeight(30)
-        self._ench_search.textChanged.connect(self._ench_refilter)
         head.addWidget(self._ench_search)
         head.addStretch(1)
         v.addLayout(head)
@@ -117,9 +115,8 @@ class EnchantsPageBase(EnchantsRowsMixin):
                           for s in (idata.own_stats(it) or [])})
         self._ench_stat_names = stats
         self._ench_stat = ChoiceChips([(s, s) for s in stats],
-                                      any_label="All stats", label="Stat",
+                                      any_label="All stats",
                                       colors={s: theme.stat_color(s) for s in stats})
-        self._ench_stat.setMinimumHeight(62)
         v.addWidget(self._ench_stat)
         self._ench_stat.currentIndexChanged.connect(self._ench_refilter)
 

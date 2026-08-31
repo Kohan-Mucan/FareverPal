@@ -14,20 +14,22 @@ Consumers keep the same shape as before — `from ....data import items as
 idata` and `idata.<fn>(...)` — because the public API is re-exported here.
 """
 from .catalog import (available, is_shop_item, item, item_effect_duration,
-                     items, matched_skill_labels, matches_class, matches_skill,
-                     rarities, search, types, weapon_skills)
+                     item_id_by_name, items, matched_skill_labels,
+                     matches_class, matches_skill, rarities, resolve_food_info,
+                     search, types, weapon_skills)
 from .craft import (craft_bill, craft_bill_many, craft_chain, craft_jobs,
                     craft_levels, first_craft_xp, is_craft_item, is_craftable,
                     jobs, recipe, recipe_unlocked_by, recipes, recipes_using)
 from .labels import (affinity_color, categories, category, class_label,
                      gear_classes, gear_slots, is_gear, own_stats,
                      weapon_attack)
-from .sources import (acquisition_note, armor_locked, drops_from_table,
-                      gear_tables, has_drops, human_loc, is_rift_location,
-                      item_display_rarity, item_scale_max_level,
-                      item_source_max_level, item_vendor_levels,
-                      max_shown_drops, merge_drops, no_source_reason,
-                      resolve_drops, shown_drops, upgrade_locked)
+from .sources import (acquisition_note, armor_locked, dungeon_drop_groups,
+                      drops_from_table, gear_tables, has_drops, human_loc,
+                      is_rift_location, item_display_rarity,
+                      item_scale_max_level, item_source_max_level,
+                      item_vendor_levels, max_shown_drops, merge_drops,
+                      no_source_reason, resolve_drops, shown_drops,
+                      upgrade_locked)
 from .stats import (RATING_STATS, class_primary_stat, corrupted_scrolls,
                     enchant_conversions, enchant_scrolls, gear_rarity_tiers,
                     gear_ratings, gear_scaling, gear_stats, gem_augments,
@@ -49,10 +51,12 @@ __all__ = [
     "drops_from_table", "enchant_conversions",
     "enchant_scrolls", "gem_augments", "gear_classes", "gear_rarity_tiers",
     "gear_ratings",
-    "gear_scaling", "gear_slots", "gear_stats", "gear_tables", "has_drops",
+    "gear_scaling", "gear_slots", "gear_stats", "gear_tables",
+    "dungeon_drop_groups", "has_drops",
     "human_loc", "ilevel_tiers", "is_craft_item", "is_craftable", "is_gear",
     "is_rift_location", "is_shop_item", "item", "item_display_rarity",
-    "item_effect_duration", "item_fixed_level", "item_level",
+    "item_effect_duration", "item_fixed_level", "item_id_by_name",
+    "item_level", "resolve_food_info",
     "item_scale_max_level",
     "item_source_max_level", "item_vendor_levels", "items", "jobs",
     "matched_skill_labels", "matched_stat_labels", "matches_class",

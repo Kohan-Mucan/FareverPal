@@ -65,6 +65,18 @@ def by_id() -> dict[str, Orb]:
     return {o.orb_id: o for o in load_orbs()}
 
 
+def nearest_orb(x: float, y: float, max_dist: float = 5.0) -> Orb | None:
+    """The static placement closest to a live world-orb element. Live
+    instance ids do NOT necessarily correspond to the prefab ids the done
+    list keys on, so collection matching goes by world position."""
+    best, bd = None, max_dist
+    for o in load_orbs():
+        d = o.dist2d(x, y)
+        if d <= bd:
+            best, bd = o, d
+    return best
+
+
 def orb_label(orb_id: str) -> str:
     """Readable name for an orb id: 'RedOrb_World_169' -> 'Secret Orb 169'."""
     n = orb_id.rsplit("_", 1)[-1]

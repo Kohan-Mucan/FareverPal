@@ -4,6 +4,8 @@ line budget.
 """
 from __future__ import annotations
 
+import time
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
@@ -30,7 +32,15 @@ class ServerPageMixin(PingPanelMixin, ScannerPanelMixin, TracePanelMixin):
 
         hdr_lay.addStretch(1)
 
-        self._steam_players_badge = QtWidgets.QPushButton("STEAM ONLINE · …")
+        cached_count = getattr(self, "_last_steam_count", None)
+        if cached_count is not None and cached_count >= 0:
+            init_text = f"STEAM ONLINE · {cached_count:,}"
+        elif cached_count is not None:
+            init_text = "STEAM ONLINE · —"
+        else:
+            init_text = "STEAM ONLINE · …"
+
+        self._steam_players_badge = QtWidgets.QPushButton(init_text)
         self._steam_players_badge.setCursor(QtCore.Qt.PointingHandCursor)
         self._steam_players_badge.setStyleSheet(
             f"QPushButton {{ color: {theme.GOOD}; background: {theme.with_alpha(theme.GOOD, 16)}; "
@@ -73,6 +83,14 @@ class ServerPageMixin(PingPanelMixin, ScannerPanelMixin, TracePanelMixin):
         return page
 
     def _fetch_steam_player_count(self) -> None:
+        now = time.monotonic()
+        last_t = getattr(self, "_last_steam_time", 0.0)
+        last_count = getattr(self, "_last_steam_count", None)
+        # Only fetch once per 30 minutes (1800s) unless the app is restarted
+        if last_count is not None and (now - last_t < 1800.0):
+            self._on_steam_player_count(last_count)
+            return
+
         if hasattr(self, "_steam_worker") and self._steam_worker and self._steam_worker.isRunning():
             return
         self._steam_worker = _SteamPlayerCountWorker()
@@ -80,12 +98,24 @@ class ServerPageMixin(PingPanelMixin, ScannerPanelMixin, TracePanelMixin):
         self._steam_worker.start()
 
     def _on_steam_player_count(self, count: int) -> None:
-        if not hasattr(self, "_steam_players_badge"):
+        self._last_steam_count = count
+        self._last_steam_time = time.monotonic()
+        badge = getattr(self, "_steam_players_badge", None)
+        if badge is None:
             return
-        if count >= 0:
-            self._steam_players_badge.setText(f"STEAM ONLINE · {count:,}")
-        else:
-            self._steam_players_badge.setText("STEAM ONLINE · —")
+        try:
+            from shiboken6 import isValid
+            if not isValid(badge):
+                return
+        except Exception:
+            pass
+        try:
+            if count >= 0:
+                badge.setText(f"STEAM ONLINE · {count:,}")
+            else:
+                badge.setText("STEAM ONLINE · —")
+        except RuntimeError:
+            pass
 
     def _server_tab_changed(self, text):
         mapping = {"Game Servers": 0, "Live Game IP Scanner": 1, "Network Trace": 2}

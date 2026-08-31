@@ -699,21 +699,29 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
 
     # 5. Atlas sprite-sheet coordinates (Merged into specific modules)
     def load_atlas_map(category):
-        for ap in atlas_dir.glob(f"atlas_{category}*.json"):
-            if ap.exists():
-                try:
-                    return json.loads(ap.read_text(encoding="utf-8"))
-                except: pass
-        return {}
+        # Merge ALL matching files (multi-sheet packs: atlas_items_01.json,
+        # atlas_items_02.json, ...) instead of returning the first one found.
+        merged = {}
+        for ap in sorted(atlas_dir.glob(f"atlas_{category}*.json")):
+            if not ap.exists():
+                continue
+            try:
+                content = json.loads(ap.read_text(encoding="utf-8"))
+                if isinstance(content, dict):
+                    merged.update(content)
+            except Exception:
+                continue
+        return merged
 
     enemies_atlas = load_atlas_map("enemies")
+    dungeons_atlas = load_atlas_map("dungeons")
     items_atlas = load_atlas_map("items")
     skills_atlas = load_atlas_map("skills")
     collection_atlas = load_atlas_map("collection")
     minimap_atlas = load_atlas_map("minimap")
 
     # Combine all for a general lookup if needed
-    all_atlas = {**enemies_atlas, **items_atlas, **skills_atlas, **collection_atlas, **minimap_atlas}
+    all_atlas = {**enemies_atlas, **dungeons_atlas, **items_atlas, **skills_atlas, **collection_atlas, **minimap_atlas}
     
     # Fallback/Merge with sheet-based gfx if atlas is missing or incomplete
     for sheet_name in ["skills", "items", "units"]:
@@ -1243,22 +1251,57 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     else:
         print("Warning: item_drops.json missing — raw_item_drops.py not written")
 
+    # Location data: the scan-produced world POIs, mob spawns, chests, gatherables, critters, orbs
+    locs_data = {}
+    for loc_key, loc_name in [
+        ("poi_locs", "poi_locs.json"),
+        ("mob_locs", "mob_locs.json"),
+        ("chest_locs", "chest_locs.json"),
+        ("gatherable_locs", "gatherable_locs.json"),
+        ("critter_locs", "critter_locs.json"),
+        ("orb_positions", "orb_positions.json"),
+    ]:
+        lp = data_new / loc_name
+        if not lp.exists():
+            lp = data_clean / loc_name
+        if lp.exists():
+            try:
+                parsed = json.loads(lp.read_text(encoding="utf-8"))
+                locs_data[loc_key] = parsed
+            except Exception as e:
+                print(f"Warning: failed to load {loc_name}: {e}")
+    if locs_data:
+        _write_embedded_data(output_dir, "raw_locs", locs_data, dev_dir)
+
     write_data_file("raw_units.py", {
         "units": all_data.pop("units", []),
         "lootTable": all_data.pop("lootTable", []),
-        "atlas": {k: v for k, v in all_atlas.items() if k in unit_ids or k in enemies_atlas}
+        "atlas": {k: v for k, v in all_atlas.items() if k in unit_ids or k in enemies_atlas or k in dungeons_atlas}
     })
     write_data_file("raw_items.py", {
         "items": all_data.pop("items", []),
         "atlas": {k: v for k, v in all_atlas.items() if k in items_atlas}
     })
+
+    skill_rows = []
+    sk_raw_p = data_new / "skill.json"
+    if not sk_raw_p.exists():
+        sk_raw_p = data_clean / "skill.json"
+    if sk_raw_p.exists():
+        try:
+            sk_raw_data = json.loads(sk_raw_p.read_text(encoding="utf-8"))
+            skill_rows = sk_raw_data.get("lines", []) if isinstance(sk_raw_data, dict) else sk_raw_data
+        except Exception:
+            pass
+
     write_data_file("raw_skills.py", {
         "skills": all_data.pop("skills", []),
+        "skill_rows": skill_rows,
         "atlas": {k: v for k, v in all_atlas.items() if k in skills_atlas}
     })
     
-    # Core data: only contains "Misc" atlas data (minimap, collections, etc.)
-    misc_atlas = {k: v for k, v in all_atlas.items() if k in collection_atlas or k in minimap_atlas or v.get("category") == "misc"}
+    # Core data: contains "Misc" atlas data (minimap, collections, etc.)
+    misc_atlas = {k: v for k, v in all_atlas.items() if k in collection_atlas or k in minimap_atlas or k in dungeons_atlas or v.get("category") == "misc"}
     all_data["ATLAS_DATA"] = misc_atlas
     write_data_file("raw_data.py", all_data)
 

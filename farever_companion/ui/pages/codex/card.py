@@ -37,63 +37,18 @@ class CodexUnitCard(QtWidgets.QFrame):
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(2)
 
-        # Check Icon (Absolute positioned in top right)
-        self.check_icon = C.IconTile(size=20, parent=self)
-        self.check_icon.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.check_icon.setVisible(False)
-        self.check_icon.move(self.width() - 24, 2)
-
-        # Hide Icon (Absolute positioned in top left when hidden)
-        self.hide_icon = C.IconTile(size=20, parent=self)
-        self.hide_icon.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.hide_icon.setVisible(False)
-        self.hide_icon.move(4, 2)
-
-        # Dungeon Badge (Overlay)
-        self.dungeon_ico = C.IconTile(size=21, parent=self)
-        self.dungeon_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.dungeon_ico.setVisible(False)
-
-        # Chest Badge (Overlay)
-        self.chest_ico = C.IconTile(size=21, parent=self)
-        self.chest_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.chest_ico.setVisible(False)
-
-        # Vendor Badge (Overlay) — NPC marker for vendor-sourced items
-        self.vendor_ico = C.IconTile(size=21, parent=self)
-        self.vendor_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.vendor_ico.setVisible(False)
-
-        # Shop Badge (Overlay) — the cash-shop 'shop' marker (the old vendor
-        # texture, reused for cash-shop / early-access items)
-        self.shop_ico = C.IconTile(size=21, parent=self)
-        self.shop_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.shop_ico.setVisible(False)
-
-        # Mob Drop Badge (Overlay) — swords glyph for mounts/gliders that
-        # drop from specific mobs
-        self.mob_ico = C.IconTile(size=21, parent=self)
-        self.mob_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.mob_ico.setVisible(False)
-
-        # Soulstone Badge (Overlay) — magenta gem for mounts/gliders that
-        # drop from the soulstone demon bosses (the Niflelian family), shown
-        # in the mob-drop slot so players can tell soulstone-farmed mounts
-        # from plain mob drops at a glance
-        self.soulstone_ico = C.IconTile(size=21, parent=self)
-        self.soulstone_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.soulstone_ico.setVisible(False)
-
-        # Achievement Badge (Overlay) — drawn trophy glyph; marks mounts/
-        # gliders awarded by achievements (ach.json rewards)
-        self.achievement_ico = C.IconTile(size=21, parent=self)
-        self.achievement_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.achievement_ico.setVisible(False)
-
-        # Spark Dust Badge (Overlay)
-        self.spark_ico = C.IconTile(size=21, parent=self)
-        self.spark_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.spark_ico.setVisible(False)
+        # Badges are lazily created on demand in set_active() to avoid allocating
+        # 10+ child QWidgets for every card when 90% of cards show no badges.
+        self._check_icon = None
+        self._hide_icon = None
+        self._dungeon_ico = None
+        self._chest_ico = None
+        self._vendor_ico = None
+        self._shop_ico = None
+        self._mob_ico = None
+        self._soulstone_ico = None
+        self._achievement_ico = None
+        self._spark_ico = None
 
         # Picture (Icon)
         self.icon_tile = C.IconTile(size=80)
@@ -158,6 +113,40 @@ class CodexUnitCard(QtWidgets.QFrame):
                 self.selected.emit(self.uid)
         super().mousePressEvent(event)
 
+    def _badge(self, attr: str, size: int = 21) -> C.IconTile:
+        w = getattr(self, attr, None)
+        if w is None:
+            w = C.IconTile(size=size, parent=self)
+            w.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+            setattr(self, attr, w)
+        return w
+
+    def _hide_badge(self, attr: str) -> None:
+        w = getattr(self, attr, None)
+        if w is not None and w.isVisible():
+            w.setVisible(False)
+
+    @property
+    def check_icon(self): return self._badge("_check_icon", 20)
+    @property
+    def hide_icon(self): return self._badge("_hide_icon", 20)
+    @property
+    def dungeon_ico(self): return self._badge("_dungeon_ico", 21)
+    @property
+    def chest_ico(self): return self._badge("_chest_ico", 21)
+    @property
+    def vendor_ico(self): return self._badge("_vendor_ico", 21)
+    @property
+    def shop_ico(self): return self._badge("_shop_ico", 21)
+    @property
+    def mob_ico(self): return self._badge("_mob_ico", 21)
+    @property
+    def soulstone_ico(self): return self._badge("_soulstone_ico", 21)
+    @property
+    def achievement_ico(self): return self._badge("_achievement_ico", 21)
+    @property
+    def spark_ico(self): return self._badge("_spark_ico", 21)
+
     def set_active(self, active: bool) -> None:
         """Update visual state (dimming and hide icon badge)."""
         self.active = active
@@ -165,8 +154,6 @@ class CodexUnitCard(QtWidgets.QFrame):
         ach = self.data.get("achievement")
         ach_line = ""
         if isinstance(ach, dict) and ach.get("name"):
-            # Category + points ride along in the payload; surface them so
-            # players see the achievement's scope instead of dead weight.
             meta = []
             if ach.get("category"):
                 meta.append(str(ach["category"]))
@@ -178,10 +165,6 @@ class CodexUnitCard(QtWidgets.QFrame):
             if ach.get("desc"):
                 ach_line += f"\n   {ach['desc']}"
 
-        # Mounts/gliders that drop from mobs surface the drop count (unique
-        # mobs) instead of the generic 'Plot spawns' hint. Soulstone-farmed
-        # mounts (the Niflelian family) name their summon-spot bosses, so the
-        # hint says so — same predicate as the soulstone card badge.
         drops_from = self.data.get("drops_from")
         is_soulstone_drop = codex.is_soulstone_drop(self.data)
         drop_line = ""
@@ -193,9 +176,6 @@ class CodexUnitCard(QtWidgets.QFrame):
                              if is_soulstone_drop
                              else f"\nDropped by {len(mob_ids)} Mobs")
 
-        # The card already shows name, icon, source badges, and its hidden
-        # state (eye-off icon + dimming), so the tooltip keeps only what the
-        # card can't show: the raw id, the drop count, and the achievement.
         if self.locked:
             self.setToolTip(f"ID: {self.data['id']}\nVisibility locked in Dungeons{drop_line}{ach_line}")
         else:
@@ -203,10 +183,12 @@ class CodexUnitCard(QtWidgets.QFrame):
 
         # Update hide icon badge
         if not active and not self.locked:
-            self.hide_icon.set_ui_icon("eye-off", theme.ACCENT)
-            self.hide_icon.setVisible(True)
+            h_ico = self._badge("_hide_icon", 20)
+            h_ico.set_ui_icon("eye-off", theme.ACCENT)
+            h_ico.move(4, 2)
+            h_ico.setVisible(True)
         else:
-            self.hide_icon.setVisible(False)
+            self._hide_badge("_hide_icon")
 
         is_boss = self.data.get("is_boss", False)
         is_elite = self.data.get("is_elite", False)
@@ -260,11 +242,12 @@ class CodexUnitCard(QtWidgets.QFrame):
         # Update check icon
         is_complete = self.progress >= 3
         if is_complete:
-            self.check_icon.set_ui_icon("check", theme.GOOD if active else theme.DIM)
-            self.check_icon.setVisible(True)
-            self.check_icon.move(self.width() - 24, 2)
+            c_ico = self._badge("_check_icon", 20)
+            c_ico.set_ui_icon("check", theme.GOOD if active else theme.DIM)
+            c_ico.move(self.width() - 24, 2)
+            c_ico.setVisible(True)
         else:
-            self.check_icon.setVisible(False)
+            self._hide_badge("_check_icon")
 
         # Update metadata badges
         center_x = self.width() // 2
@@ -272,99 +255,91 @@ class CodexUnitCard(QtWidgets.QFrame):
         icon_right = center_x + 40
         x_off = icon_right - 12 if self.compact else icon_right + 2
 
-        # Source badges — which of vendor/achievement/dungeon/chest/shop/mob
-        # this item carries, via the shared codex.item_sources() helper (same
-        # predicates the Pets/Others legend filters use, so they can't drift).
-        # Priority: achievement > shop > dungeon > chest > vendor > mob — only
-        # the defining source shows, and if one ever coexists the
-        # higher-priority badge wins the spot.
         item_sources = codex.item_sources(self.data)
         is_achievement_item = "ach" in item_sources
         if is_achievement_item:
-            self.achievement_ico.set_achievement(theme.BLUE if active else theme.DIM)
-            self.achievement_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.achievement_ico.move(x_off, icon_top + 4)
-            self.achievement_ico.setVisible(True)
+            b = self._badge("_achievement_ico", 21)
+            b.set_achievement(theme.BLUE if active else theme.DIM)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.achievement_ico.setVisible(False)
+            self._hide_badge("_achievement_ico")
 
-        # Shop badge (cash-shop / early-access premium items, e.g. Sparkling
-        # Horsean) — the 'shop' marker from the atlas.
         is_shop_item = "shop" in item_sources
-        if is_shop_item and not self.achievement_ico.isVisible():
-            self.shop_ico.set_marker("shop", theme.GOOD if active else theme.DIM, outlined=True)
-            self.shop_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.shop_ico.move(x_off, icon_top + 4)
-            self.shop_ico.setVisible(True)
+        if is_shop_item and not is_achievement_item:
+            b = self._badge("_shop_ico", 21)
+            b.set_marker("shop", theme.GOLD if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.shop_ico.setVisible(False)
+            self._hide_badge("_shop_ico")
 
         # Dungeon badge
-        if "dungeon" in item_sources and not self.hide_dungeon_badge and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible():
-            self.dungeon_ico.set_marker("dungeon", theme.TEXT if active else theme.DIM, outlined=True)
-            self.dungeon_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.dungeon_ico.move(x_off, icon_top + 4)
-            self.dungeon_ico.setVisible(True)
+        if "dungeon" in item_sources and not self.hide_dungeon_badge and not is_achievement_item and not is_shop_item:
+            b = self._badge("_dungeon_ico", 21)
+            d_col = theme.KIND_COLOR.get("dungeon", "#7c3aed")
+            b.set_marker("dungeon", d_col if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.dungeon_ico.setVisible(False)
+            self._hide_badge("_dungeon_ico")
 
         # Chest badge
         is_chest_item = "chest" in item_sources
-        if is_chest_item and not self.dungeon_ico.isVisible() and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible():
-            self.chest_ico.set_marker("chest", theme.GOLD if active else theme.DIM, outlined=True)
-            self.chest_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.chest_ico.move(x_off, icon_top + 4)
-            self.chest_ico.setVisible(True)
+        if is_chest_item and "dungeon" not in item_sources and not is_achievement_item and not is_shop_item:
+            b = self._badge("_chest_ico", 21)
+            b.set_marker("chest", theme.GOLD if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.chest_ico.setVisible(False)
+            self._hide_badge("_chest_ico")
 
-        # Vendor badge (npc marker — person + money bag silhouette; the old
-        # 'shop' texture is being reused for the cash shop, so vendors get the
-        # new NPC glyph instead). Same treatment as the dungeon/chest badges.
+        # Vendor badge
         is_vendor_item = "npc" in item_sources
-        if is_vendor_item and not self.dungeon_ico.isVisible() and not self.chest_ico.isVisible() and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible():
-            self.vendor_ico.set_marker("npc", theme.GOLD if active else theme.DIM, outlined=True)
-            self.vendor_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.vendor_ico.move(x_off, icon_top + 4)
-            self.vendor_ico.setVisible(True)
+        if is_vendor_item and not is_chest_item and "dungeon" not in item_sources and not is_achievement_item and not is_shop_item:
+            b = self._badge("_vendor_ico", 21)
+            b.set_marker("npc", theme.GOLD if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.vendor_ico.setVisible(False)
+            self._hide_badge("_vendor_ico")
 
-        # Soulstone badge — mounts/gliders that drop from the soulstone demon
-        # bosses (the Niflelian family), the magenta soulstone gem marker in
-        # the mob-drop slot (they ARE a mob drop). Shown instead of the plain
-        # sword so players can tell soulstone-farmed mounts from regular mob
-        # drops at a glance; same lowest-priority chain as the mob badge.
+        # Soulstone badge
         is_soulstone_item = "mob" in item_sources and codex.is_soulstone_drop(self.data)
-        if is_soulstone_item and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible() \
-                and not self.dungeon_ico.isVisible() and not self.chest_ico.isVisible() and not self.vendor_ico.isVisible():
+        if is_soulstone_item and not is_achievement_item and not is_shop_item \
+                and "dungeon" not in item_sources and not is_chest_item and not is_vendor_item:
+            b = self._badge("_soulstone_ico", 21)
             s_col = theme.KIND_COLOR.get("soulstone", "#e879f9")
-            self.soulstone_ico.set_marker("soulstone", s_col if active else theme.DIM, outlined=True)
-            self.soulstone_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.soulstone_ico.move(x_off, icon_top + 4)
-            self.soulstone_ico.setVisible(True)
+            b.set_marker("soulstone", s_col if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.soulstone_ico.setVisible(False)
+            self._hide_badge("_soulstone_ico")
 
-        # Mob Drop badge (mounts/gliders that drop from specific mobs) — the
-        # single-sword marker. Lowest priority: only shows when no defining
-        # source badge did, and never alongside the soulstone gem (a
-        # soulstone drop IS a mob drop, but its gem tells the fuller story).
+        # Mob Drop badge
         is_mob_item = "mob" in item_sources and not is_soulstone_item
-        if is_mob_item and not self.achievement_ico.isVisible() and not self.shop_ico.isVisible() \
-                and not self.dungeon_ico.isVisible() and not self.chest_ico.isVisible() and not self.vendor_ico.isVisible():
-            self.mob_ico.set_marker("sword", theme.BROWN if active else theme.DIM, outlined=True)
-            self.mob_ico.setStyleSheet("background: black; border-radius: 4px;")
-            self.mob_ico.move(x_off, icon_top + 4)
-            self.mob_ico.setVisible(True)
+        if is_mob_item and not is_achievement_item and not is_shop_item \
+                and "dungeon" not in item_sources and not is_chest_item and not is_vendor_item:
+            b = self._badge("_mob_ico", 21)
+            b.set_marker("sword", theme.BROWN if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: black; border-radius: 4px;")
+            b.move(x_off, icon_top + 4)
+            b.setVisible(True)
         else:
-            self.mob_ico.setVisible(False)
+            self._hide_badge("_mob_ico")
 
         # Spark Dust badge
         if self.data.get("drops_spark"):
-            self.spark_ico.set_marker("sparkdust", theme.GOLD if active else theme.DIM, outlined=False)
-            self.spark_ico.setStyleSheet("background: transparent; border: 0;")
-            self.spark_ico.move(x_off, icon_top + 50)
-            self.spark_ico.setVisible(True)
+            b = self._badge("_spark_ico", 21)
+            b.set_marker("sparkdust", theme.GOLD if active else theme.DIM, outlined=True)
+            b.setStyleSheet("background: transparent; border: 0;")
+            b.move(x_off, icon_top + 50)
+            b.setVisible(True)
         else:
-            self.spark_ico.setVisible(False)
+            self._hide_badge("_spark_ico")

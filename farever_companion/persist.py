@@ -19,7 +19,34 @@ from datetime import datetime
 from pathlib import Path
 
 
-def atomic_write_json(path: Path, data: dict) -> None:
+def _compact_simple_lists(text: str) -> str:
+    """Collapse containers whose members are all scalars (no nested []/{}) onto
+    a single line — e.g. `"rift_ding": [1, 5, 10, 15]` or
+    `"server_pings": ["na", "na_test", "login_global"]`. Improves readability of
+    short lists without touching structured objects. Safe no-op if none.
+    """
+    import re
+    list_pat = re.compile(r"\[\s*((?:[^\n\[\]{}]+\n)+?)\s*\]", re.MULTILINE)
+    obj_pat = re.compile(r"\{\s*((?:\s*\"[^\"\n]*\"\s*:\s*[^\n\[\]{}]+\n)+?)\s*\}", re.MULTILINE)
+
+    def list_repl(m: "re.Match") -> str:
+        items = [ln.strip().rstrip(",") for ln in m.group(1).splitlines() if ln.strip()]
+        return "[" + ", ".join(items) + "]"
+
+    def obj_repl(m: "re.Match") -> str:
+        items = [ln.strip().rstrip(",") for ln in m.group(1).splitlines() if ln.strip()]
+        return "{" + ", ".join(items) + "}"
+
+    out = text
+    for _ in range(5):  # a few passes to catch nested-in-a-container cases
+        out, n1 = list_pat.subn(list_repl, out)
+        out, n2 = obj_pat.subn(obj_repl, out)
+        if n1 == 0 and n2 == 0:
+            break
+    return out
+
+
+def atomic_write_json(path: Path, data: dict, compact_lists: bool = False) -> None:
     """Write JSON `data` to `path` atomically: serialize to a temp file in
     the same directory, then os.replace() over the target.
 
@@ -28,8 +55,11 @@ def atomic_write_json(path: Path, data: dict) -> None:
     overwritten, silently wiping the user's settings. Raises OSError on
     failure; callers decide whether to swallow it.
     """
+    text = json.dumps(data, indent=1)
+    if compact_lists:
+        text = _compact_simple_lists(text)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
 
 

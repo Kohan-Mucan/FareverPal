@@ -10,6 +10,10 @@ from ....core.updater import is_frozen
 from ....data import codex
 from .map import CodexZoneMapCanvas
 
+# Secret-orb pins on the codex preview map plot red; everywhere else
+# (list icons, HUD, minimap) the orb stays its blue KIND_COLOR.
+ORB_PIN_COLOR = "#ef4444"
+
 
 class CodexMapUiMixin:
     def _build_codex_map_panel(self) -> QtWidgets.QFrame:
@@ -221,7 +225,8 @@ class CodexMapUiMixin:
         """Plot spawn/entrance pins for all visible (unhidden) cards currently
         shown — or, on the Chests / Orbs views, the remaining chest/orb pins."""
         if self._codex_chest_orb_view_active():
-            self._plot_remaining_chest_orbs(None)
+            zone = getattr(self, "_dungeon_zone", "All") or "All"
+            self._plot_remaining_chest_orbs(zone if zone != "All" else None)
             return
         current_rid, tab_label = self._codex_current_region()
         # Soulstones view: plot every summon spot (matches the button count).
@@ -535,13 +540,15 @@ class CodexMapUiMixin:
         # The Chests/Orbs remaining lists moved to the Collection tab, so the
         # pins button retitles there too (all other Collection sub-views keep
         # the plain 'Missing (N)' button).
-        is_list_tab = is_dungeon_tab or (current_rid == "Pets" and self._codex_chest_orb_view_active())
+        is_list_tab = is_dungeon_tab or ((current_rid in ("Pets", "Z0") or tab_label == "Collection") and self._codex_chest_orb_view_active())
         if is_list_tab:
             if self._codex_chest_orb_view_active():
                 from .chest_orb_list import remaining_items
                 kind = self._codex_chest_orb_kind()
                 kinds = {"chest"} if kind == "chests" else {"orb"}
-                n = len(remaining_items(self, kinds))
+                zone = getattr(self, "_dungeon_zone", "All") or "All"
+                items = [it for it in remaining_items(self, kinds) if zone == "All" or it["zone"] == zone]
+                n = len(items)
                 label = "Chests" if kind == "chests" else "Orbs"
                 if n == 0:
                     self._btn_plot_all_pins.setVisible(False)
@@ -692,7 +699,7 @@ class CodexMapUiMixin:
         else:
             tr.toggle("chest", self._chest_track_key(item))
         if hasattr(self, "_codex_map_widget"):
-            color = theme.KIND_COLOR["orb"] if item["kind"] == "orb" else theme.CHEST
+            color = ORB_PIN_COLOR if item["kind"] == "orb" else theme.CHEST
             self._codex_map_widget.set_multi_pins(item["label"], [{
                 "x": item["x"], "y": item["y"],
                 "color": QtGui.QColor(color),
@@ -744,7 +751,7 @@ class CodexMapUiMixin:
         for it in remaining_items(self, kinds):
             if zone and it["zone"] != zone:
                 continue
-            color = theme.KIND_COLOR["orb"] if it["kind"] == "orb" else theme.CHEST
+            color = ORB_PIN_COLOR if it["kind"] == "orb" else theme.CHEST
             pins.append({
                 "x": it["x"], "y": it["y"],
                 "color": QtGui.QColor(color),

@@ -3,7 +3,7 @@
 Tokens are taken verbatim from the user's exported Stitch design system
 (`stitch_farever_companion_gaming_utility/tactical_overlay_design_system/
 DESIGN.md` + the per-screen HTML): **strictly geometric / sharp (0px corners)**,
-layered charcoal surfaces, cyan accent, Inter for UI / JetBrains Mono for data.
+layered charcoal surfaces, cyan accent, Roboto Condensed for UI and data.
 `apply(app)` loads the bundled fonts and installs the QSS once; the control
 panel and every overlay inherit the same look.
 """
@@ -103,8 +103,8 @@ def stat_color(stat: str) -> str:
 
 
 # fonts
-UI_FONT = "Inter"
-MONO_FONT = "JetBrains Mono"
+UI_FONT = "Roboto Condensed"
+MONO_FONT = "Roboto Condensed"
 KIND_COLOR = {
     "enemy": DANGER,
     "companion": "#7aa2f7",
@@ -117,11 +117,43 @@ KIND_COLOR = {
     "chest_orb": GOLD,
     "activity": "#8fa395",   # world-activity loot drops (grey-green marker)
     "dungeon": "#7c3aed",    # dungeon entrances / teleporters
+    "rift": "#a855f7",       # rift portals (neon purple)
     "soulstone": "#e879f9",  # soulstone summon points (click-to-spawn demon bosses)
     "petshop": GOLD,          # pet shop vendors (Demon Huntress pet sellers)
     "mountshop": GOLD,        # mount shop vendors (MountTamer NPCs)
     "vendor": GOLD,           # generic shop vendor NPCs
     "pos": ACCENT,
+    "mob": BROWN,
+    "spark_enemy": "#a855f7",
+}
+
+ORE_COLOR = {
+    "copper": "#d96b52",
+    "copperore": "#d96b52",
+    "copper ore": "#d96b52",
+    "tin": "#688494",
+    "tinore": "#688494",
+    "tin ore": "#688494",
+    "tungsten": "#a4b8c4",
+    "tungstene": "#a4b8c4",
+    "tungstenore": "#a4b8c4",
+    "tungsten ore": "#a4b8c4",
+    "gold": "#f5c542",
+    "goldore": "#f5c542",
+    "gold ore": "#f5c542",
+    "iron": "#8c7365",
+    "ironore": "#8c7365",
+    "iron ore": "#8c7365",
+}
+
+# Per-plant text color, sampled from the flower atlas sprite (single "flower"
+# sprite, tinted per variant). r2plant* are Lavendula.
+FLOWER_COLOR = {
+    "lavendula": "#5c3574",
+    "r2plant": "#5c3574",
+    "madrigold": "#8d653e",
+    "zealotus": "#c34627",
+    "ancientthyme": "#584725",
 }
 
 
@@ -141,8 +173,8 @@ _fonts_loaded = False
 
 
 def load_fonts() -> None:
-    """Register the bundled variable TTFs (Inter, JetBrains Mono). Idempotent;
-    silently no-ops if the files are missing (QSS falls back to Segoe/Consolas)."""
+    """Register the bundled variable TTF (Roboto Condensed). Idempotent;
+    silently no-ops if the file is missing (QSS falls back to Segoe/Consolas)."""
     global _fonts_loaded
     if _fonts_loaded:
         return
@@ -151,7 +183,7 @@ def load_fonts() -> None:
         from PySide6 import QtGui
         from .. import paths
         fdir = paths.assets_dir() / "fonts"
-        for ttf in ("Inter-Variable.ttf", "JetBrainsMono-Variable.ttf"):
+        for ttf in ("RobotoCondensed-Variable.ttf",):
             p = fdir / ttf
             if p.exists():
                 QtGui.QFontDatabase.addApplicationFont(str(p))
@@ -182,7 +214,6 @@ QFrame#Card {{ background: {PANEL}; border: 1px solid {BORDER}; }}
 QFrame#Cell {{ background: {PANEL_LOW}; border: 1px solid {BORDER}; }}
 QFrame#Panel {{ background: {SURFACE}; border: 0; }}
 QFrame#Sidebar {{ background: {PANEL_LOW}; border: 0; border-right: 1px solid {BORDER}; }}
-QFrame#TopBar {{ background: {PANEL}; border: 0; border-bottom: 1px solid {BORDER}; }}
 QFrame#StatusStrip {{ background: {LOWEST}; border: 0; border-top: 1px solid {BORDER}; }}
 QFrame#TitleBar {{ background: {PANEL_HI}; border: 0; border-bottom: 2px solid {ACCENT}; }}
 QFrame#Hairline {{ background: {BORDER}; max-height: 1px; min-height: 1px; border: 0; }}

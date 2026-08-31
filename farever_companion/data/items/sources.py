@@ -13,7 +13,7 @@ import re
 from functools import lru_cache
 
 from ... import paths
-from .. import raw_data
+from .. import names, raw_data
 from .catalog import _data, _sources, _tables, _locs
 from .labels import _GEAR_TYPES, category
 
@@ -28,6 +28,62 @@ _DUNGEON_LOC_RE = re.compile(
 # human_loc so the item page shows only the readable names
 _COORD_RE = re.compile(r"\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*\)")
 _ZONE_ID_RE = re.compile(r"\b(?:Z\d|W\d)_[A-Za-z0-9_]+")
+
+_KIND_LABEL = {
+    "unit": "MOB",
+    "chest": "CHEST",
+    "npc": "VENDOR",
+    "gatherable": "GATHER",
+    "achievement": "ACHIEVEMENT",
+    "worldloot_affinity": "WORLD GEAR",
+    "worldrecipe": "WORLD RECIPE",
+}
+
+_KIND_GROUP_LABEL = {
+    "unit": "MOBS",
+    "chest": "CHESTS",
+    "npc": "VENDORS",
+    "gatherable": "GATHER",
+    "achievement": "ACHIEVEMENTS",
+    "worldloot_affinity": "WORLD GEAR",
+    "worldrecipe": "WORLD RECIPES",
+}
+
+_NODE_SIZE_SUFFIXES = ("_Large", "_Small", "_Medium")
+_CHEST_COUNT_RE = re.compile(r"\s*\(x\d+\)\s*$")
+_CHEST_GROUP_IDS = re.compile(r"(?i)(Crate|Activity|BonusChest|Bosschest|Tier\d+)$")
+_CHEST_SINGLE_RE = re.compile(r"(?i)(WorldChest|VaultChest|FightStone|ChestOrb)")
+
+
+@lru_cache(maxsize=1024)
+def chest_zone_name(chest_id: str) -> str | None:
+    """The readable zone name a chest sits in via its world position — None when it can't be resolved."""
+    try:
+        from ...geo import zones as geo_zones
+        from .. import dungeons
+        zid = geo_zones.chest_zone(chest_id)
+        if zid and dungeons.zone_tag_from_zone_id(zid):
+            return names.zone_name(zid)
+    except Exception:
+        pass
+    return None
+
+
+def chest_source_label(d: dict) -> str:
+    """Human label for a chest drop source: strips loot table roll numbers (xN)
+    and formats single chests with zone name."""
+    nm = d.get("source", "")
+    sid = d.get("source_id") or ""
+    m = _CHEST_COUNT_RE.search(nm)
+    if m:
+        nm = nm[: m.start()].strip()
+    if sid and _CHEST_SINGLE_RE.search(sid):
+        label = names.poi_label(sid)
+        if label:
+            zone = chest_zone_name(sid)
+            return f"{zone} · {label}" if zone else label
+    return nm
+
 
 _MAX_SHOWN_DROPS = 14      # cap per Drops From table ("+N more" beyond this)
 
@@ -89,10 +145,15 @@ _UNKNOWN_LOC = "unknown location"
 
 @lru_cache(maxsize=1)
 def _poi_rows() -> tuple[dict, ...]:
-    """POI rows (soulstones, dungeons, ...): the compiled raw_data shim
-    first, then the loose JSON (stale shim / dev checkout), mirroring the
-    other raw_* accessors."""
-    rows = raw_data.DATA.get("poi_locs")
+    """POI rows (soulstones, dungeons, ...): the compiled raw_locs / raw_data shim
+    first, then the loose JSON (stale shim / dev checkout)."""
+    try:
+        from .. import raw_locs
+        rows = raw_locs.DATA.get("poi_locs")
+    except Exception:
+        rows = None
+    if not rows:
+        rows = raw_data.DATA.get("poi_locs")
     if not rows:
         try:
             data = json.loads(paths.poi_locs_path().read_text(encoding="utf-8"))
@@ -104,9 +165,15 @@ def _poi_rows() -> tuple[dict, ...]:
 
 @lru_cache(maxsize=1)
 def _mob_loc_rows() -> tuple[dict, ...]:
-    """mob_locs rows (world spawns): the compiled raw_data shim first, then
+    """mob_locs rows (world spawns): the compiled raw_locs / raw_data shim first, then
     the loose JSON (stale shim / dev checkout)."""
-    rows = raw_data.DATA.get("mob_locs")
+    try:
+        from .. import raw_locs
+        rows = raw_locs.DATA.get("mob_locs")
+    except Exception:
+        rows = None
+    if not rows:
+        rows = raw_data.DATA.get("mob_locs")
     if not rows:
         try:
             data = json.loads(paths.mob_locs_path().read_text(encoding="utf-8"))
@@ -764,6 +831,73 @@ def _group_mob_factions(rows: list[dict]) -> list[dict]:
     return out
 
 
+@lru_cache(maxsize=1)
+def _table_unit_rollers() -> dict[str, frozenset[str]]:
+    """Loot table -> every unit source id recorded rolling it, across all
+    raw item_drops rows. The data behind the faction-family boss expansion:
+    a set piece's own-faction dungeons are the ones whose boss or mobs roll
+    the same table its recorded boss rolls (Bee Hive AND Mokshis Hivetree
+    AND Cleodoras Nest units all roll the Bee table, so bee gear lists all
+    three bosses)."""
+    srcs, tbls = _sources(), _tables()
+    out: dict[str, set] = {}
+    for it in _data().get("items", {}).values():
+        for dr in it.get("drops", []):
+            if not 0 <= dr["t"] < len(tbls):
+                continue
+            s = srcs[dr["s"]] if 0 <= dr["s"] < len(srcs) else {}
+            sid = s.get("id")
+            if s.get("kind") == "unit" and sid:
+                out.setdefault(tbls[dr["t"]],
+                               set()).add(s["id"])
+    return {t: frozenset(v) for t, v in out.items()}
+
+
+@lru_cache(maxsize=None)
+def _family_boss_rows(boss_tables: frozenset[str]) -> tuple[dict, ...]:
+    """Synthesized boss rows for a piece's own-faction dungeons: every
+    dungeon whose boss or mobs roll one of `boss_tables` (the loot tables
+    the piece's recorded boss rolls) contributes its boss row — icon +
+    name + dungeon sub-line. Signature tables (a boss's own weapon list)
+    roll nothing but that boss, so weapons keep just their own boss;
+    everything here is derived from item_drops.json + dungeons.json."""
+    from .. import dungeons
+    rollers = _table_unit_rollers()
+    out: list[dict] = []
+    for d in dungeons.load_dungeons():
+        bid = d.get("boss_id")
+        if not bid:
+            continue
+        units = set(d.get("mobs") or ())
+        units.add(bid)
+        if not any(units & rollers.get(t, frozenset()) for t in boss_tables):
+            continue
+        out.append({
+            "source": d.get("boss_name") or bid,
+            "source_id": bid,
+            "kind": "unit",
+            "table": "",
+            "prob": 0.0,
+            "amount": None,
+            "cost": None,
+            "rolls": 1,
+            "rift": d.get("entrance_zone") == "Rifts",
+            "derived": True,
+            "quiet": False,
+            "boss": True,
+            "source_id": bid,
+            "hub_level": None,
+            "dungeon": _boss_dungeon_name(bid) or d.get("ingame_name"),
+            "locs": [],
+            "n_locs": 0,
+            "_lvl": d.get("level") or 0,
+        })
+    out.sort(key=lambda r: (r["_lvl"], r["source"].lower()))
+    for r in out:
+        del r["_lvl"]
+    return tuple(out)
+
+
 @lru_cache(maxsize=None)
 def _shown_drops_raw(item_id: str) -> list[dict]:
     """The merged + grouped Drops From rows for an item, cached per id.
@@ -776,15 +910,16 @@ def _shown_drops_raw(item_id: str) -> list[dict]:
     bosses = [r for r in rows if r.get("boss")]
     if not bosses:
         return _group_mob_factions(rows)
-    # the boss-only collapse is a GEAR rule: for a dungeon-set piece the
-    # boss rows ARE the drop info and the shared faction crate / mob rows
-    # every set piece carries are noise. Craft materials (Veiled Wing,
-    # Demonic Horn, ...) need the mobs too — they're the FARMABLE
-    # sources, and the boss is just one of them — so non-gear keeps the
-    # full faction-grouped list with the boss leading it.
     it = _data().get("items", {}).get(item_id) or {}
     if (it.get("type") or "") in _GEAR_TYPES:
-        return bosses + [r for r in rows if r["kind"] == "npc"]
+        # GEAR: the dungeon bosses ARE the drop info — one row per dungeon
+        # of the piece's own faction (its recorded boss leads, then the
+        # other same-table dungeons' bosses). The shared crate / mob /
+        # upgrade rows every set piece carries never make the list.
+        fam = _family_boss_rows(frozenset(
+            r.get("table") or "" for r in bosses))
+        known = {r["source_id"] for r in bosses}
+        return bosses + [r for r in fam if r["source_id"] not in known]
     return _group_mob_factions(rows)
 
 
@@ -812,14 +947,14 @@ def shown_drops(item_id: str) -> list[dict]:
     WorldLoot zone gear (zone sets + jewelry) carries its clean four-source
     shape NATIVELY in the data — the scan emits the crate, the faction mob
     unit groups on one line, Unique Foes and Zone activities (quiet rows,
-    no tooltip detail, no zone sub-lists). No runtime collapse needed. When
-    GEAR has a boss source, the boss rows ARE the drop info — the generic
-    faction crate / mob / upgrade rows every dungeon-set piece shares are
-    noise, so they're hidden (vendor rows stay: a guaranteed purchase is
-    never noise). Non-gear items (craft materials like Veiled Wing, Demonic
-    Horn) keep the full list — the mobs are their farmable sources, with
-    the boss leading. Everything else groups its per-mob rows per faction
-    (see _group_mob_factions) so the list stays short.
+    no tooltip detail, no zone sub-lists). No runtime collapse needed. GEAR
+    with a boss source shows DUNGEON BOSSES ONLY: its recorded boss leads,
+    followed by every other dungeon of its faction (dungeons whose boss or
+    mobs roll the same loot table — see _family_boss_rows). Non-gear items
+    (craft materials like Veiled Wing, Demonic Horn) keep the full list —
+    the mobs are their farmable sources, with the boss leading. Everything
+    else groups its per-mob rows per faction (see _group_mob_factions) so
+    the list stays short.
 
     The resolution is cached (_shown_drops_raw), but the Drops From
     renderers merge node variants IN PLACE on the returned rows, so each
@@ -997,6 +1132,90 @@ def gear_tables() -> list[dict]:
              "World": 4}
     out.sort(key=lambda r: (order[r["group"]], r["id"].lower()))
     return out
+
+
+# shared-set tile order for the Dungeons tab (slot progression, jewelry last)
+_SLOT_ORDER = ("Head", "Shoulders", "Chest", "Hands", "Waist", "Legs",
+               "Feet", "Back", "GearFinger", "GearNeck", "GearTrinket")
+
+
+@lru_cache(maxsize=1)
+def _boss_weapon_ids() -> dict[str, tuple[str, ...]]:
+    """Boss id -> signature weapon item ids: weapon-type gear whose drop
+    rows reference the boss as a source (each boss rolls its own 2)."""
+    srcs = _sources()
+    out: dict[str, list[str]] = {}
+    for iid, it in _data().get("items", {}).items():
+        if category(it.get("type")) != "Weapons":
+            continue
+        if (it.get("faction") or "").lower() == "craft" or _is_crafted(iid):
+            continue          # recipe-made variants never drop
+        for dr in it.get("drops", []):
+            s = srcs[dr["s"]] if 0 <= dr["s"] < len(srcs) else {}
+            if s.get("kind") == "unit" and s.get("id"):
+                out.setdefault(s["id"], []).append(iid)
+    return {k: tuple(v) for k, v in out.items()}
+
+
+@lru_cache(maxsize=1)
+def dungeon_drop_groups() -> tuple[dict, ...]:
+    """The Dungeons tab's faction groups, one per set family (Bee / Kobold /
+    Manfish / Crimson): the family's dungeons with their boss (name, id,
+    level) and signature weapons, plus the shared armor/trinket pool every
+    dungeon of that family drops. Same membership rule the Drops From list
+    uses — a dungeon belongs to the faction whose loot table its boss or
+    mobs roll (_table_unit_rollers) — all derived from the JSONs."""
+    from .. import dungeons
+    rollers = _table_unit_rollers()
+    weapons = _boss_weapon_ids()
+    idx = _gear_table_index()
+    out = []
+    for table in _FACTION_SET_TABLES:
+        rolls = rollers.get(table, frozenset())
+        bosses, seen = [], set()
+        shared = []
+        for d in sorted(dungeons.load_dungeons(),
+                        key=lambda x: x.get("level") or 0):
+            bid = d.get("boss_id")
+            if not bid or bid in seen:
+                continue
+            units = set(d.get("mobs") or ()) | {bid}
+            if not (units & rolls):
+                continue
+            seen.add(bid)
+            bosses.append({
+                "boss_id": bid,
+                "boss": d.get("boss_name") or bid,
+                "dungeon": d.get("ingame_name") or d.get("name") or "",
+                "level": d.get("level"),
+                "weapons": sorted(weapons.get(bid, ())),
+            })
+        for iid in idx.get(table, ()):
+            it = _data().get("items", {}).get(iid) or {}
+            if _is_crafted(iid) or category(it.get("type")) == "Weapons":
+                continue
+            # every set piece rolls ALL FOUR faction tables (the WorldLoot
+            # token shares them), so the table index alone is cross-faction
+            # noise — the item's faction field is the truth
+            if (it.get("faction") or "").lower() != table.lower():
+                continue
+            shared.append(iid)
+        if bosses:
+            shared.sort(key=lambda iid: (
+                _SLOT_ORDER.index(_data().get("items", {}).get(iid, {})
+                                  .get("type"))
+                if _data().get("items", {}).get(iid, {}).get("type")
+                in _SLOT_ORDER else 99,
+                (item_label(iid) or iid).lower()))
+            out.append({"faction": table, "bosses": tuple(bosses),
+                        "shared": tuple(shared)})
+    return tuple(out)
+
+
+def item_label(iid: str) -> str | None:
+    """Display name for a Dungeons-tab tile (cached item sheet name)."""
+    it = _data().get("items", {}).get(iid) or {}
+    return it.get("name") or iid
 
 
 def drops_from_table(item_id: str, table: str) -> bool:

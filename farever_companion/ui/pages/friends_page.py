@@ -3,9 +3,11 @@ from __future__ import annotations
 import webbrowser
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from .. import theme
 from .. import components as C
+from ..layout import clear_layout
 from ..workers import CallWorker
 from ...api import presence_and_friends
 
@@ -20,23 +22,9 @@ class FriendsPageMixin:
         intro.setWordWrap(True)
         v.addWidget(intro)
 
-        self._friends_signedout = QtWidgets.QFrame()
-        self._friends_signedout.setObjectName("Card")
-        so = QtWidgets.QVBoxLayout(self._friends_signedout)
-        so.setContentsMargins(16, 16, 16, 16)
-        so.setSpacing(10)
-        so_lbl = QtWidgets.QLabel("Sign in to your Farever Pal account to see your "
-                                  "friends and share your online status.")
-        so_lbl.setObjectName("Muted")
-        so_lbl.setWordWrap(True)
-        so_btn = QtWidgets.QPushButton("Sign in")
-        so_btn.setObjectName("Accent")
-        so_btn.setMinimumHeight(32)
-        so_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        so_btn.setFocusPolicy(QtCore.Qt.NoFocus)   # mouse-only: no Space/Enter trigger
-        so_btn.clicked.connect(self._open_login)
-        so.addWidget(so_lbl)
-        so.addWidget(so_btn, 0, QtCore.Qt.AlignLeft)
+        self._friends_signedout = C.SignInCard(
+            "Sign in to your Farever Pal account to see your friends and share your online status.",
+            self._open_login)
         v.addWidget(self._friends_signedout)
 
         self._friends_main = QtWidgets.QWidget()
@@ -162,18 +150,17 @@ class FriendsPageMixin:
         return frame
 
     def _render_friends(self):
-        if not hasattr(self, "_friends_main"):
+        # the Friends page may have been evicted from the page cache while a
+        # poll worker was in flight
+        if not getattr(self, "_widget_alive", lambda w: False)(
+                getattr(self, "_friends_main", None)):
             return
         signed = bool(self.s.account_token)
         self._friends_signedout.setVisible(not signed)
         self._friends_main.setVisible(signed)
         if not signed:
             return
-        while self._friends_list_box.count():
-            it = self._friends_list_box.takeAt(0)
-            w = it.widget()
-            if w is not None:
-                w.deleteLater()
+        clear_layout(self._friends_list_box)
         for fr in self._friends:
             self._friends_list_box.addWidget(self._friend_row(fr))
         self._friends_empty.setVisible(not self._friends)

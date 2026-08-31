@@ -249,15 +249,24 @@ class FarmMixin:
         tile.set("item", item_id, col)
         h.addWidget(tile, 0, QtCore.Qt.AlignVCenter)
         cls = it.get("classes") or []
-        for c in cls:
-            c_col = theme.class_color(c)
-            tag = QtWidgets.QLabel(idata.class_label(c))
-            tag.setStyleSheet(
-                f"color:{c_col};background:{theme.with_alpha(c_col, 22)};"
-                f"border:1px solid {theme.with_alpha(c_col, 80)};"
-                "border-radius:4px;padding:1px 7px;font-size:10px;"
-                "font-weight:700;letter-spacing:1px;")
-            h.addWidget(tag, 0, QtCore.Qt.AlignVCenter)
+        if cls:
+            # class tags stack vertically — two tags side by side read as
+            # one long pill and shove the name/stats column sideways
+            cls_col = QtWidgets.QVBoxLayout()
+            cls_col.setSpacing(3)
+            cls_col.addStretch(1)
+            for c in cls:
+                c_col = theme.class_color(c)
+                tag = QtWidgets.QLabel(idata.class_label(c))
+                tag.setStyleSheet(
+                    f"color:{c_col};background:{theme.with_alpha(c_col, 22)};"
+                    f"border:1px solid {theme.with_alpha(c_col, 80)};"
+                    "border-radius:4px;padding:1px 7px;font-size:10px;"
+                    "font-weight:700;letter-spacing:1px;")
+                tag.setAlignment(QtCore.Qt.AlignHCenter)
+                cls_col.addWidget(tag)
+            cls_col.addStretch(1)
+            h.addLayout(cls_col, 0)
 
         ncol = QtWidgets.QVBoxLayout()
         ncol.setSpacing(2)
@@ -308,6 +317,39 @@ class FarmMixin:
         lay.setSpacing(8)
         rows = idata.shown_drops(item_id)
         bosses = [r for r in rows if r.get("boss")]
+        if len(bosses) > 1:
+            # several family bosses drop the piece: one compact stack per
+            # boss — sprite over name over its dungeon — instead of two
+            # wrapped lines pairing names and dungeons twice over
+            for b in bosses:
+                col = QtWidgets.QVBoxLayout()
+                col.setSpacing(2)
+                col.setContentsMargins(0, 0, 0, 0)
+                tile = QtWidgets.QLabel()
+                tile.setPixmap(self._farm_source_icon(b))
+                tile.setFixedSize(_ROW_ICON, _ROW_ICON)
+                tile.setAlignment(QtCore.Qt.AlignHCenter)
+                col.addWidget(tile, 0, QtCore.Qt.AlignHCenter)
+                name = WrapLabel(b["source"])
+                name.setAlignment(QtCore.Qt.AlignHCenter)
+                name.setMaximumWidth(104)
+                name.setStyleSheet(
+                    f"color:{theme.GOLD};font-weight:600;font-size:11px;"
+                    "background:transparent;")
+                col.addWidget(name, 0, QtCore.Qt.AlignHCenter)
+                dg = b.get("dungeon")
+                if dg:
+                    sub = WrapLabel(dg)
+                    sub.setObjectName("Mono")
+                    sub.setAlignment(QtCore.Qt.AlignHCenter)
+                    sub.setMaximumWidth(104)
+                    sub.setStyleSheet(
+                        f'color:{theme.MUTED};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
+                        "font-size:9px;background:transparent;")
+                    col.addWidget(sub, 0, QtCore.Qt.AlignHCenter)
+                lay.addLayout(col, 0)
+            lay.addStretch(1)
+            return cell
         if bosses:
             tile = QtWidgets.QLabel()
             tile.setPixmap(self._farm_source_icon(bosses[0]))
@@ -416,8 +458,18 @@ class FarmMixin:
     @staticmethod
     def _farm_stats_parts(it: dict) -> list[str]:
         """The item's base stats at its display rarity, one string per stat
-        ('Armor 78', 'Critical 10')."""
-        lad = idata.upgrade_ladder(it)
+        ('Armor 208', 'Critical 11'). Dungeon-scaled gear (any boss source)
+        previews at MAX level — dungeons scale to the character's max and
+        hard mode drops it there, so per-family dungeon levels would just
+        under-read. World/uncommon gear (zone sets, jewelry) keeps its
+        authored zone-tier stats, crafted gear its fixed craft level."""
+        if idata.item_fixed_level(it):
+            lad = idata.upgrade_ladder(it)
+        else:
+            lvl = idata.gear_scaling().get("max_level") or 25
+            has_boss = any(r.get("boss") for r in idata.shown_drops(it["id"]))
+            lad = idata.upgrade_ladder(
+                it, lvl if has_boss else None)
         if not lad:
             return []
         rar = idata.item_display_rarity(it["id"])
@@ -430,10 +482,11 @@ class FarmMixin:
     @staticmethod
     def _farm_bosses(item_id: str) -> list[str]:
         """The boss(es) that drop the item — 'Boss (Dungeon)', deduped in
-        drop order."""
+        drop order. Read from shown_drops so the faction-family bosses
+        (the synthesized same-table dungeon rows) are included too."""
         out: list[str] = []
         seen: set[str] = set()
-        for r in idata.resolve_drops(item_id):
+        for r in idata.shown_drops(item_id):
             if not r.get("boss") or r["source"] in seen:
                 continue
             seen.add(r["source"])

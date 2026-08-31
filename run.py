@@ -24,7 +24,7 @@ def _profile_raw_data() -> None:
     import time
 
     names = ("raw_codex", "raw_units", "raw_items", "raw_skills",
-             "raw_craft", "raw_item_drops", "raw_data")
+             "raw_craft", "raw_item_drops", "raw_locs", "raw_data")
     total_ms = 0.0
     total_kb = 0.0
     lines: list[str] = []

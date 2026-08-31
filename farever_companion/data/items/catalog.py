@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 
 from ... import paths
+from .. import cdb
 from .labels import class_label
 
 try:
@@ -92,6 +93,77 @@ def item(item_id: str) -> dict | None:
     return {"id": item_id, **row} if row else None
 
 
+@lru_cache(maxsize=1)
+def _id_by_name() -> dict[str, str]:
+    """Lowercased display name -> item id (first row wins on duplicates)."""
+    out: dict[str, str] = {}
+    for it in items():
+        nm = it.get("name")
+        if nm:
+            out.setdefault(nm.lower(), it["id"])
+    return out
+
+
+def item_id_by_name(name: str) -> str | None:
+    """Item id whose display name matches `name` (case-insensitive), or None.
+
+    Live-placed food resolves its display name off an st.skill.Skill and never
+    carries a string id in memory; this reverse lookup maps that name back to
+    the stable item id (e.g. 'Plainswalker Feast' -> 'Feast')."""
+    return _id_by_name().get((name or "").strip().lower())
+
+
+def resolve_food_info(name: str | None) -> tuple[str, str]:
+    """Resolve raw food station name / skill / item string into (display_name, item_id).
+
+    Robustly maps item IDs ('Feast', 'Cook_1', 'SmallAlchemistCauldron'),
+    display names ('Plainswalker Feast', 'Minor Alchemist Cauldron'),
+    skill identifiers ('PrepareWorldConsumable'), camelCase strings,
+    and missing/None values so food rows always have valid icons and names.
+    """
+    if not name:
+        return ("Plainswalker Feast", "Feast")
+    raw = str(name).strip()
+    if not raw or raw.lower() in ("food", "prepareworldconsumable", "worldconsumable"):
+        return ("Plainswalker Feast", "Feast")
+
+    # 1. Direct ID match in catalog
+    it = item(raw)
+    if it:
+        return (it.get("name") or raw, raw)
+
+    # 2. Case-insensitive item_id match
+    for iid, row in _data().get("items", {}).items():
+        if iid.lower() == raw.lower():
+            return (row.get("name") or iid, iid)
+
+    # 3. Direct display name lookup
+    iid = item_id_by_name(raw)
+    if iid:
+        it = item(iid)
+        return ((it.get("name") if it else raw) or raw, iid)
+
+    # 4. Try stripping prefixes
+    clean = re.sub(r'^(Food_|Skill_|Skill_Food_|Items_Loot_Cook_|Items_Loot_)', '', raw, flags=re.IGNORECASE)
+    if clean != raw:
+        it = item(clean)
+        if it:
+            return (it.get("name") or clean, clean)
+        iid = item_id_by_name(clean)
+        if iid:
+            it = item(iid)
+            return ((it.get("name") if it else clean) or clean, iid)
+
+    # 5. Try humanizing camelCase (e.g. PlainswalkerFeast -> Plainswalker Feast)
+    hum = re.sub(r'([a-z])([A-Z])', r'\1 \2', clean).replace('_', ' ').strip()
+    iid = item_id_by_name(hum)
+    if iid:
+        it = item(iid)
+        return ((it.get("name") if it else hum) or hum, iid)
+
+    return (hum or raw, "Feast")
+
+
 def search(query: str = "", item_type: str = "", rarity: str = "") -> list[dict]:
     """Items matching query (name/id/type) plus optional filters."""
     q = (query or "").strip().lower()
@@ -124,16 +196,26 @@ def rarities() -> list[str]:
 
 @lru_cache(maxsize=1)
 def _raw_item_lines() -> list[dict]:
+    lines = cdb.lines("item")
+    if lines:
+        return lines
     try:
         data = json.loads(paths.sheets_dir().joinpath("item.json").read_text(encoding="utf-8"))
+        return data.get("lines", [])
     except (OSError, ValueError):
         return []
-    return data.get("lines", [])
 
 
 @lru_cache(maxsize=1)
 def _raw_item_skills() -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
+    for it in items():
+        iid = it.get("id")
+        sk = it.get("skills")
+        if iid and sk:
+            out[iid] = [s.get("skill") if isinstance(s, dict) else s for s in sk if s]
+    if out:
+        return out
     for r in _raw_item_lines():
         iid = r.get("id")
         if not iid:

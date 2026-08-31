@@ -132,4 +132,4 @@ See [`CREDITS.md`](CREDITS.md) for full attribution. In short:
   web map **[farever-map](https://github.com/IceCaveBear/farever-map)** by
   **IceCaveBear**. Credit and thanks to them.
 - Built on the **Heaps** engine + **HashLink** VM (the game's stack); bundled
-  fonts (Inter, JetBrains Mono) and Lucide icons under their own licenses.
+  fonts (Roboto Condensed) and Lucide icons under their own licenses.

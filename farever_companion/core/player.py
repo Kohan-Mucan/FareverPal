@@ -120,7 +120,13 @@ class PlayerLocator:
             hero = self.app.hero()
         except ProcError:
             hero = None
-        if (hero is not None and self.hl.class_of(hero) == "ent.Hero"
+        def _is_hero_cls(h):
+            if not h:
+                return False
+            c = self.hl.class_of(h) or ""
+            return c == "ent.Hero" or c.startswith("ent.hero.") or "Hero" in c
+
+        if (hero is not None and _is_hero_cls(hero)
                 and self._in_world(hero)):
             self.address = hero
             return hero
@@ -184,8 +190,9 @@ class PlayerLocator:
         after a zone change still degrades to None instead of reading garbage."""
         if self.app.reachable:
             hero = self.app.live_hero()
-            if (hero is not None and self.hl.class_of(hero) == "ent.Hero"
-                    and self._in_world(hero)):
+            c = self.hl.class_of(hero) or "" if hero else ""
+            is_hero = c == "ent.Hero" or c.startswith("ent.hero.") or "Hero" in c
+            if (hero is not None and is_hero and self._in_world(hero)):
                 self.address = hero
                 return hero
             self.address = None       # menu / transition: no in-world hero now

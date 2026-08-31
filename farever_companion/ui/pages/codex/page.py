@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import components as C
 from ... import theme
+from ...layout import make_scroll
 from ....data import codex
 from .card import CodexUnitCard
 
@@ -99,6 +100,12 @@ class CodexPageBase:
                 break
         return current_rid, tab_label
 
+    def _on_legend_toggled(self, opt_name: str, checked: bool):
+        if not hasattr(self.s, opt_name): return
+        setattr(self.s, opt_name, checked)
+        if hasattr(self.s, "save"): self.s.save()
+        self._refresh_codex_grid()
+
     def _codex_is_collection_view(self, current_rid: str, tab_label: str) -> bool:
         """True for the compact card style (Collection / Pets / Others /
         mounts / gliders)."""
@@ -118,19 +125,13 @@ class CodexPageBase:
     # --- page builders ---------------------------------------------------
     def _build_codex_grid_scroll(self) -> tuple[QtWidgets.QScrollArea, QtWidgets.QGridLayout]:
         """Scroll area + grid body, returned as (scroll, grid)."""
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-
         body = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(body)
         grid.setHorizontalSpacing(4)
         grid.setVerticalSpacing(4)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-        scroll.setWidget(body)
+        scroll = make_scroll(body)
         return scroll, grid
 
     def _build_codex_search_block(self) -> QtWidgets.QVBoxLayout:
@@ -140,15 +141,10 @@ class CodexPageBase:
         search_v.setSpacing(4)
         search_v.setContentsMargins(0, 0, 0, 0)
 
-        self._codex_search = QtWidgets.QLineEdit()
-        self._codex_search.setPlaceholderText("Search Codex…")
-        self._codex_search.setClearButtonEnabled(True)
+        self._codex_search = C.SearchInput(
+            "Search Codex…", on_text_changed=self._on_search_changed)
         self._codex_search.setFixedWidth(180)
         self._codex_search.setFixedHeight(36)
-        self._codex_search.setStyleSheet(
-            f"QLineEdit {{ background: {theme.BG}; color: {theme.TEXT}; border: 1px solid {theme.BORDER}; border-radius: 4px; padding: 4px 8px; font-size: 12px; }}"
-        )
-        self._codex_search.textChanged.connect(self._on_search_changed)
         search_v.addWidget(self._codex_search)
 
         # 'Grid / Outline' compact toggle — lives under the search box; the
@@ -328,7 +324,7 @@ class CodexPageBase:
         dungeon_btn_lay.setContentsMargins(4, 0, 4, 0)
         dungeon_btn_lay.setSpacing(4)
         leg_dungeon = C.IconTile(size=21)
-        leg_dungeon.set_marker("dungeon", theme.TEXT, outlined=True)
+        leg_dungeon.set_marker("dungeon", theme.KIND_COLOR.get("dungeon", "#7c3aed"), outlined=True)
         leg_dungeon.setStyleSheet("background: black; border-radius: 4px;")
         leg_dungeon.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         dungeon_btn_lay.addWidget(leg_dungeon)
@@ -348,16 +344,14 @@ class CodexPageBase:
         self._spark_filter_btn.setFixedWidth(100)
         self._spark_filter_btn.setFixedHeight(30)
         spark_qss = (
-            f"QPushButton {{ background: transparent; border: 1px solid transparent; border-radius: 4px; color: {theme.GOLD}; font-size: 11px; font-weight: bold; text-align: left; padding: 2px; }}"
-            f"QPushButton:hover {{ background: {theme.with_alpha(theme.GOLD, 20)}; border-color: {theme.with_alpha(theme.GOLD, 40)}; color: {theme.TEXT}; }}"
-            f"QPushButton:checked {{ background: {theme.with_alpha(theme.GOLD, 40)}; border-color: {theme.GOLD}; color: {theme.GOLD}; }}"
+            f"QPushButton {{ background: transparent; border: 0; border-radius: 4px; color: {theme.GOLD}; font-size: 11px; font-weight: bold; text-align: left; padding: 2px; }}"
         )
         self._spark_filter_btn.setStyleSheet(spark_qss)
         spark_btn_lay = QtWidgets.QHBoxLayout(self._spark_filter_btn)
         spark_btn_lay.setContentsMargins(4, 0, 4, 0)
         spark_btn_lay.setSpacing(4)
         self._leg_spark_ico = C.IconTile(size=21)
-        self._leg_spark_ico.set_marker("sparkdust", theme.GOLD, outlined=False)
+        self._leg_spark_ico.set_marker("sparkdust", theme.GOLD, outlined=True)
         self._leg_spark_ico.setStyleSheet("background: transparent; border: 0;")
         self._leg_spark_ico.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         spark_btn_lay.addWidget(self._leg_spark_ico)
@@ -415,9 +409,9 @@ class CodexPageBase:
             elif kind == "ach":
                 ico.set_achievement(theme.BLUE)
             elif kind == "dungeon":
-                ico.set_marker("dungeon", theme.TEXT, outlined=True)
+                ico.set_marker("dungeon", theme.KIND_COLOR.get("dungeon", "#7c3aed"), outlined=True)
             elif kind == "shop":
-                ico.set_marker("shop", theme.GOOD, outlined=True)
+                ico.set_marker("shop", theme.GOLD, outlined=True)
             elif kind == "mob":
                 ico.set_marker("sword", theme.BROWN, outlined=True)
             else:

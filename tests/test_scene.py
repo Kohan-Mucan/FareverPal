@@ -129,3 +129,66 @@ def test_no_gamelayer_returns_empty():
     scene = Scene(proc, Hl(proc))
     assert scene.units(lone) == []
     assert scene.elements(lone) == []
+
+
+def _food_scene(specs):
+    """(class_name, skill_name_or_None) pairs -> (Scene, player).
+
+    Each element carries an st.skill.Skill* in its OFF_ELEMID slot (the
+    WorldConsumable / SkillObject layout: the id slot is reused as a Skill
+    pointer, never a string); the Skill's head holds the display string, so
+    _skill_display_name's string sweep resolves it."""
+    proc = FakeProc()
+    hb = HeapBuilder(proc)
+
+    player = hb.make_instance("ent.Hero")
+    gl = hb.alloc(0x200)
+    elems = []
+    for i, (cls, skill_name) in enumerate(specs):
+        el = hb.make_instance(cls)
+        proc.put_f64(el + OFF_POS, float(i) + 1.0)
+        proc.put_f64(el + OFF_POS + 8, 2.0)
+        proc.put_f64(el + OFF_POS + 16, 3.0)
+        skill = hb.make_instance("st.skill.Skill")
+        if skill_name:
+            proc.put_u64(skill + 0x08, hb.make_string(skill_name))
+        proc.put_u64(el + OFF_ELEMID, skill)
+        elems.append(el)
+    proc.put_u64(gl + OFF_ELEMS_ARR, hb.make_array(elems))
+    proc.put_u64(player + OFF_GAMELAYER, gl)
+    return Scene(proc, Hl(proc)), player
+
+
+def test_food_stations_world_consumable_resolves_skill_name():
+    """A WorldConsumable's id slot is a Skill*, not a string — the station
+    must resolve the display name off that Skill and keep the position."""
+    scene, player = _food_scene(
+        [("st.skill.object.WorldConsumable", "Plainswalker Feast")])
+    foods = scene.food_stations(player)
+    assert len(foods) == 1
+    f = foods[0]
+    assert f.name == "Plainswalker Feast"
+    assert (f.x, f.y, f.z) == (1.0, 2.0, 3.0)
+
+
+def test_food_stations_world_consumable_always_counts():
+    """Even with an unresolvable skill name a WorldConsumable is still food
+    (render falls back to a generic 'Food' label)."""
+    scene, player = _food_scene(
+        [("st.skill.object.WorldConsumable", None)])
+    foods = scene.food_stations(player)
+    assert len(foods) == 1
+    assert foods[0].name is None
+
+
+def test_food_stations_skill_object_hint_filter():
+    """SkillObject elements only count as food when the resolved skill name
+    smells like one — combat casts are excluded. Also pins the _FOOD_NAME_HINTS
+    regression: a SkillObject used to raise NameError and kill the whole scan."""
+    scene, player = _food_scene([
+        ("st.skill.SkillObject", "Fireball"),             # combat cast
+        ("st.skill.SkillObject", "Plainswalker Feast"),   # placed food
+        ("st.skill.SkillObject", None),                    # unreadable
+    ])
+    foods = scene.food_stations(player)
+    assert [f.name for f in foods] == ["Plainswalker Feast"]

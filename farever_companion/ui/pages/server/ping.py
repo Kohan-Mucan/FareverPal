@@ -57,8 +57,12 @@ class PingPanelMixin:
         top_bar.addWidget(self._ping_btn)
         v.addLayout(top_bar)
 
-        # Load settings states before rendering cards
-        saved_states = getattr(self.s, "server_pings", {})
+        # Load settings states before rendering cards.
+        # server_pings stores ONLY the enabled region codes (a list); tolerate
+        # the old full true/false dict form for backwards compatibility.
+        saved = getattr(self.s, "server_pings", [])
+        if isinstance(saved, dict):
+            saved = [code for code, on in saved.items() if on]
 
         self._ping_grid_widget = QtWidgets.QWidget()
         self._ping_grid = QtWidgets.QGridLayout(self._ping_grid_widget)
@@ -70,10 +74,10 @@ class PingPanelMixin:
             card = self._build_ping_card(region)
             self._ping_cards[region["code"]] = card
 
-            # Apply saved state if it exists in user settings
-            if region["code"] in saved_states:
-                card["widget"].active = saved_states[region["code"]]
-                card["widget"].update_style()
+            # Cards default to active=True, so start from off and only re-enable
+            # the region codes present in settings (the enabled subset).
+            card["widget"].active = region["code"] in saved
+            card["widget"].update_style()
 
         self._refresh_ping_grid()
 
@@ -241,8 +245,11 @@ class PingPanelMixin:
 
     def _save_card_states(self):
         try:
-            states = {code: card["widget"].active for code, card in self._ping_cards.items()}
-            self.s.server_pings = states
+            # Only the enabled region codes are persisted (keeps settings.json
+            # compact — no true/false for every region).
+            enabled = [code for code, card in self._ping_cards.items()
+                       if card["widget"].active]
+            self.s.server_pings = enabled
             # Persist only IPs the user added themselves.
             user_hosts = {}
             for r in REGIONS:

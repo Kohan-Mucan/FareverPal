@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from .. import theme
 from .. import components as C
@@ -13,8 +14,15 @@ class SpeedrunPageMixin:
 
         v.addWidget(C.SectionHeader("Timer"))
         card = C.OverlayCard("timer", "Open Speedrun Timer",
-                             "Stopwatch with auto-stop on the boss kill.")
+                             "Stopwatch with auto-stop on the boss kill.",
+                             bare_checked=self.s.speedrun_bare, has_bare=True,
+                             transparent_checked=getattr(self.s, "speedrun_transparent", False),
+                             has_transparent=True)
         card.toggled.connect(lambda on: self._request_overlay("speedrun", on))
+        card.bareToggled.connect(lambda on: self._set_bare("speedrun", on))
+        card.transparentToggled.connect(lambda on: self._set_transparent("speedrun", on))
+        init_checked = bool(self.overlay_mgr.overlays.get("speedrun") is not None) if (self.model and self.model.player_addr) else bool(getattr(self.s, "open_overlay_speedrun", False))
+        card.set_checked_silent(init_checked)
         self._register_card("speedrun", card)
         v.addWidget(card)
         sc = C.SliderRow("Overlay scale", 70, 200, int(self.s.speedrun_scale * 100),
@@ -164,7 +172,9 @@ class SpeedrunPageMixin:
         return frame
 
     def _render_corunners(self):
-        if not hasattr(self, "_corunner_box"):
+        # the Speedrun page may have been evicted while the friends poll ran
+        if not getattr(self, "_widget_alive", lambda w: False)(
+                getattr(self, "_corunner_box", None)):
             return
         while self._corunner_box.count():
             it = self._corunner_box.takeAt(0)

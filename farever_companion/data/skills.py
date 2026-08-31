@@ -115,9 +115,23 @@ _FALLBACKS = {
 
 @lru_cache(maxsize=1)
 def _rows() -> dict[str, dict]:
-    """Skill id -> row. The FULL raw sheet first (texts/vars/steps — what
-    description resolution needs), else the compiled shim (id/type/nature/
-    name only, so types still resolve without the raw sheet)."""
+    """Skill id -> row. The compiled raw_skills shim first (with full
+    vars/texts/steps), then cdb.by_id("skill"), falling back to loose skill.json."""
+    try:
+        from . import raw_skills
+        if raw_skills is not None:
+            full = raw_skills.DATA.get("skill_rows") or raw_skills.DATA.get("skills")
+            if isinstance(full, list):
+                res = {r["id"]: r for r in full if isinstance(r, dict) and r.get("id")}
+                if res:
+                    return res
+            elif isinstance(full, dict) and full:
+                return full
+    except Exception:
+        pass
+    by_id = cdb.by_id("skill")
+    if by_id:
+        return by_id
     out: dict[str, dict] = {}
     raw = None
     try:
@@ -138,9 +152,7 @@ def _rows() -> dict[str, dict]:
         for r in rows:
             if isinstance(r, dict) and r.get("id"):
                 out[r["id"]] = r
-    if out:
-        return out
-    return cdb.by_id("skill")
+    return out or by_id
 
 
 def skill_row(skill_id: str) -> dict | None:

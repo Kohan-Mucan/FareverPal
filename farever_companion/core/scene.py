@@ -27,6 +27,7 @@ from ..constants import (   # offsets live in one place; re-exported for callers
     OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_RIFT_BOOL, OFF_WORLD_MAPID, OFF_WORLDEVENTS_ARR,
     OFF_CONFIG_CANDIDATES, OFF_CONFIG_MAPID_CANDIDATES, OFF_CONFIG_DIFF_CANDIDATES,
     OFF_CONFIG_MAPID, OFF_CONFIG_DIFFICULTY,
+    OFF_LOOT_ITEM, OFF_LOOT_COUNT, OFF_ITEM_KIND,
 )
 
 _ELEM_KINDS = {
@@ -42,6 +43,11 @@ _ELEM_KINDS = {
     "ent.interactible.Teleporter": "dungeon",   # dungeon entrances / teleports
 }
 PLAYER_OWNER_CLASSES = {"ent.Hero", "ent.hero.Warrior", "ent.hero.Rogue", "ent.hero.Mage", "ent.hero.Priest"}
+
+# Placed-food name hints: st.skill.SkillObject-classed elements only count as
+# food when their resolved skill name smells like one (WorldConsumable elements
+# are always food — they never carry a string id, the slot is a Skill*).
+_FOOD_NAME_HINTS = ("consumable", "feast", "cauldron", "food", "cook")
 
 
 @dataclass
@@ -169,6 +175,38 @@ class Element:
             eid_l = self.elem_id.lower()
             return "teleporter" in eid_l or "portal" in eid_l or "dungeon" in eid_l or "instanceorb" in eid_l
         return False
+
+    def dist(self, x: float, y: float, z: float) -> float:
+        return math.dist((self.x, self.y, self.z), (x, y, z))
+
+    def dist2d(self, x: float, y: float) -> float:
+        return math.hypot(self.x - x, self.y - y)
+
+
+@dataclass
+class LootDrop:
+    addr: int
+    item_id: str | None      # st.Item.kind, e.g. 'MoteOfChaos'
+    count: int
+    x: float
+    y: float
+    z: float
+    rarity: str | None = None  # live rolled rarity (dungeon gear rolls up)
+
+    def dist(self, x: float, y: float, z: float) -> float:
+        return math.dist((self.x, self.y, self.z), (x, y, z))
+
+    def dist2d(self, x: float, y: float) -> float:
+        return math.hypot(self.x - x, self.y - y)
+
+
+@dataclass
+class FoodStation:
+    addr: int
+    name: str | None         # e.g. 'Plainswalker Feast', resolved off st.skill.Skill
+    x: float
+    y: float
+    z: float
 
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))
@@ -612,3 +650,150 @@ class Scene:
                 x=x, y=y, z=z,
             ))
         return out
+
+    _RARITY_NAMES = ("Common", "Uncommon", "Rare", "Epic", "Legendary")
+
+    def _loot_rarity(self, item_ptr: int) -> str | None:
+        """Live rolled rarity off the drop's st.Item. Dungeon/rift gear spawns
+        at a rolled rarity above the authored template's, so the static
+        catalog alone reads low (Epic drops showing as Rare). Reflection
+        'rarity' first; a String field reads directly, a small int maps to
+        the Common..Legendary enum."""
+        try:
+            tp = self.hl.ptr(item_ptr)
+            off = self.hl.field_offset(tp, "rarity") if tp else None
+            if not off:
+                return None
+            raw = self.proc.try_read(item_ptr + off, 8)
+            if raw is None:
+                return None
+            v = struct.unpack("<Q", raw)[0]
+            if is_ptr(v):
+                try:
+                    if self.hl.class_of(v) == "String":
+                        s = self.hl.hl_string(v)
+                        return s or None
+                except ProcError:
+                    pass
+                return None
+            if v < len(self._RARITY_NAMES):
+                return self._RARITY_NAMES[v]
+        except ProcError:
+            pass
+        return None
+
+    def loot_drops(self, pbase: int | None) -> list[LootDrop]:
+        """Dropped-loot entities with their item resolved.
+
+        ent.interactible.LootDrop has NO kind string; the subclass reuses the
+        ent.Element.kind slot (@0x270) as an st.Item* whose kind@0x70 is the
+        item id ('MoteOfChaos'). count is a plain i32 @0x278. Confirmed live
+        2026-08-23 (ai/workspace/opencode/scan_probe capture #2)."""
+        out: list[LootDrop] = []
+        for el in self.elements(pbase):
+            if el.cls != "ent.interactible.LootDrop":
+                continue
+            item_id: str | None = None
+            item_ptr = 0
+            try:
+                item_ptr = self.hl.ptr(el.addr + OFF_LOOT_ITEM) or 0
+                if is_ptr(item_ptr):
+                    kptr = self.hl.ptr(item_ptr + OFF_ITEM_KIND)
+                    if is_ptr(kptr):
+                        item_id = self.hl.hl_string(kptr)
+            except ProcError:
+                item_id = None
+            try:
+                raw = self.proc.try_read(el.addr + OFF_LOOT_COUNT, 4)
+                count = struct.unpack("<i", raw)[0] if raw else 1
+            except ProcError:
+                count = 1
+            out.append(LootDrop(
+                addr=el.addr,
+                item_id=item_id or None,
+                count=count if count > 0 else 1,
+                x=el.x, y=el.y, z=el.z,
+                rarity=(self._loot_rarity(item_ptr)
+                        if is_ptr(item_ptr) else None),
+            ))
+        return out
+
+    def food_stations(self, pbase: int | None) -> list[FoodStation]:
+        """Player-placed consumables (Plainswalker Feast, alchemist cauldrons).
+
+        Placed food shows up under EITHER class depending on context:
+          - st.skill.object.WorldConsumable (dedicated consumable element)
+          - st.skill.SkillObject (same layout as combat casts, so those only
+            count when the resolved skill name smells like food)
+        Both reuse the ent.Element.kind slot (@0x270) as an st.skill.Skill*;
+        the display name lives in one of the Skill's string fields."""
+        out: list[FoodStation] = []
+        for el in self.elements(pbase):
+            clsl = (el.cls or "").lower()
+            is_consumable = "worldconsumable" in clsl
+            is_skill_obj = (not is_consumable) and "skillobject" in clsl
+            if not (is_consumable or is_skill_obj):
+                continue
+            name: str | None = None
+            try:
+                skill_ptr = self.hl.ptr(el.addr + OFF_ELEMID)
+                if is_ptr(skill_ptr):
+                    name = self._skill_display_name(skill_ptr)
+                if not name and is_consumable:
+                    name = self._skill_display_name(el.addr)
+            except ProcError:
+                name = None
+            if is_skill_obj and not (
+                    name and any(h in name.lower()
+                                 for h in _FOOD_NAME_HINTS)):
+                continue   # a combat cast, not placed food
+            out.append(FoodStation(
+                addr=el.addr,
+                name=name,
+                x=el.x, y=el.y, z=el.z,
+            ))
+        return out
+
+    def _skill_display_name(self, skill_ptr: int) -> str | None:
+        """Pull a readable display string off an st.skill.Skill object."""
+        try:
+            tp = self.hl.ptr(skill_ptr)
+        except ProcError:
+            return None
+        if not is_ptr(tp):
+            return None
+        # reflection pass over the usual id-ish fields
+        try:
+            fields = [(nm, self.hl.field_offset(tp, nm)) for nm in
+                      ("kind", "id", "skillId", "name")]
+            for _nm, off in fields:
+                if not off:
+                    continue
+                try:
+                    sp = self.hl.ptr(skill_ptr + off)
+                    if is_ptr(sp) and self.hl.class_of(sp) == "String":
+                        s = self.hl.hl_string(sp)
+                        if s:
+                            return s
+                except ProcError:
+                    continue
+        except ProcError:
+            pass
+        # fallback: sweep the head of the block for ANY String field
+        try:
+            blk = self.proc.try_read(skill_ptr, 0x80)
+            if blk:
+                for off in range(8, len(blk) - 7, 8):
+                    v = struct.unpack_from("<Q", blk, off)[0]
+                    if not is_ptr(v):
+                        continue
+                    try:
+                        if self.hl.class_of(v) == "String":
+                            s = self.hl.hl_string(v)
+                            if s:
+                                return s
+                    except ProcError:
+                        continue
+        except ProcError:
+            pass
+        return None

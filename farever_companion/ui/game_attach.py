@@ -19,6 +19,7 @@ from ..config import Settings
 from ..core.proc import Proc, ProcError, backend_name, find_pid
 from ..core.model import LiveModel
 from ..core.autoattach import AutoAttach, Act
+from .workers import register as _register_worker
 
 
 class _LocateWorker(QtCore.QThread):
@@ -28,6 +29,7 @@ class _LocateWorker(QtCore.QThread):
         super().__init__()
         self.model = model
         self._stop_requested = False
+        _register_worker(self)
 
     def run(self):
         try:
