@@ -19,6 +19,22 @@ from ...geo import gatherables as geo_gatherables, orbs as geo_orbs, pois as geo
 # Set to True to use player SVGs instead of dots for group members.
 USE_HERO_SVGS = False
 
+# POI kinds that can land twice on the same world spot — a static database
+# entry plus its live scene element (orbs, checkpoints vs static respawns,
+# gatherables in both lists). Kinds map to a family so cross-kind doubles
+# (checkpoint over obelisk/respawn) are caught too; kinds NOT listed here
+# (enemy / spark_enemy / hero_* / companion / pos) keep stacking because
+# several live units can legitimately share one position.
+DEDUP_FAMILIES = {
+    "chest": "chest", "recipe": "chest",
+    "orb": "orb", "chest_orb": "orb",
+    "obelisk": "respawn", "respawn": "respawn", "checkpoint": "respawn",
+    "dungeon": "dungeon", "rift": "dungeon",
+    "flower": "gather", "ore": "gather",
+    "petshop": "vendor", "mountshop": "vendor", "vendor": "vendor",
+    "soulstone": "soulstone", "activity": "activity",
+}
+
 # --- map-image pixel transform ---------------------------------------------
 _MAP_PM = None
 _MAP_TRIED = False

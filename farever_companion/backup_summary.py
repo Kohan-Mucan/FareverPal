@@ -69,3 +69,25 @@ def summarize(name: str, text: str) -> str:
             parts.append(f"account: {acct}")
         return " · ".join(parts)
     return f"{len(data)} keys"
+
+
+def summarize_snapshot(snap: dict) -> str:
+    """Human-readable summary of a master backup snapshot."""
+    profiles = snap.get("profiles", {})
+    prof_count = len(profiles)
+    total_pois = sum(_count(p.get("poi_done")) for p in profiles.values())
+    total_orbs = sum(_count(p.get("dungeon_orb_done")) for p in profiles.values())
+    col = snap.get("collection", {})
+    pets = _count(col.get("pets"))
+    mounts = _count(col.get("mounts"))
+    gliders = _count(col.get("gliders"))
+    farm = _count(snap.get("planner", {}).get("farm"))
+    
+    parts = []
+    if prof_count:
+        parts.append(f"{prof_count} profile{'s' if prof_count != 1 else ''} ({total_pois} POIs" + (f", {total_orbs} orbs" if total_orbs else "") + ")")
+    if pets or mounts or gliders:
+        parts.append(f"collection ({pets}p/{mounts}m/{gliders}g)")
+    if farm:
+        parts.append(f"{farm} gear farm")
+    return " · ".join(parts) if parts else "empty backup"

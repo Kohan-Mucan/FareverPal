@@ -16,7 +16,7 @@ idata` and `idata.<fn>(...)` — because the public API is re-exported here.
 from .catalog import (available, is_shop_item, item, item_effect_duration,
                      item_id_by_name, items, matched_skill_labels,
                      matches_class, matches_skill, rarities, resolve_food_info,
-                     search, types, weapon_skills)
+                     search, types, weapon_skills, weapons_for_skill)
 from .craft import (craft_bill, craft_bill_many, craft_chain, craft_jobs,
                     craft_levels, first_craft_xp, is_craft_item, is_craftable,
                     jobs, recipe, recipe_unlocked_by, recipes, recipes_using)

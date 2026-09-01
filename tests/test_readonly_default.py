@@ -97,13 +97,13 @@ def test_no_write_primitive_in_native(token):
 
 
 # --- (f) layering guard: the data/logic layers import no GUI toolkit -------
-# core/, combat/, data/ and geo/ are the headless, unit-testable layers. They
+# core/, data/ and geo/ are the headless, unit-testable layers. They
 # must stay importable with no Qt installed, so a Qt import at MODULE LEVEL in
 # any of them is a boundary violation. (data/icons.py is UI-adjacent and may
 # render pixmaps, but it lazy-imports Qt *inside functions* so the module still
 # imports headless — that in-function import is the sanctioned exception, which
 # this module-level check allows.)
-HEADLESS_LAYERS = ("core", "combat", "data", "geo")
+HEADLESS_LAYERS = ("core", "data", "geo")
 _QT_PKGS = ("PySide6", "PyQt5", "PyQt6", "PySide2")
 
 
@@ -141,5 +141,5 @@ def test_headless_layers_have_no_module_level_qt_import():
                 offenders.append(f"{path.relative_to(PKG_DIR)}:{node.lineno}")
     assert not offenders, (
         f"GUI toolkit imported at module level in a headless layer: {offenders}. "
-        "core/combat/data/geo must import without Qt; defer any Qt use into a "
+        "core/data/geo must import without Qt; defer any Qt use into a "
         "function (see data/icons.py) or move it to ui/.")

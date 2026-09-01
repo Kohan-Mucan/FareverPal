@@ -74,6 +74,22 @@ if not has_raw_data:
         if os.path.exists(src):
             datas.append((src, "assets/data"))
 
+# --- data: dps_bridge (combat proxy DLLs) ---------------------------------
+# The DPS settings page copies version.dll / dinput8.dll from here into the
+# game folder (Install DLL) and classifies game-folder DLLs by hashing them
+# against these reference copies (the DLLs themselves are the ground truth,
+# so no checksums manifest ships — is_farever_proxy derives the hashes from
+# them at runtime). The frozen build therefore reports 3rd-party mods
+# correctly instead of falling back to the weak embedded-signature check.
+# Guarded like the atlas section: builds without the bridge files (e.g. CI)
+# still succeed.
+dps_bridge_src = os.path.join(SPECPATH, "dps_bridge")
+if os.path.isdir(dps_bridge_src):
+    for _bridge_f in ("version.dll", "dinput8.dll", "farever_dps.dll"):
+        _bridge_src = os.path.join(dps_bridge_src, _bridge_f)
+        if os.path.isfile(_bridge_src):
+            datas.append((_bridge_src, "dps_bridge"))
+
 atlas_src = os.path.join(SPECPATH, "assets", "atlas")
 using_atlas = os.path.exists(atlas_src) and any(f.startswith("atlas_") for f in os.listdir(atlas_src))
 

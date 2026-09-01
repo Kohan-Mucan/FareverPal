@@ -31,6 +31,7 @@ ACCENT_LIGHT = "#8ed5ff"  # primary - active nav text/icon, sparkline
 ON_ACCENT = "#004965"   # on-primary-container - text on cyan buttons
 TOGGLE_THUMB_ON = "#00354a"  # on-primary - dark thumb on an active (cyan) toggle
 ACCENT_DIM = "#13384a"  # cyan tint for selection backgrounds
+ACCENT_BORDER = "#1f566e"  # subtle accent border
 # the hand-tuned default accent shades; set_accent restores them exactly when the
 # user picks the design cyan rather than re-deriving. Order matches the globals
 # reassigned in set_accent: (ACCENT, LIGHT, DIM, ON_ACCENT, TOGGLE_THUMB_ON).
@@ -65,6 +66,23 @@ def class_color(cls: str) -> str:
     """The tile and button color for a class — Warrior orange, Rogue green,
     Mage blue, Priest gold."""
     return HERO.get((cls or "").lower(), MUTED)
+
+
+# Per-skill mini-bar palette: the meter breakdowns color each skill's share
+# bar, so a parse reads like the design (Conduit cyan, Chaos Bolts red, pet
+# green, ...) instead of one flat accent for every row.
+_SKILL_BAR_COLORS = (ACCENT, GOOD, GOLD, "#f87171", "#a78bfa", "#fb923c",
+                     "#f472b6", "#4ade80", "#38bdf8", "#eac331")
+
+
+def skill_color(skill_id: str) -> str:
+    """Deterministic mini-bar color for a skill: stable per skill_id across
+    ticks, modes and sessions (plain sum-of-codepoints hash, so it is not
+    affected by Python's randomized str hash)."""
+    n = 0
+    for c in (skill_id or ""):
+        n = (n * 31 + ord(c)) & 0xFFFFFFFF
+    return _SKILL_BAR_COLORS[n % len(_SKILL_BAR_COLORS)]
 
 
 RARITY = {
@@ -272,6 +290,19 @@ QComboBox QAbstractItemView {{
 }}
 QComboBox QAbstractItemView::item {{ min-height: 24px; padding: 5px 10px; border: 0; }}
 QComboBox QAbstractItemView::item:selected {{ background: {ACCENT_DIM}; color: {ACCENT_LIGHT}; }}
+QComboBox QAbstractItemView QScrollBar:vertical {{
+    background: {BG}; width: 10px; margin: 0;
+}}
+QComboBox QAbstractItemView QScrollBar::handle:vertical {{
+    background: {PANEL_HI}; min-height: 24px;
+}}
+QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {{
+    background: {DIM};
+}}
+QComboBox QAbstractItemView QScrollBar::add-line,
+QComboBox QAbstractItemView QScrollBar::sub-line {{
+    height: 0; width: 0;
+}}
 QSpinBox::up-button, QDoubleSpinBox::up-button {{
     subcontrol-origin: border; subcontrol-position: top right; width: 18px;
     background: {PANEL_LOW}; border-left: 1px solid {BORDER}; }}

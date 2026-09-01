@@ -187,19 +187,8 @@ class EntityRenderMixin:
                 sel = addr is not None and key == self._sel
                 tracked = sel and self._is_tracked("hero", e.unit_id)
                 cls_name = e.cls or ""
-                hero_class = "warrior"
-                if cls_name.startswith("ent.hero."):
-                    hero_class = cls_name.replace("ent.hero.", "").lower()
-                elif e.unit_id:
-                    hero_class = e.unit_id.lower()
-                    if "warrior" in hero_class:
-                        hero_class = "warrior"
-                    elif "rogue" in hero_class:
-                        hero_class = "rogue"
-                    elif "mage" in hero_class:
-                        hero_class = "mage"
-                    elif "priest" in hero_class:
-                        hero_class = "priest"
+                resolved = getattr(e, "hero_class", None) or udata.resolve_hero_class(cls_name, getattr(e, "unit_id", None))
+                hero_class = resolved.lower() if resolved else "warrior"
 
                 col_hex = theme.HERO.get(hero_class, theme.TEXT)
                 col = col_hex  # Keep class color even when selected/tracked
@@ -461,7 +450,7 @@ class EntityRenderMixin:
         # --- LOOT (dropped loot on the ground; rarity floor + best first) --
         if getattr(self, "_loots", None):
             from .loot_rows import build_loot_specs
-            xyz = self.model.player_xyz() or (0.0, 0.0, 0.0)
+            xyz = (self.model.player_xyz() if self.model is not None else None) or (0.0, 0.0, 0.0)
             loot_specs = build_loot_specs(
                 self._loots, xyz, getattr(self.s, "loot_filter", "Off"),
                 is_tracked=self._is_tracked, track=self._track,
@@ -478,7 +467,7 @@ class EntityRenderMixin:
 
         # --- PLAYER FOOD (placed feasts / cauldrons) ------------------------
         if getattr(self, "_foods", None):
-            xyz = self.model.player_xyz() or (0.0, 0.0, 0.0)
+            xyz = (self.model.player_xyz() if self.model is not None else None) or (0.0, 0.0, 0.0)
             from ...data.items import catalog as _cat
 
             def _fdist(f):
@@ -504,7 +493,7 @@ class EntityRenderMixin:
 
         rift_mode = self._get_rift_mode()
 
-        rst = self.model.rift_status() if rift_mode != "Off" else None
+        rst = self.model.rift_status() if (self.model is not None and rift_mode != "Off") else None
         if rst and rst.state in ("WARNING", "ACTIVE", "CLOSING", "SCHEDULED"):
             show_card = (rift_mode == "Always") or (rift_mode == "Active" and rst.state in ("WARNING", "ACTIVE", "CLOSING"))
             if show_card:
@@ -562,7 +551,7 @@ class EntityRenderMixin:
                         r_sub = ""
 
                 r_val = ""
-                if rst.poi_x is not None and self.model.player_xyz():
+                if rst.poi_x is not None and self.model is not None and self.model.player_xyz():
                     px, py, _ = self.model.player_xyz()
                     d = math.hypot(rst.poi_x - px, rst.poi_y - py)
                     r_val = f"{d:>5.0f}m"

@@ -55,17 +55,67 @@ without the extension. Logic/UI work is unaffected.
 
 ### Dev / experimental flags (environment)
 
-- `FAREVER_EXPERIMENTAL=1` — exposes in-progress features hidden from release
-  builds. Currently the per-skill **Skill Breakdown** panel: it's read-only-honest
-  but incomplete (samples the scattered live `DamageDisplay` numbers — ~30%
-  coverage under heavy load) and slow to calibrate (~5 min cold type-locate), so
-  it's off by default. The exact features (headline DPS, by-enemy, survivability)
-  are always on. Gate lives in `config.experimental_enabled()`.
-- `FAREVER_DMG_TYPE=0x…` — skip the slow `DamageDisplay` type-locate by passing the
-  known type pointer (per game-process; the app verifies it by class name and
-  falls back to scanning if stale). Only relevant with `FAREVER_EXPERIMENTAL=1`.
+- `FAREVER_DMG_TYPE=0x…` — skip the slow `DamageDisplay` type-locate by passing
+  the known type pointer (per game-process; the app verifies it by class name and
+  falls back to scanning if stale).
+- `FAREVER_DMG_RESULT_TYPE=0x…` — same, for the `st.skill.DamageResult` class.
+  Both pointers are auto-captured to settings once located, so only the first
+  launch after a game restart pays the full-process scan (visible ticker).
+- `FAREVER_DMG_DEBUG=1` — stderr diagnostics (`[dmg-scan] …`) from the DPS
+  damage reader while it locates/maps/polls, for re-calibrating offsets after a
+  game patch. Each poll logs how many displays/results/events were read plus the
+  per-reason drop counts (`no_res`, `bad_hdr`, `bad_amount`, `bad_skill`), and
+  whether the field offsets were resolved by runtime reflection (`refl=y`) vs
+  the constants fallback.
+
+Two classes gate the reader: `ui.comp.DamageDisplay` (the floaty) and
+`st.skill.DamageResult` (its payload). A display's `dmg` slot is only trusted
+when the payload's own hl_type header IS the located `DamageResult` class -
+pooled/freed floaties point at reused objects (a live `$DebugDay` ref was
+caught), so anything failing that header check counts `bad_hdr` and is never
+decoded. Field offsets on the verified result type resolve by runtime
+reflection first (constants as fallback); live builds ship `serverSource`
+empty, so the caster falls back to the `baseSkill` object's owner
+(`st.skill.Skill.owner`, resolved by name). Skill *names* are best-effort - a
+header-verified event with an unreadable name chain still decodes (skill `?`,
+flagged `bad_skill`), it is never dropped.
+
+If the reader finds displays but decodes zero events, it is not silent: the
+Top DPS overlay / Combat & DPS Analysis status line switches to
+`SOURCE: decoding displays, 0 events — … (stale offsets?)` with those same
+drop counts, and the `FAREVER_DMG_DEBUG` log prints them once a second. That
+is the evidence to paste after a game patch - either a field name dodged the
+reflection lists (refl=n, add the real name to the `_*_FIELDS` tuples in
+`core/damage.py`) or an offset/class name drifted (respond by updating
+`FAREVER_DMG_TYPE`/`FAREVER_DMG_RESULT_TYPE`/`constants.py`/the `_*_FIELDS`
+order).
+
+The DPS meter (Top DPS overlay + Combat & DPS Analysis page) is fed by the
+game's own per-hit damage events: `core/damage.py` reads the
+`ui.comp.DamageDisplay` numbers; `core/dps_source.py` feeds the event ring.
+`core/group_reader.py` reads the replicated `st.Group` party roster (the read
+side of the game's invite-to-group flow) and `core/dps_tracker.py` seeds it
+into the name maps, so far-away group members resolve by real name instead of
+synthetic `Party_XXXX` rows. See `core/damage.py` for the calibration pattern
+and offsets.
+
+Damage totals are NEVER HP-derived - enemy health is only read for the boss
+bar and encounter state. The one exception, explicitly labeled in the UI
+(≈): the per-player **damage-taken** readout uses hero HP as a *fallback*
+signal, gated so events and estimates can never mix or double-count: the
+estimate engages only after a reader lull (no events at all for 3s), a
+hero that received an incoming event that tick is skipped regardless, a
+death transition (hp reaching 0) is never counted as damage taken, and HP
+diffs never contribute to outgoing damage or heals.
+
+Pets/summons are re-credited to their owners: `core/dps_tracker.py` maps each
+player-owned companion (an ent.Foe whose scene owner resolves to an ent.Hero)
+to that hero and merges its events into the owner's parse, tagging the pet's
+skills `(pet)` instead of showing a synthetic pet line.
 
 ## What data the app expects
+for the boss bar and encounter state (see `core/damage.py` for the
+
 
 The app reuses extracted game data (CDB sheets, icons, names, chest positions)
 rather than bundling it. `paths.py` locates these relative to the workspace. If
@@ -90,11 +140,15 @@ farever_companion/
     player.py           locate the local player (pure-read, no writes)
     appsingleton.py     resolve the player via the GameApp singleton (read-only)
     scene.py            walk the scene graph -> Entity / Element snapshot (batched)
-    attributes.py       HP + level reads
-    damage.py           DamageDisplay event reader (per-skill DPS source)
+    attributes.py       HP + level reads (display/boss-bar only for DPS)
+    damage_events.py    DamageEvent dataclass (shared input to the engine)
+    damage.py           DamageDisplay floaty-number event reader
+    group_reader.py     st.Group party-roster probe/reader (real names, leader,
+                        solo - any distance)
+    dps_source.py       DamageSourceManager: arbitrates readers, feeds the ring
+    dps_tracker.py      DPS engine: consumes real events -> CombatSession (no HP-diff)
     model.py            LiveModel: one snapshot/tick, shared by every view
   data/                 static, process-free, CDB-backed (loot, units, rarity, names, icons)
-  combat/dps.py         the DPS engine (pure logic, unit-tested)
   geo/                  chest positions + POI model for the minimap
   ui/                   PySide6 only — theme, shared widgets, overlays, control panel
 tests/                  headless logic tests (pytest)

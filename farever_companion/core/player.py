@@ -11,6 +11,7 @@ module keeps a heap-scan fallback for unexpected build layouts:
 """
 from __future__ import annotations
 
+import math
 import os
 import struct
 
@@ -19,7 +20,9 @@ from .hl import Hl, is_ptr, _HOBJ, utf16z as _utf16z
 from .proc import Proc, ProcError
 from ..constants import (
     TO_NAME, OFF_HEADING, OFF_POS as OFF_XYZ,
-    OFF_HERO_OWNERPLAYER, OFF_HERO_ISCOMBAT, OFF_PLAYER_ISME
+    OFF_HERO_OWNERPLAYER, OFF_HERO_ISCOMBAT,
+    OFF_HERO_COMBAT_START, OFF_HERO_COMBAT_END, OFF_HERO_COMBAT_ID,
+    OFF_PLAYER_ISME
 )
 from .scene import OFF_GAMELAYER, OFF_UNITS_ARR
 
@@ -230,12 +233,60 @@ class PlayerLocator:
         return struct.unpack("<d", raw)[0]
 
     def in_combat(self) -> bool | None:
-        if not self.address or OFF_HERO_ISCOMBAT is None:
+        st = self.combat_state()
+        if st is not None and st.get("in_combat") is not None:
+            return bool(st["in_combat"])
+        return None
+
+    def combat_state(self) -> dict | None:
+        """Game-authoritative combat snapshot for the local hero.
+
+        Returns a dict with ``in_combat`` (bool), ``combat_id`` (int),
+        ``combat_start`` / ``combat_end`` (float engine seconds, 0.0 when
+        the game reports no fight), or None when there is no located
+        in-world hero. Field offsets resolve by NAME via reflection first
+        (Hl.field_offset survives the layout drift documented in
+        constants.py); the fixed constants are only a fallback for names
+        the runtime can't resolve. Consumed by the DPS tracker as an
+        AUXILIARY encounter signal - never the primary fight boundary.
+        """
+        hero = self.live_address()
+        if not hero:
             return None
         try:
-            return self.hl.i32(self.address + OFF_HERO_ISCOMBAT) != 0
+            hero_type = self.hl.u64(hero)
         except ProcError:
             return None
+
+        def _off(name: str, fallback: int | None) -> int | None:
+            try:
+                o = self.hl.field_offset(hero_type, name)
+                if o is not None:
+                    return o
+            except ProcError:
+                pass
+            return fallback
+
+        off_in = _off("isInCombat", OFF_HERO_ISCOMBAT)
+        off_id = _off("combatId", OFF_HERO_COMBAT_ID)
+        off_start = _off("combatStartTime", OFF_HERO_COMBAT_START)
+        off_end = _off("combatEndTime", OFF_HERO_COMBAT_END)
+
+        st = {"in_combat": None, "combat_id": None,
+              "combat_start": 0.0, "combat_end": 0.0}
+        try:
+            if off_in is not None:
+                st["in_combat"] = bool(self.hl.u8(hero + off_in))
+            if off_id is not None:
+                st["combat_id"] = self.hl.i32(hero + off_id)
+            for key, off in (("combat_start", off_start),
+                             ("combat_end", off_end)):
+                if off is not None:
+                    v = self.hl.f64(hero + off)
+                    st[key] = v if (math.isfinite(v) and 0.0 <= v < 1e12) else 0.0
+        except ProcError:
+            pass
+        return st
 
     def player_profile(self) -> str | None:
         """Find the unique name_hash key of the current character using reflection."""
@@ -323,6 +374,20 @@ class PlayerLocator:
                                 return c
         except Exception:
             pass
+
+        # Fallback to entity unit_id and class name (exact match to Entity HUD)
+        try:
+            from ..constants import OFF_UNITID
+            from ..data.units import resolve_hero_class
+            cls_name = self.hl.type_name(hero_type) if hero_type else None
+            uid_ptr = self.hl.ptr(hero + OFF_UNITID)
+            uid_val = self.hl.hl_string(uid_ptr) if uid_ptr else None
+            resolved = resolve_hero_class(cls_name, uid_val)
+            if resolved:
+                return resolved
+        except Exception:
+            pass
+
         return None
 
     def player_class(self) -> str | None:

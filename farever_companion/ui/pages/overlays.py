@@ -28,17 +28,15 @@ class OverlaysPageMixin:
             ("map", "map", "Minimap Radar",
              "Real-time top-down POI radar of chests, foes, and gatherables.",
              self.s.minimap_bare, getattr(self.s, "minimap_transparent", False), True, True),
-            ("dps", "swords", "DPS Meter",
-             "Live damage meter, survivability metrics and party breakdowns.",
-             self.s.dps_bare, False, True, False),
             ("speedrun", "timer", "Speedrun",
              "Run timer — start by hotkey, auto-stops on boss kill.",
              self.s.speedrun_bare, getattr(self.s, "speedrun_transparent", False), True, True),
-            # experimental; release builds hide it (FAREVER_EXPERIMENTAL exposes it)
-            *([("skills", "layers", "Skill Breakdown",
-                "Per-skill damage table — icons, real names, crit%.",
-                self.s.skills_bare, False, True, False)]
-              if experimental_enabled() else []),
+            ("dps", "activity", "Top DPS Meter",
+             "Real-time ranked combat damage meters, group DPS, and target tracker.",
+             getattr(self.s, "dps_bare", False), getattr(self.s, "dps_transparent", False), True, True),
+            ("combat", "activity", "Combat State",
+             "Live game combat fields — isInCombat, combatId, engine fight times (debug).",
+             False, False, False, False),
             ("compass", "crosshair", "Compass Needle",
              "Accent ring on minimap + 3D pointer overlay.",
              False, False, False, False),
@@ -67,7 +65,7 @@ class OverlaysPageMixin:
                     card.bareToggled.connect(lambda on, k=key: self._set_bare(k, on))
                 if has_trans:
                     card.transparentToggled.connect(lambda on, k=key: self._set_transparent(k, on))
-                init_checked = bool(self.overlay_mgr.overlays.get(key) is not None) if (self.model and self.model.player_addr) else bool(getattr(self.s, f"open_overlay_{key}", False))
+                init_checked = bool(self.overlay_mgr.overlays.get(key) is not None) or bool(getattr(self.s, f"open_overlay_{key}", False))
                 card.set_checked_silent(init_checked)
             
             self._register_card(key, card)
@@ -259,34 +257,16 @@ class OverlaysPageMixin:
                 t.setChecked(on)
                 t.blockSignals(False)
 
-    def _set_dps_scale(self, v):
-        sc = v / 100.0
-        self._set("dps_scale", sc)
-        for key in ("dps", "skills"):
-            ov = self.overlays.get(key)
-            if ov is not None and hasattr(ov, "apply_scale"):
-                ov.apply_scale(sc)
-
-    def _set_dps_mode(self, label):
-        mode = {"Small": "small", "Medium": "medium", "Full": "default"}.get(label, "default")
-        self._set("dps_mode", mode)
-        ov = self.overlays.get("dps")
-        if ov is not None and hasattr(ov, "apply_dps_mode"):
-            ov.apply_dps_mode(mode)
-
-    def _set_dps_columns(self):
-        from .skill_table import COLUMN_ORDER
-        keys = [k for k in COLUMN_ORDER
-                if self._dps_col_toggles[k].isChecked()]
-        self._set("dps_columns", keys)
-        ov = self.overlays.get("skills")
-        if ov is not None and hasattr(ov, "set_columns"):
-            ov.set_columns(keys)
-
     def _set_overlay_cards_enabled(self, on: bool):
+        self.overlay_mgr.set_cards_enabled(on)
         if on:
-            for key in ("entity", "dps", "skills", "map", "speedrun", "dungeon"):
+            for key in ("entity", "map", "speedrun", "dps"):
                 setting_name = f"open_overlay_{key}"
                 if getattr(self.s, setting_name, False):
                     if self.overlay_mgr.overlays.get(key) is None:
                         self._request_overlay(key, True)
+            # Dungeon HUD is strictly instance-only: never open in overworld
+            if getattr(self.s, "open_overlay_dungeon", False):
+                if self.model and self.model.is_in_dungeon_or_rift():
+                    if self.overlay_mgr.overlays.get("dungeon") is None:
+                        self._request_overlay("dungeon", True)

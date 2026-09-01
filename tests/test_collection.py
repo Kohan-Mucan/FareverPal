@@ -186,3 +186,118 @@ def test_matches_filters():
     assert col.matches(row, state="missing", owned=set())
     assert not col.matches(row, state="collected", owned=set())
     assert col.matches(row, state="collected", owned={row["id"]})
+
+
+# --- collection.json loss self-healing ------------------------------------
+# collection.json is the ONLY live copy of hidden-companion state, and every
+# Settings.save() rewrites it from in-memory lists. If the file is missing or
+# corrupt at load, an app must never start empty (the load-empty -> save-empty
+# loop that made losses recur) — it self-heals from the newest master backup.
+
+
+def _seed_backup_with_collection(tmp_path, items=("Pet_A", "Pet_B", "Mount_X")):
+    """Write a master_backup.json whose newest snapshot holds `items`."""
+    import json
+    pets = [u for u in items if not u.startswith("Mount_")]
+    mounts = [u for u in items if u.startswith("Mount_")]
+    snap = {
+        "timestamp": "2026-01-01T00:00:00",
+        "label": "seed",
+        "collection": {"pets": pets, "mounts": mounts, "gliders": []},
+        "settings": {},
+        "planner": {"farm": [], "craft_queue": {}},
+        "profiles": {},
+    }
+    (tmp_path / "master_backup.json").write_text(
+        json.dumps({"version": 1, "max_backups": 5, "backups": [snap]}),
+        encoding="utf-8")
+
+
+def test_load_restores_missing_collection_from_backup(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _seed_backup_with_collection(tmp_path)
+    # No collection.json on disk — the wipe/missing-file case.
+    from farever_companion.config import Settings
+    s = Settings.load()
+    assert set(s.pet_hidden_units) == {"Pet_A", "Pet_B"}
+    assert set(s.mount_hidden_units) == {"Mount_X"}
+    # Recovery is persisted immediately, so a later save() can't re-wipe.
+    import json
+    assert json.loads((tmp_path / "collection.json").read_text(encoding="utf-8"))["pets"]
+
+
+def test_load_restores_corrupt_collection_and_preserves_bak(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _seed_backup_with_collection(tmp_path)
+    (tmp_path / "collection.json").write_text("{not json!!", encoding="utf-8")
+    from farever_companion.config import Settings
+    s = Settings.load()
+    assert set(s.pet_hidden_units) == {"Pet_A", "Pet_B"}
+    # The corrupt original is preserved for manual recovery, not destroyed.
+    assert (tmp_path / "collection.json.bak").exists()
+
+
+def test_valid_empty_collection_is_not_restored(monkeypatch, tmp_path):
+    # A legitimately empty file (user unhid everything) reads fine and must
+    # NOT be treated as a loss — backup recovery would undo a real choice.
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _seed_backup_with_collection(tmp_path)
+    (tmp_path / "collection.json").write_text("{}", encoding="utf-8")
+    from farever_companion.config import Settings
+    s = Settings.load()
+    assert s.pet_hidden_units == [] and s.mount_hidden_units == []
+
+
+# --- collection.json is never rewritten from memory -----------------------
+# Settings.save() must not touch collection.json at all, and companion
+# toggles must merge against the CURRENT file — a stale/empty in-memory copy
+# can never wipe the only live copy of the data.
+
+
+def _write_collection(tmp_path, pets=(), mounts=(), gliders=()):
+    import json
+    (tmp_path / "collection.json").write_text(json.dumps(
+        {"pets": list(pets), "mounts": list(mounts), "gliders": list(gliders)}),
+        encoding="utf-8")
+
+
+def test_settings_save_never_rewrites_collection(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _write_collection(tmp_path, pets=("p1", "p2"))
+    from farever_companion.config import Settings
+    s = Settings.load()
+    # Simulate a stale in-memory copy: lists empty, disk populated.
+    s.pet_hidden_units = []
+    s.mount_hidden_units = []
+    s.glider_hidden_units = []
+    s.save()                       # any settings change triggers save()
+    import json
+    on_disk = json.loads((tmp_path / "collection.json").read_text(encoding="utf-8"))
+    assert on_disk["pets"] == ["p1", "p2"]   # untouched by the settings save
+
+
+def test_toggle_merges_with_disk_not_memory(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _write_collection(tmp_path, pets=("p1", "p2"))
+    from farever_companion.config import Settings
+    s = Settings.load()
+    # stale memory again — but the toggle must build on the FILE state
+    s.pet_hidden_units = []
+    s.mount_hidden_units = []
+    s.glider_hidden_units = []
+    s.toggle_companion_hidden("p3", True)
+    import json
+    on_disk = json.loads((tmp_path / "collection.json").read_text(encoding="utf-8"))
+    assert set(on_disk["pets"]) == {"p1", "p2", "p3"}   # p1/p2 survived
+    assert set(s.pet_hidden_units) == {"p1", "p2", "p3"}  # memory re-synced
+
+
+def test_toggle_unhides_exactly_one(monkeypatch, tmp_path):
+    monkeypatch.setenv("FAREVER_MODDATA_DIR", str(tmp_path))
+    _write_collection(tmp_path, pets=("p1", "p2", "p3"))
+    from farever_companion.config import Settings
+    s = Settings.load()
+    s.toggle_companion_hidden("p2", False)     # show p2 again
+    import json
+    on_disk = json.loads((tmp_path / "collection.json").read_text(encoding="utf-8"))
+    assert on_disk["pets"] == ["p1", "p3"]

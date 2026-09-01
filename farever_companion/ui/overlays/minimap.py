@@ -34,7 +34,6 @@ FAST_MS = 33      # position/heading repaint (cheap) -> smooth pan + rotation
 # disabled/inactive, or already done (opened/looted/completed).
 _DONE_ORB_STATES = ("disabled", "disable", "opened", "open", "looted", "completed")
 
-
 class _Canvas(QtWidgets.QWidget):
     def __init__(self, model, settings):
         super().__init__()
@@ -56,7 +55,13 @@ class _Canvas(QtWidgets.QWidget):
         self._zone_name = ""
         self.setMouseTracking(True)     # hover tooltips (e.g. soulstone costs)
 
+    def set_model(self, model) -> None:
+        self.model = model
+        self.refresh()
+
     def _read_player(self) -> bool:
+        if self.model is None:
+            return False
         xyz = self.model.player_xyz()
         if xyz is None:
             # No player data — logout, char change, or zone transition.
@@ -82,18 +87,32 @@ class _Canvas(QtWidgets.QWidget):
         self._last_player_pos = xyz
         self._px, self._py, self._pz = xyz
         self._coord_str = f"x {self._px:.0f} y {self._py:.0f} z {self._pz:.0f}"
-        self._heading = self.model.player_heading()
-        self._cam_yaw = self.model.camera_yaw()
-        self._mtx = self.model.view_matrix()
+        self._heading = self.model.player_heading() if self.model is not None else 0.0
+        self._cam_yaw = self.model.camera_yaw() if self.model is not None else 0.0
+        self._mtx = self.model.view_matrix() if self.model is not None else None
         return True
 
     def refresh_fast(self):
+        if self.model is None:
+            return
         if self._read_player():
             self.update()
 
     def _add_poi(self, pois, x, y, z, kind, label, poi_id, max_dist=0.0):
         if max_dist > 0 and math.hypot(x - self._px, y - self._py) > max_dist:
             return False
+        # Duplicate-marker guard: static databases and the live scene scan the
+        # same world spots (a static orb + its live spawn, a live checkpoint
+        # over a static respawn point, a gatherable in both lists), so a POI
+        # that already exists in its kind-family within ~2 world units is
+        # skipped. Unit/hero/companion markers are never merged — several
+        # mobs can legitimately share one position.
+        fam = render.DEDUP_FAMILIES.get(kind)
+        if fam is not None:
+            for (px, py, _pz, pk, _pl, _pid) in pois:
+                if (render.DEDUP_FAMILIES.get(pk) == fam
+                        and abs(px - x) < 2.0 and abs(py - y) < 2.0):
+                    return False
         pois.append((x, y, z, kind, label, poi_id))
         return True
 
@@ -207,15 +226,7 @@ class _Canvas(QtWidgets.QWidget):
         if getattr(s, "minimap_players", True):
             for e, d in self.model.nearest_group_members((self._px, self._py, self._pz), n=20, max_dist=max_d, use_2d=True):
                 if e.addr != self.model.player_addr:
-                    h_cls = (e.cls or "").replace("ent.hero.", "").lower() if (e.cls or "").startswith("ent.hero.") else (e.unit_id or "warrior").lower()
-                    if "warrior" in h_cls:
-                        h_cls = "warrior"
-                    elif "rogue" in h_cls:
-                        h_cls = "rogue"
-                    elif "mage" in h_cls:
-                        h_cls = "mage"
-                    elif "priest" in h_cls:
-                        h_cls = "priest"
+                    h_cls = (getattr(e, "hero_class", None) or udata.resolve_hero_class(e.cls, e.unit_id) or "warrior").lower()
                     self._add_poi(pois, e.x, e.y, e.z, f"hero_{h_cls}", e.unit_id or "?", f"hero{e.addr}")
         if getattr(s, "minimap_companions", True):
             c_dist = float(s.show_companions_debug) if isinstance(getattr(s, "show_companions_debug", False), (int, float)) else (250.0 if not getattr(s, "show_companions_debug", False) else max_d)
@@ -361,15 +372,7 @@ class _Canvas(QtWidgets.QWidget):
             elif tk == "hero" and tid and not any(p[4] == tid for p in pois):
                 for e in self.model.units():
                     if e.unit_id == tid:
-                        h_cls = (e.cls or "").replace("ent.hero.", "").lower() if (e.cls or "").startswith("ent.hero.") else (e.unit_id or "warrior").lower()
-                        if "warrior" in h_cls:
-                            h_cls = "warrior"
-                        elif "rogue" in h_cls:
-                            h_cls = "rogue"
-                        elif "mage" in h_cls:
-                            h_cls = "mage"
-                        elif "priest" in h_cls:
-                            h_cls = "priest"
+                        h_cls = (getattr(e, "hero_class", None) or udata.resolve_hero_class(e.cls, e.unit_id) or "warrior").lower()
                         self._add_poi(pois, e.x, e.y, e.z, f"hero_{h_cls}", e.unit_id or "?", f"hero{e.addr}")
             elif tk == "pos" and tid:
                 coords, _, lbl = tid.partition("|")
@@ -436,6 +439,13 @@ class _Canvas(QtWidgets.QWidget):
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
+        try:
+            self._draw(p)
+        finally:
+            if p.isActive():
+                p.end()
+
+    def _draw(self, p: QtGui.QPainter):
         p.setRenderHint(QtGui.QPainter.Antialiasing)
         w, h = self.width(), self.height()
         cx, cy = w / 2, h / 2
@@ -452,6 +462,11 @@ class _Canvas(QtWidgets.QWidget):
         p.setClipPath(clip)
         p.drawPath(clip)
 
+        if self.model is None or not hasattr(self, "_px") or self._px is None or self._px == 0.0:
+            p.setPen(QtGui.QColor(theme.DIM))
+            p.drawText(self.rect(), QtCore.Qt.AlignCenter, "Waiting for player…")
+            return
+
         scale, phi = self._scale(), self._phi()
         if self.s.minimap_texture:
             render.draw_map(self, p, cx + self._pan_x, cy + self._pan_y, scale, phi)
@@ -463,7 +478,7 @@ class _Canvas(QtWidgets.QWidget):
         else:
             p.drawEllipse(QtCore.QPointF(cx, cy), rad_x, rad_y)
 
-        track_pos, profile = render.track_pos(self), self.model.player_profile()
+        track_pos, profile = render.track_pos(self), (self.model.player_profile() if self.model is not None else "")
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
             orig_kind, hero_class = kind, None
             if kind.startswith("hero_"): hero_class = kind.split("_", 1)[1]; kind = "hero"
@@ -598,8 +613,6 @@ class _Canvas(QtWidgets.QWidget):
                     zw = fm.horizontalAdvance(self._zone_name)
                     draw_t(self._zone_name, w - zw - 8, ty, QtGui.QColor(theme.MUTED))
             p.restore()
-
-        p.end()
 
     def mousePressEvent(self, e):
         if e.button() == QtCore.Qt.RightButton:
@@ -802,6 +815,11 @@ class MinimapOverlay(OverlayWindow):
 
     def pan_to(self, wx: float, wy: float):
         self.canvas.pan_to(wx, wy)
+
+    def set_model(self, model) -> None:
+        self.model = model
+        if hasattr(self, "canvas"):
+            self.canvas.set_model(model)
 
     def closeEvent(self, e):
         self._fast.stop()

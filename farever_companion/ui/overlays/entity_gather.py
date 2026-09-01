@@ -29,7 +29,14 @@ class EntityGatherMixin:
             return
 
         profile = self.model.player_profile()
-        done_list = self.s.get_poi_done(profile)
+        # Base on the DISK file, never on possibly-stale/empty memory: a
+        # second instance (or a fresh Settings) that never loaded the profile
+        # must not sync-wipe a populated file to whatever the live scan sees
+        # (the partial-memory wipe). Refuse entirely when the disk holds data
+        # but our base is empty.
+        done_list = self.s.get_poi_done_authoritative(profile)
+        if not self.s.sync_done_list_safe(profile, done_list):
+            return
 
         # Clear all lists while inside a dungeon/rift — overworld enemies, chests
         # and orbs are irrelevant there and stale data would be confusing.

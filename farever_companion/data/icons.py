@@ -579,6 +579,20 @@ def _get_master_symbol(name: str) -> tuple[str, str] | None:
         return None
 
 
+def _loose_candidates(name: str) -> tuple[str, ...]:
+    """Filename stems to try for a loose icon, in order: the name as given,
+    lowercased, plus dash/underscore-swapped variants (mirrors the master
+    sprite sheet, which registers both `target-dummy` and `target_dummy`)."""
+    out: list[str] = []
+    for cand in (name, name.lower(), name.replace("_", "-"),
+                 name.replace("-", "_"),
+                 name.replace("_", "-").lower(),
+                 name.replace("-", "_").lower()):
+        if cand and cand not in out:
+            out.append(cand)
+    return tuple(out)
+
+
 @lru_cache(maxsize=64)
 def asset_icon(sheet_name: str, size: int):
     """A bundled SVG or PNG map icon from assets/map_icons/<name>.(svg|png), scaled.
@@ -626,7 +640,7 @@ def asset_icon(sheet_name: str, size: int):
     # 3. Fallback to loose files on disk (svg, webp, png) in the single fallback folder
     fb_dir = paths.fallback_icons_dir()
     if fb_dir.exists():
-        for cand_name in (sheet_name, sheet_name.lower()):
+        for cand_name in _loose_candidates(sheet_name):
             # 3a. Check SVG
             svg_file = fb_dir / f"{cand_name}.svg"
             if svg_file.exists():
@@ -712,7 +726,7 @@ def ui_icon(name: str, color: str, size: int):
         for cand_dir in (paths.svgs_dir(),):
             if not cand_dir.exists():
                 continue
-            for cand_name in (name, name.lower()):
+            for cand_name in _loose_candidates(name):
                 cand = cand_dir / f"{cand_name}.svg"
                 if cand.exists():
                     try:
@@ -766,7 +780,7 @@ def brand_icon(name: str, size: int):
         for cand_dir in (paths.svgs_dir(),):
             if not cand_dir.exists():
                 continue
-            for cand_name in (name, name.lower()):
+            for cand_name in _loose_candidates(name):
                 cand = cand_dir / f"{cand_name}.svg"
                 if cand.exists():
                     try:
@@ -794,7 +808,7 @@ def brand_icon(name: str, size: int):
     cand_dir = paths.fallback_icons_dir()
     if cand_dir.exists():
         for ext in ("png", "webp"):
-            for cand_name in (name, name.lower()):
+            for cand_name in _loose_candidates(name):
                 cand = cand_dir / f"{cand_name}.{ext}"
                 if cand.exists():
                     pm = QtGui.QPixmap(str(cand))

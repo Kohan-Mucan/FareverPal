@@ -34,11 +34,67 @@ def _named_bosses() -> frozenset[str]:
     return frozenset(u for u in _units_by_id() if u in table_ids)
 
 
-def is_boss(unit_id: str | None) -> bool:
-    """A named boss (has a signature loot table), or flagged as one once the
-    boss flag bit is calibrated."""
+# Training dummies are NOT bosses (no loot table, no boss flag) but the DPS
+# tracker treats them boss-like so dummy parses get their own boss-session
+# group instead of polluting trash. Accepts raw unit ids (PunchingBag,
+# PunchingBagArmor/MagicRes/Invulnerable/Shield, TrainingDummy, TestDummy)
+# as well as display names ("Test Dummy", "Training Dummy", "Punching Bag",
+# plus the variant short names "Armor"/"MagicRes"/"Invu"/"Shielded", resolved
+# back to their unit through the enemies manifest).
+# Deliberately NOT part of is_boss(): dummies must stay out of the Bosses
+# codex tab and boss-marked drop rows.
+@lru_cache(maxsize=1)
+def _display_name_to_id() -> dict[str, str]:
+    """Lowercased display name -> unit id (first hit wins), from the same
+    enemies manifest the game renders."""
+    out: dict[str, str] = {}
+    for r in cdb.display_data("enemies"):
+        nm = (r.get("name") or "").strip().lower()
+        if nm and nm not in out:
+            out[nm] = r["id"]
+    return out
+
+
+def _is_dummy_compact(compact: str) -> bool:
+    return (compact.startswith("punchingbag")
+            or compact in ("testdummy", "trainingdummy"))
+
+
+def is_training_dummy(unit_id: str | None) -> bool:
+    """True for the training-dummy family, by unit id or display name."""
     if not unit_id:
         return False
+    s = (str(unit_id).replace("👑", "").replace("🎯", "")
+         .strip().lower())
+    if not s:
+        return False
+    compact = s.replace("_", "").replace("-", "").replace(" ", "")
+    if _is_dummy_compact(compact):
+        return True
+    # Variant short display names ("Invu", "Armor", ...) carry no family
+    # marker themselves — resolve back to the unit id first.
+    uid = _display_name_to_id().get(s)
+    if uid:
+        c2 = uid.lower().replace("_", "").replace("-", "").replace(" ", "")
+        return _is_dummy_compact(c2)
+    return False
+
+
+def is_boss(unit_id: str | None) -> bool:
+    """A named boss (has a signature loot table), Rift boss, or flagged as one
+    once the boss flag bit is calibrated."""
+    if not unit_id:
+        return False
+    # Explicit recognition for Rift bosses and true clones.
+    # _Guardian (Shaarlize's Guardian) is an add, not a boss — exclude it
+    # from the prefix sweep.
+    if (unit_id == "DemonSuperElite"
+            or unit_id == "DemonSuperElite_Fairy"
+            or unit_id == "DemonSuperElite_Fairy_TrueClone"
+            or (unit_id.startswith("DemonSuperElite")
+                and "FalseClone" not in unit_id
+                and "_Guardian" not in unit_id)):
+        return True
     if unit_id in _named_bosses():
         return True
     if BOSS_FLAG_BIT is not None:
@@ -47,6 +103,33 @@ def is_boss(unit_id: str | None) -> bool:
         if isinstance(flags, int) and (flags & BOSS_FLAG_BIT):
             return True
     return False
+
+
+def resolve_hero_class(cls_name: str | None = None, unit_id: str | None = None) -> str:
+    """Canonical class resolution for heroes, matching the entity HUD.
+    Returns capitalized class name (e.g. 'Warrior', 'Rogue', 'Mage', 'Priest')."""
+    cls_s = (cls_name or "").strip()
+    if cls_s.startswith("ent.hero."):
+        leaf = cls_s[len("ent.hero."):].title()
+        if leaf:
+            return leaf
+
+    # Check unit_id and cls_name for known class keywords
+    combined = f"{cls_s} {unit_id or ''}".lower()
+    for c in ("warrior", "rogue", "mage", "priest",
+              "paladin", "hunter", "bard", "druid",
+              "fighter", "assassin", "wizard", "cleric"):
+        if c in combined:
+            if c in ("fighter",):
+                return "Warrior"
+            if c in ("assassin",):
+                return "Rogue"
+            if c in ("wizard",):
+                return "Mage"
+            if c in ("cleric",):
+                return "Priest"
+            return c.title()
+    return ""
 
 
 @lru_cache(maxsize=1)

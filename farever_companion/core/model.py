@@ -14,11 +14,12 @@ from .player import PlayerLocator
 from .announcement_reader import AnnouncementReader
 from .camera import ViewCamera
 from .chest_resolver import ChestResolver, ChestRow, is_event_orb_id
-from .damage_source import DamageSourceManager
 from .rift_tracker import RiftTracker, RiftStatus
+from .dps_source import DamageSourceManager
+from .dps_tracker import DpsTracker
+from .group_reader import GroupReader
 from . import attributes
-from ..combat.dps import DpsMeter
-from ..constants import (OFF_HERO_OWNERPLAYER, OFF_FOE_TARGET_OBJ,
+from ..constants import (OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_FOE_TARGET_OBJ,
                          OFF_FOE_TARGET_HERO, OFF_FOE_TARGET_ALT,
                          OFF_FOE_TARGET_DIRECT, OFF_FOE_RECENT_HATE,
                          OFF_FOE_HATE_LIST, AGGRO_SWEEP_BYTES,
@@ -38,45 +39,28 @@ class LiveModel:
         self.scene = Scene(proc, self.hl)
         self.locator = PlayerLocator(proc, self.hl)
         self.announcements = AnnouncementReader(proc, self.hl, self.locator)
+        # Party roster reader (replicated st.Group net object): authoritative
+        # member names/leader at any distance - the read side of the game's
+        # invite-to-group flow. Probe-first + scan-free via the local
+        # player's own st.Player.group slot (see core/group_reader.py).
+        self._group_reader = GroupReader(proc, self.hl)
         self.view = ViewCamera(proc, self.hl, self.locator.app)
         self.chests_resolver = ChestResolver()
         self.rift_tracker = RiftTracker(self)
+        # Real combat-event source (DamageDisplay numbers / HUD group meter).
+        # Lazy: its background thread starts on the first DPS tracker update,
+        # and shutdown() below stops it (previously referenced but never set).
+        self.damage = DamageSourceManager(proc)
+        self.dps = DpsTracker(self)
         self._units_cache: list[Entity] = []
         self._units_at = 0.0
         self.dungeon_boss: str | None = None
-        self.dps = DpsMeter()
-        self.damage = DamageSourceManager(proc)
-        self._combat_at = 0.0
-        self.player_hp_log: deque[tuple[float, float]] = deque(maxlen=240)
-        self.player_max_hp: float = 0.0
-        self.deaths: int = 0
-        self._was_alive: bool = False
         self.units_ok: bool = True   # False while the units read fails (zone swap)
         self._last_profile: str | None = None
 
     # --- lifecycle -------------------------------------------------------
     def locate_player(self) -> int | None:
-        addr = self.locator.locate()
-        if addr:
-            self.damage.warmup(addr)
-        return addr
-
-    @property
-    def dps_events(self) -> DpsMeter:
-        return self.damage.dps_events
-
-    @property
-    def per_skill_enabled(self) -> bool:
-        return self.damage.per_skill_enabled
-
-    def per_skill_status(self) -> str:
-        return self.damage.status()
-
-    def per_skill_progress(self) -> tuple[str, float]:
-        return self.damage.progress()
-
-    def recalibrate_skills(self) -> None:
-        self.damage.recalibrate()
+        return self.locator.locate()
 
     def camera_yaw(self) -> float | None:
         """The gameplay camera's orbit yaw (radians). Unlike the body heading
@@ -121,7 +105,10 @@ class LiveModel:
             return None
 
     def shutdown(self) -> None:
-        self.damage.shutdown()
+        try:
+            self.damage.shutdown()
+        except Exception:
+            pass
 
     @property
     def player_addr(self) -> int | None:
@@ -135,6 +122,19 @@ class LiveModel:
 
     def player_heading(self) -> float | None:
         fn = getattr(self.locator, "read_heading", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except ProcError:
+            return None
+
+    def combat_state(self) -> dict | None:
+        """Game-authoritative Hero combat fields (isInCombat, combatId,
+        combatStartTime, combatEndTime) or None when the player isn't
+        located. Used by the DPS tracker as an auxiliary encounter signal
+        (see PlayerLocator.combat_state)."""
+        fn = getattr(self.locator, "combat_state", None)
         if fn is None:
             return None
         try:
@@ -249,21 +249,28 @@ class LiveModel:
         return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
     def player_name(self, hero_addr: int) -> str | None:
+        if not hero_addr:
+            return None
         try:
+            # 1. If hero_addr is already an st.Player, resolve its name directly
+            cls_name = self.hl.class_of(hero_addr)
+            if cls_name == "st.Player":
+                return self._player_name_at(hero_addr)
+
+            # 2. Hero -> Player pointer resolution
+            p = self._hero_player_ptr(hero_addr)
+            if p:
+                name = self._player_name_at(p)
+                if name:
+                    return name
+
             hero_type = self.hl.ptr(hero_addr)
             owner_off = self.hl.field_offset(hero_type, "ownerPlayer") if hero_type else None
             if owner_off is None:
                 owner_off = 0x10
             player_ptr = self.hl.ptr(hero_addr + owner_off)
-            if not player_ptr:
-                return None
-            player_type = self.hl.ptr(player_ptr)
-            name_off = self.hl.field_offset(player_type, "name") if player_type else None
-            if name_off is None:
-                name_off = 0xa8
-            name_strobj = self.hl.ptr(player_ptr + name_off)
-            if name_strobj:
-                return self.hl.hl_string(name_strobj)
+            if player_ptr:
+                return self._player_name_at(player_ptr)
         except Exception:
             pass
         return None
@@ -287,7 +294,7 @@ class LiveModel:
                         offs.append(off)
                 except Exception:
                     pass
-        offs += [OFF_HERO_OWNERPLAYER, OFF_OWNER]
+        offs += [OFF_HERO_OWNERPLAYER, OFF_OWNER, 0x10, 0x4C0]
         seen: set[int] = set()
         for off in offs:
             if off in seen:
@@ -301,13 +308,43 @@ class LiveModel:
                 continue
         return 0
 
+    def resolve_pet_owner(self, unit_addr: int) -> int:
+        """The hero entity (or st.Player) owning a NON-hero unit, verified
+        live. Used when a damage floaty's caster (serverSource) is a
+        pet/summon that never showed up in the units scan: read the unit's
+        owner slot the same way the scene reader does and trust it only when
+        the owner's runtime class IS a hero or st.Player. Enemies have no
+        hero owner, so their events never resolve to a player (nothing is
+        fabricated from an empty/garbage slot)."""
+        if not unit_addr:
+            return 0
+        # OFF_FOE_OWNER (0x78) is the foe/pet -> hero slot (scene.py); the
+        # generic GameObject owner and the hero ownerPlayer slot are checked
+        # as fallbacks for builds that park a summon's owner elsewhere.
+        for off in (OFF_FOE_OWNER, OFF_OWNER, OFF_HERO_OWNERPLAYER):
+            try:
+                cand = self.hl.ptr(unit_addr + off)
+            except ProcError:
+                continue
+            if not cand:
+                continue
+            try:
+                cls = self.hl.class_of(cand)
+            except ProcError:
+                continue
+            if cls == "st.Player":
+                return cand
+            if cls == "ent.Hero" or (cls and cls.startswith("ent.hero.")):
+                return cand
+        return 0
+
     def _player_name_at(self, player_ptr: int) -> str | None:
         """Character name off a verified st.Player: reflection 'name' field
-        first, then the legacy 0xa8 fallback, then OFF_PLAYER_NAME."""
+        first, then confirmed 0xc0, then legacy 0xa8, then OFF_PLAYER_NAME."""
         try:
             ptype = self.hl.ptr(player_ptr)
             refl = self.hl.field_offset(ptype, "name") if ptype else None
-            for off in (refl, 0xa8, OFF_PLAYER_NAME):
+            for off in (refl, 0xc0, 0xa8, OFF_PLAYER_NAME):
                 if not off:
                     continue
                 strobj = self.hl.ptr(player_ptr + off)
@@ -447,6 +484,24 @@ class LiveModel:
             return disp_name, hate_name
         except Exception:
             return None, None
+
+    def group_roster(self):
+        """The local player's party roster, read off the game's own
+        net-synced ``st.Group`` object (the object ``invite player to group``
+        mutates): real member names + leader + solo flag, at any distance -
+        unlike the local scene scan which only sees nearby units.
+
+        Rate-limited ~1 Hz inside the reader; None unattached / at the menu /
+        when no readable group decodes (never fabricated). Consumers duck-type
+        ``GroupSnapshot`` (members with ``name``/``hero``/``player``/``uid``/
+        ``is_me``/``is_leader``), so the DPS tracker can seed far-away
+        members' names without importing the module."""
+        try:
+            pa = self.player_addr
+            me = self._hero_player_ptr(pa) if pa else 0
+            return self._group_reader.snapshot(local_player=me, local_hero=pa)
+        except Exception:
+            return None
 
     def are_in_same_group(self, other_hero_addr: int) -> bool:
         try:
@@ -872,70 +927,35 @@ class LiveModel:
     def player_class(self) -> str | None:
         """The auto-detected player class (e.g. Rogue), parsed from equipped skills."""
         try:
-            return self.locator.player_class()
+            cls = self.locator.player_class()
+            if cls:
+                return cls
         except Exception:
+            pass
+        if self.player_addr:
+            return self.hero_class_of(self.player_addr)
+        return None
+
+    def hero_class_of(self, hero_addr: int | None) -> str | None:
+        """Playable class of ANY hero object, read from its equipped skill
+        slots or scene entity (same authoritative source as the HUD)."""
+        if not hero_addr:
             return None
-
-    # --- combat ----------------------------------------------------------
-    def sample_combat(self, radius: float = 30.0) -> DpsMeter:
-        now = time.monotonic()
-        if now - self._combat_at < 0.1:
-            return self.dps
-        self._combat_at = now
-
-        xyz = self.player_xyz()
-        snap = []
-        for e in self.units():
-            if not e.is_enemy:
-                continue
-            boss = bool(e.unit_id and udata.is_boss(e.unit_id))
-            if radius and xyz and not boss and e.dist(*xyz) > radius:
-                continue    # bosses are tracked regardless of radius
-            snap.append((e.addr, e.unit_id or "?", attributes.health(self.hl, e.addr)))
-        self.dps.update(snap)
-        self._sample_player_hp(now)
-
-        self.damage.sample(self.player_addr, self.dps.in_combat)
-        return self.dps
-
-    # --- survivability ---------------------------------------------------
-    def _sample_player_hp(self, now: float) -> None:
-        pa = self.player_addr
-        if not pa:
-            return
         try:
-            hp = attributes.health(self.hl, pa)
-        except ProcError:
-            return
-        if hp is None:
-            return
-        self.player_max_hp = max(self.player_max_hp, hp)
-        if self.player_hp_log:
-            prev = self.player_hp_log[-1][1]
-            drop = prev - hp
-            # guard against respawn/heal so a rebaseline isn't counted as damage
-            if 0 < drop < (self.player_max_hp or drop) * 1.5:
-                self.dps.add_taken(drop, now)
-        self.player_hp_log.append((now, hp))
-        if self._was_alive and hp <= 0:
-            self.deaths += 1
-        self._was_alive = hp > 0
-
-    def player_hp_series(self) -> list[float]:
-        return [hp for _t, hp in self.player_hp_log]
-
-    def player_hp_frac(self) -> float | None:
-        if not self.player_hp_log or self.player_max_hp <= 0:
-            return None
-        return max(0.0, min(1.0, self.player_hp_log[-1][1] / self.player_max_hp))
-
-    def reset_combat(self) -> None:
-        self.dps.reset()
-        self.damage.reset()
-        self.player_hp_log.clear()
-        self.player_max_hp = 0.0
-        self.deaths = 0
-        self._was_alive = False
+            cls = self.locator.detect_class(hero_addr)
+            if cls:
+                return cls
+        except Exception:
+            pass
+        # Fallback to scene entity (same as Entity HUD)
+        try:
+            from ..data.units import resolve_hero_class
+            for u in self.units() or []:
+                if getattr(u, "addr", 0) == hero_addr:
+                    return getattr(u, "hero_class", None) or resolve_hero_class(getattr(u, "cls", None), getattr(u, "unit_id", None)) or None
+        except Exception:
+            pass
+        return None
 
     def is_game_menu_open(self, include_escape: bool = True) -> bool:
         if self.player_addr is None:

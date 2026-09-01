@@ -258,6 +258,30 @@ def _weapon_skill_ids(item_id: str) -> list[str]:
 
 
 @lru_cache(maxsize=None)
+def weapons_for_skill(skill_id: str) -> tuple[dict, ...]:
+    """The weapons whose skill list contains `skill_id`, as
+    {"id", "name", "type"} rows (catalog order, deduped by id). This is
+    the reverse of ``weapon_skills``: given a skill the DPS meter tracked,
+    which weapons actually grant it. Empty for pure-cast skills (Sunlight,
+    boss AoE) that no weapon carries — callers skip the "from weapon" line.
+    """
+    q = (skill_id or "").strip().lower()
+    if not q:
+        return ()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for it in items():
+        if q in {s.lower() for s in _weapon_skill_ids(it["id"])}:
+            if it["id"] in seen:
+                continue
+            seen.add(it["id"])
+            out.append({"id": it["id"],
+                        "name": it.get("name") or it["id"],
+                        "type": it.get("type") or ""})
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
 def _skill_forms(item_id: str) -> tuple[str, ...]:
     out: list[str] = []
     for s in weapon_skills(item_id):

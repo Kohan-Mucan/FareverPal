@@ -156,6 +156,15 @@ class OverlayWindow(QtWidgets.QWidget):
         self._apply_style()        # tint to the saved accent (no-op if default)
         self._restore_geometry()
 
+    def set_model(self, model) -> None:
+        self.model = model
+        if hasattr(self, "canvas") and hasattr(self.canvas, "set_model"):
+            self.canvas.set_model(model)
+        elif hasattr(self, "canvas") and hasattr(self.canvas, "model"):
+            self.canvas.model = model
+            if hasattr(self.canvas, "refresh"):
+                self.canvas.refresh()
+
     def toggle_minimize(self) -> None:
         self.set_minimized(not getattr(self, "_is_minimized", False))
 
@@ -372,10 +381,11 @@ class OverlayWindow(QtWidgets.QWidget):
             self.move(40, 40)
         elif self._geo_key == "speedrun":
             self.move(370, 40)
-        elif self._geo_key == "dps":
-            self.move(40, 490)
-        else:
-            self.move(60, 60)
+    def keyPressEvent(self, e):
+        if e.key() == QtCore.Qt.Key_Escape:
+            e.ignore()
+            return
+        super().keyPressEvent(e)
 
     def closeEvent(self, e):
         self.persist_geometry()

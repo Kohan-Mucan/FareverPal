@@ -86,6 +86,12 @@ class Entity:
             return "companion" if self.is_player_owned else "enemy"
         return self.cls or "?"
 
+    @property
+    def hero_class(self) -> str:
+        """Canonical hero class (e.g. 'Warrior', 'Priest'), matching Entity HUD."""
+        from ..data.units import resolve_hero_class
+        return resolve_hero_class(self.cls, self.unit_id)
+
     def dist(self, x: float, y: float, z: float) -> float:
         return math.dist((self.x, self.y, self.z), (x, y, z))
 
@@ -216,7 +222,7 @@ class FoodStation:
 
 
 class Scene:
-    CONFIG_RESCAN_TTL = 1.0    # max once/sec to find the config when uncached
+    CONFIG_RESCAN_TTL = 8.0    # throttle fallback scans to at most once every 8s
 
     def __init__(self, proc: Proc, hl: Hl):
         self.proc = proc
@@ -482,15 +488,17 @@ class Scene:
         if gl is None:
             return False
             
-        # 1. Primary: Activity class check (fastest)
+        # 1. Primary: Activity class check (fastest, direct pointer)
         act = self.hl.ptr(gl + OFF_MAIN_ACTIVITY)
         if act and self.hl.is_a(act, "st.activity.Dungeon"):
             return True
             
-        # 2. Robust Fallback: Map ID check via Config (covers drift in Activity offsets)
-        mid = self.map_id(pbase)
-        if mid and ("POI_" in mid or "Dungeon_" in mid):
-            return True
+        # 2. Fast Fallback: Only check map ID if a config offset was already discovered
+        # (prevents heavy 16KB memory scans while wandering the overworld)
+        if self._cfg_off is not None:
+            mid = self.map_id(pbase)
+            if mid and ("POI_" in mid or "Dungeon_" in mid):
+                return True
             
         return False
 
@@ -499,13 +507,25 @@ class Scene:
         gl = self.gamelayer(pbase)
         if gl is None:
             return False
-        # Try known offset for isRift boolean
+        # 1. Try dynamic reflection for st.GameLayer.isRift
+        tp = self.hl.ptr(gl)
+        if tp:
+            off = self.hl.field_offset(tp, "isRift")
+            if off:
+                raw = self.proc.try_read(gl + off, 1)
+                if raw == b"\x01":
+                    return True
+        # 2. Check strict 1-byte value at OFF_RIFT_BOOL (must be specifically 0x01)
         raw = self.proc.try_read(gl + OFF_RIFT_BOOL, 1)
-        if raw and struct.unpack("<?", raw)[0]:
+        if raw == b"\x01":
             return True
-        # Fallback: check activity name
-        aid = self.activity_id(pbase)
-        return aid is not None and "Rift" in aid
+
+        # 3. Fallback: only check cached activity / map_id if config was already mapped
+        if self._cfg_off is not None:
+            aid = self.activity_id(pbase)
+            if aid and "Rift" in aid:
+                return True
+        return False
 
     def _clean_id(self, raw_id: str | None) -> str | None:
         """Handle path-like IDs and Clone suffixes returned by some engine versions."""

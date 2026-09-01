@@ -7,8 +7,9 @@ shows:
 
 - **Entity / loot overlay** — nearest enemies & chests with the real game icons,
   distance, and the closest source's full predicted drop table by rarity.
-- **DPS meter** — live DPS, sparkline, per-target (HP-diff) or per-skill/crit
-  (via the game's own `DamageDisplay` numbers) breakdown. Self DPS only.
+- **DPS meter** — live DPS, group rankings, per-skill/crit breakdown from real
+  per-hit events (the game's own `DamageDisplay` numbers, with the server-synced
+  HUD group meter auto-selected when the client provides it).
 - **Minimap** — top-down POI radar (chests, gatherables, enemies, obelisks),
   zoom, right-click to mark collectibles done.
 - **Dungeon Secret Orbs** — Automatic detection of InstanceOrbs and activity orbs
@@ -46,8 +47,12 @@ freeze, or alter the game.
 - **Loot is predicted entirely offline.** Drop tables come from the game's own data
   files (CastleDB); the tool never reads or influences a live roll — drops are
   server-authoritative, which a client cannot change.
-- **DPS** comes from watching enemy health fall over time, plus the game's own
-  on-screen damage numbers for the per-skill breakdown. Self only.
+- **DPS** comes from the game's own per-hit damage objects: the floating
+  `ui.comp.DamageDisplay` numbers carry amount, skill, crit/kill and the
+  authoritative caster; the client's server-synced HUD group meter is probed
+  and takes over when live (whole group, not distance-bounded). No HP polling
+  is used to make damage numbers - health is only read for the boss bar and
+  encounter state, and HP-diff is never used to fabricate a total.
 
 The tool *reads* derived, public-facing information for a fan wiki and personal
 use.
@@ -118,9 +123,11 @@ commit. The resulting exe (~105 MB, self-contained) is published as a GitHub
 ## Status
 
 The core overlays (entity/loot, DPS, minimap) and the read-only player locate are
-**live-validated**. Per-skill DPS stays behind an experimental flag (incomplete
-coverage). Some newer pieces (e.g. speedrun difficulty auto-detect) are still
-being refined.
+**live-validated**. DPS totals are fed by real combat events (DamageDisplay
+reader, auto-probing the HUD group meter); the Top DPS overlay and Combat &
+DPS Analysis page show a status line for the active source and stay empty -
+never HP-derived - until real events flow. Some newer pieces (e.g. speedrun
+difficulty auto-detect) are still being refined.
 
 ## Credits & third-party work
 

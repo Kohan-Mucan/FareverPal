@@ -8,10 +8,50 @@ the QSS object names in theme.py.
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid as _is_valid
 
 from . import theme
 from .widgets import ColorButton, GlyphButton
 from ..data import icons
+
+
+class ElideLabel(QtWidgets.QLabel):
+    """QLabel that elides its text to "…" when narrower than the text,
+    instead of stretching the layout. Long skill/player names otherwise make
+    rows reflow whenever text changes (e.g. damage totals climbing each tick).
+    The full text stays in the tooltip."""
+
+    def __init__(self, text: str = "", max_width: int = 300, parent=None):
+        super().__init__("", parent)
+        self._full = text or ""
+        self._busy = False
+        self.setMaximumWidth(max_width)
+        self.setToolTip(self._full)
+        self._apply(force=True)
+
+    def set_full(self, text: str):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._apply()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply()
+
+    def _apply(self, force: bool = False):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            avail = self.width() if not force else self.maximumWidth()
+            if avail <= 0:
+                return
+            shown = self.fontMetrics().elidedText(
+                self._full or "", QtCore.Qt.ElideRight, avail)
+            if super().text() != shown:
+                super().setText(shown)
+        finally:
+            self._busy = False
 
 
 def _lerp(a: QtGui.QColor, b: QtGui.QColor, t: float) -> QtGui.QColor:
@@ -133,11 +173,16 @@ class ToggleSwitch(QtWidgets.QAbstractButton):
         self._anim.start()
 
     def set_checked_silent(self, on: bool) -> None:
-        self.blockSignals(True)
-        self.setChecked(on)
-        self.blockSignals(False)
-        self._pos = 1.0 if on else 0.0
-        self.update()
+        try:
+            if not _is_valid(self):
+                return
+            self.blockSignals(True)
+            self.setChecked(on)
+            self.blockSignals(False)
+            self._pos = 1.0 if on else 0.0
+            self.update()
+        except (RuntimeError, Exception):
+            pass
 
     def paintEvent(self, _e):
         p = QtGui.QPainter(self)
@@ -259,7 +304,7 @@ class SegmentedControl(QtWidgets.QFrame):
         original option text, even when set_text changes the display (e.g.
         a live count appended to a tab)."""
         for opt, btn in self._btns.items():
-            if btn is b:
+            if btn == b or btn is b:
                 return opt
         return b.text()
 
@@ -756,9 +801,15 @@ class OverlayCard(QtWidgets.QFrame):
         self._toggle.setChecked(on)
 
     def set_checked_silent(self, on: bool) -> None:
-        self._toggle.set_checked_silent(on)
-        self._active = on
-        self.update()
+        try:
+            if not _is_valid(self):
+                return
+            if hasattr(self, "_toggle") and self._toggle and _is_valid(self._toggle):
+                self._toggle.set_checked_silent(on)
+            self._active = on
+            self.update()
+        except (RuntimeError, Exception):
+            pass
 
     def setBareChecked(self, on: bool) -> None:
         if self._bare_toggle:
@@ -900,7 +951,7 @@ class LabeledToggle(QtWidgets.QFrame):
 
     def __init__(self, label: str, checked: bool = False, parent=None,
                  eye_icon: bool = False, eye_checked: bool = False,
-                 eye_tooltip: str = ""):
+                 eye_tooltip: str = "", label_style: str = ""):
         super().__init__(parent)
         self.setObjectName("Cell")
         lay = QtWidgets.QHBoxLayout(self)
@@ -910,7 +961,7 @@ class LabeledToggle(QtWidgets.QFrame):
         # Wrap long labels so the row never forces the page wider than the
         # viewport (the control-panel pages live in a no-horizontal-scroll area).
         lbl.setWordWrap(True)
-        lbl.setStyleSheet(f"color:{theme.TEXT};background:transparent;")
+        lbl.setStyleSheet(f"color:{theme.TEXT};background:transparent;{label_style}")
         self._toggle = ToggleSwitch(checked)
         self._toggle.toggled.connect(self.toggled.emit)
         lay.addWidget(lbl, 1, QtCore.Qt.AlignVCenter)
@@ -929,8 +980,14 @@ class LabeledToggle(QtWidgets.QFrame):
         self._toggle.setChecked(on)
 
     def set_checked_silent(self, on: bool) -> None:
-        self._toggle.set_checked_silent(on)
-        self.setChecked(on)
+        try:
+            if not _is_valid(self):
+                return
+            if hasattr(self, "_toggle") and self._toggle and _is_valid(self._toggle):
+                self._toggle.set_checked_silent(on)
+            self.setChecked(on)
+        except (RuntimeError, Exception):
+            pass
 
     def set_eye_checked(self, on: bool) -> None:
         if self.eye_toggle is not None:
@@ -976,10 +1033,15 @@ class FilterChip(QtWidgets.QPushButton):
                 f"QPushButton:hover{{border-color:{theme.MUTED};color:{theme.TEXT};}}")
 
     def set_checked_silent(self, on: bool) -> None:
-        self.blockSignals(True)
-        self.setChecked(on)
-        self.blockSignals(False)
-        self.restyle()
+        try:
+            if not _is_valid(self):
+                return
+            self.blockSignals(True)
+            self.setChecked(on)
+            self.blockSignals(False)
+            self.restyle()
+        except (RuntimeError, Exception):
+            pass
 
 
 # --- chip toggle (matches SegmentedControl / Entity Loot Filter style) ----
@@ -1033,10 +1095,15 @@ class ChipToggle(QtWidgets.QPushButton):
             )
 
     def set_checked_silent(self, on: bool) -> None:
-        self.blockSignals(True)
-        self.setChecked(on)
-        self.blockSignals(False)
-        self.restyle()
+        try:
+            if not _is_valid(self):
+                return
+            self.blockSignals(True)
+            self.setChecked(on)
+            self.blockSignals(False)
+            self.restyle()
+        except (RuntimeError, Exception):
+            pass
 
 
 # --- segmented grid (multi-row toggle grid in a QFrame#Cell container) -----
@@ -1062,14 +1129,18 @@ class SegmentedGrid(QtWidgets.QFrame):
             b.setChecked(checked)
             if cb:
                 b.toggled.connect(cb)
-            b.toggled.connect(lambda _on, btn=b: btn.setStyleSheet(self._btn_qss()))
+            b.toggled.connect(lambda _on, btn=b: (_is_valid(btn) and btn.setStyleSheet(self._btn_qss())) if _is_valid(btn) else None)
             # Provide set_checked_silent on the button itself for easy sync & test compatibility
-            b.set_checked_silent = lambda on, btn=b: (
-                btn.blockSignals(True),
-                btn.setChecked(on),
-                btn.blockSignals(False),
-                btn.setStyleSheet(self._btn_qss()),
-            )
+            def _silent_set(on: bool, btn=b) -> None:
+                try:
+                    if _is_valid(btn):
+                        btn.blockSignals(True)
+                        btn.setChecked(on)
+                        btn.blockSignals(False)
+                        btn.setStyleSheet(self._btn_qss())
+                except (RuntimeError, Exception):
+                    pass
+            b.set_checked_silent = _silent_set
             grid.addWidget(b, i // cols, i % cols)
             self._btns[key] = b
 
@@ -1102,15 +1173,22 @@ class SegmentedGrid(QtWidgets.QFrame):
 
     def set_checked_silent(self, key: str, on: bool) -> None:
         b = self._btns.get(key)
-        if b is not None:
-            b.blockSignals(True)
-            b.setChecked(on)
-            b.blockSignals(False)
-            b.setStyleSheet(self._btn_qss())
+        if b is not None and _is_valid(b):
+            try:
+                b.blockSignals(True)
+                b.setChecked(on)
+                b.blockSignals(False)
+                b.setStyleSheet(self._btn_qss())
+            except (RuntimeError, Exception):
+                pass
 
     def restyle(self) -> None:
         for b in self._btns.values():
-            b.setStyleSheet(self._btn_qss())
+            if b is not None and _is_valid(b):
+                try:
+                    b.setStyleSheet(self._btn_qss())
+                except (RuntimeError, Exception):
+                    pass
 
 
 # --- field (label above a control) ----------------------------------------

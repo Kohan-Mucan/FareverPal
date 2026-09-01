@@ -53,6 +53,13 @@ def config_dir() -> Path:
     return d
 
 
+def dps_dir() -> Path:
+    """Dedicated directory for combat & DPS history files (moddata/dps/)."""
+    d = config_dir() / "dps"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _settings_path() -> Path:
     return config_dir() / "settings.json"
 
@@ -98,11 +105,13 @@ ALL_GATHER_TYPES: list[str] = [
 _PROP_MAP: dict[str, tuple[str, str]] = {
     # Overlays
     "open_overlay_entity": ("open_overlays", "entity"),
-    "open_overlay_dps": ("open_overlays", "dps"),
-    "open_overlay_skills": ("open_overlays", "skills"),
     "open_overlay_map": ("open_overlays", "map"),
     "open_overlay_dungeon": ("open_overlays", "dungeon"),
     "open_overlay_speedrun": ("open_overlays", "speedrun"),
+    "open_overlay_dps": ("open_overlays", "dps"),
+    "open_overlay_combat": ("open_overlays", "combat"),
+    "dps_bare": ("dps_options", "bare"),
+    "dps_transparent": ("dps_options", "transparent"),
     # Sidebar Elements
     "show_rift_box": ("sidebar_elements", "rift_box"),
     "show_launch_button": ("sidebar_elements", "launch_button"),
@@ -160,13 +169,8 @@ _PROP_MAP: dict[str, tuple[str, str]] = {
     "speedrun_bare": ("speedrun_options", "bare"),
     "speedrun_transparent": ("speedrun_options", "transparent"),
     "speedrun_build_override_on": ("speedrun_options", "build_override_on"),
-    # Combat Options
-    "dps_survival": ("combat_options", "survival"),
-    "dps_skill_totals": ("combat_options", "skill_totals"),
-    "dps_per_skill": ("combat_options", "per_skill"),
-    "dps_bare": ("combat_options", "dps_bare"),
-    "skills_bare": ("combat_options", "skills_bare"),
-    "combat_click_through": ("combat_options", "click_through"),
+    # Behavior Options
+    "combat_click_through": ("app_options", "combat_click_through"),
     # Codex Options
     "codex_compact": ("codex_options", "compact"),
     "codex_pets_compact": ("codex_options", "pets_compact"),
@@ -238,15 +242,9 @@ class Settings:
     minimap_zoom: float = 8.0
     minimap_shape: str = "Square"
 
-    # ===================== Combat / DPS / Skills =====================
+    # ===================== Character =====================
     player_class: str = "Auto"
     level: int = 25
-    dps_scale: float = 1.0
-    dps_mode: str = "default"
-    dps_radius: int = 30
-    dps_window: float = 5.0
-    combat_options: list = field(default_factory=list)
-    dps_columns: list = field(default_factory=lambda: ["pct", "dps", "hits", "crit", "max"])
 
     # ===================== Rift =====================
     show_rift_timer: str = "Always"
@@ -264,6 +262,29 @@ class Settings:
     speedrun_scale: float = 1.0
     speedrun_build_override: str = ""
     speedrun_corunners: list = field(default_factory=list)
+
+    # ===================== DPS =====================
+    dps_options: list = field(default_factory=list)
+    dps_max_dist: float = 400.0          # 0 = zone/unlimited; 400m default for dungeon/rift
+    dps_view: str = "damage"             # "damage", "healing", "both"
+    dps_top_count: int = 8               # default top 8 DPS players
+    heals_top_count: int = 2             # default top 2 healers
+    # Solo-only meter view: while ungrouped in the open world, the DPS meter
+    # and Combat page show the local player's parse only. Party members
+    # always show when grouped, and dungeons/rifts always show everyone.
+    dps_solo_only: bool = True
+    # Located DamageDisplay / DamageResult class pointers, cached after the
+    # first successful calibration so an app restart against the same running
+    # game skips the multi-minute type scan. Each is class-name-verified on
+    # load (find_type / find_result_type) and re-scanned + re-persisted when
+    # the game relaunches and the saved address goes stale.
+    dmg_display_type: str = ""           # hex st.ui.DamageDisplay hl_type ptr
+    dmg_result_type: str = ""            # hex st.skill.DamageResult hl_type ptr
+    dps_mode: str = "injector"          # "proxy" (Option 1) | "injector" (Option 2) | "memory" (Option 3)
+    dps_proxy_dll: str = "version.dll"   # "version.dll" (default, conflict-free) | "dinput8.dll"
+    dps_hook_enabled: bool = True        # legacy mirror: True only when dps_mode == "injector"
+    dps_hp_est: bool = False             # HP-diff fallback: estimate damage from enemy HP drops when the event source is silent (off by default; real event sources are the norm)
+    farever_game_dir: str = ""           # detected or user-specified path to Farever game folder
 
     # ===================== Layers / World (Settings → Layers) =====================
     layer_links: list = field(default_factory=list)  # per-row linked layer keys
@@ -295,6 +316,11 @@ class Settings:
     pet_hidden_units: list = field(default_factory=list)
     mount_hidden_units: list = field(default_factory=list)
     glider_hidden_units: list = field(default_factory=list)
+    # Fingerprint of the last state written to settings.json (None = never
+    # written). save() compares against this and skips the disk write when
+    # nothing actually changed — overlay timers / drag events / repeated UI
+    # refreshes must not rewrite the file every time they fire.
+    _saved_sig: str | None = field(default=None, init=False, repr=False)
 
     @property
     def companion_hidden_units(self) -> list[str]:
@@ -348,6 +374,7 @@ class Settings:
     def __post_init__(self):
         # Runtime-only cache of loaded profile progress lists
         self._profile_progress: dict[str, dict] = {}
+        self._saved_sig: str | None = None
 
     @classmethod
     def load(cls) -> "Settings":
@@ -364,6 +391,7 @@ class Settings:
 
         # Load collection data from collection.json (separate from settings.json)
         coll_path = _collection_path()
+        coll_read_ok = False
         if coll_path.exists():
             try:
                 coll_data = json.loads(coll_path.read_text(encoding="utf-8"))
@@ -371,9 +399,18 @@ class Settings:
                     inst.pet_hidden_units = coll_data.get("pets", [])
                     inst.mount_hidden_units = coll_data.get("mounts", [])
                     inst.glider_hidden_units = coll_data.get("gliders", [])
+                    coll_read_ok = True
             except (OSError, json.JSONDecodeError):
                 # preserve a corrupt file instead of clobbering it on save
                 backup_corrupt(coll_path)
+        if not coll_read_ok:
+            # collection.json is MISSING or CORRUPT — never start with empty
+            # lists: the very first save() would rewrite an empty file and
+            # the wipe would stick (the load-empty -> save-empty loop that
+            # made losses recur). Self-heal from the newest master backup
+            # when it holds companion data. A valid-but-empty file (user
+            # legitimately unhid everything) reads OK and is never touched.
+            _restore_collection_from_backup(inst)
 
         # Migrate the old no-profile fallback file: hidden mobs toggled while
         # no character was attached used to live in progress_default.json.
@@ -391,60 +428,108 @@ class Settings:
                 def_path.unlink()
         except (OSError, json.JSONDecodeError):
             pass
+        # Baseline fingerprint = cleaned state as it stands right after load,
+        # so an unchanged session never rewrites settings.json on its first
+        # save() (the migration above may already have written).
+        try:
+            inst._saved_sig = json.dumps(inst._serialized_settings(),
+                                         sort_keys=True, ensure_ascii=False)
+        except Exception:
+            inst._saved_sig = None
         return inst
 
     def save_collection(self) -> None:
-        """Save collection data (pets, mounts, gliders hidden state) to collection.json."""
+        """Write the in-memory companion lists to collection.json.
+
+        Used by the backup self-heal to persist recovered state; companion
+        toggles use a disk-merged write instead of this wholesale dump.
+        """
         try:
             data = {
                 "pets": sorted(set(self.pet_hidden_units)),
                 "mounts": sorted(set(self.mount_hidden_units)),
                 "gliders": sorted(set(self.glider_hidden_units))
             }
+            # Wipe guard: an all-empty dump must never clobber a populated
+            # collection.json (the only live copy), no matter the caller.
+            if not any(data.values()):
+                existing = {}
+                cp = _collection_path()
+                if cp.exists():
+                    try:
+                        existing = json.loads(cp.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        existing = {}
+                if any(existing.get(k, []) for k in ("pets", "mounts", "gliders")):
+                    return
             atomic_write_json(_collection_path(), data, compact_lists=True)
         except OSError:
             pass
 
     def save(self) -> None:
+        """Persist settings.json ONLY when something actually changed.
+
+        The cleaned in-memory state is fingerprinted against the last written
+        state; unchanged saves (overlay timers, drag events, repeated UI
+        refreshes) skip the disk write entirely.
+
+        collection.json is deliberately NEVER written here. Companion hidden
+        state persists only through toggle_companion_hidden(), which applies
+        a disk-merged read-modify-write — so a settings save can never
+        rewrite — or wipe — the collection from an in-memory copy.
+        """
+        serialized = self._serialized_settings()
+        sig = json.dumps(serialized, sort_keys=True, ensure_ascii=False)
+        if sig == self._saved_sig:
+            return                       # nothing changed — no disk write
         try:
-            # Exclude runtime-only cached attributes starting with underscore
-            serialized = {k: v for k, v in asdict(self).items() if not k.startswith("_")}
-            # Clean up server_pings if it was ever set as a dict
-            if isinstance(self.server_pings, dict):
-                serialized["server_pings"] = [k for k, v in self.server_pings.items() if v]
-            # Keep settings.json clean by removing collection lists and per-character profile caches
-            serialized.pop("pet_hidden_units", None)
-            serialized.pop("mount_hidden_units", None)
-            serialized.pop("glider_hidden_units", None)
-            serialized.pop("companion_hidden_units", None)
-            serialized.pop("dps_best", None)
-            serialized.pop("speedrun_best", None)
-            serialized.pop("speedrun_boss_best", None)
-            serialized.pop("poi_done", None)
-            serialized.pop("dungeon_orb_done", None)
-            serialized.pop("entity_hidden_units", None)
-            if not serialized.get("speedrun_corunners"):
-                serialized.pop("speedrun_corunners", None)
-            if not serialized.get("server_custom_hosts"):
-                serialized.pop("server_custom_hosts", None)
-            if not serialized.get("geometry"):
-                serialized.pop("geometry", None)
-            # Runtime tracking state is in-memory only — never persist to disk
-            serialized.pop("track_kind", None)
-            serialized.pop("track_id", None)
-            # Remove empty strings/lists that don't need to be persisted when empty
-            for k in ("account_name", "account_code", "account_token", "account_avatar",
-                      "speedrun_build_override", "show_companions_debug"):
-                if not serialized.get(k):
-                    serialized.pop(k, None)
-            for k in ("combat_options", "disabled_pages", "layer_links", "server_pings"):
-                if not serialized.get(k):
-                    serialized.pop(k, None)
-            serialized = _group_settings_keys(serialized)
-            atomic_write_json(_settings_path(), serialized, compact_lists=True)
+            atomic_write_json(_settings_path(),
+                              _group_settings_keys(serialized),
+                              compact_lists=True)
         except OSError:
-            pass
-        self.save_collection()
+            return                       # keep the old sig so we retry later
+        self._saved_sig = sig
+
+    def _serialized_settings(self) -> dict:
+        """Current settings as a cleaned dict (drops runtime/legacy keys).
+
+        Pure: does not mutate the instance, safe to call for fingerprinting.
+        """
+        serialized = {k: v for k, v in asdict(self).items()
+                      if not k.startswith("_")}
+        # Clean up server_pings if it was ever set as a dict
+        if isinstance(self.server_pings, dict):
+            serialized["server_pings"] = [k for k, v in self.server_pings.items() if v]
+        # Keep settings.json clean by removing collection lists and per-character profile caches
+        serialized.pop("pet_hidden_units", None)
+        serialized.pop("mount_hidden_units", None)
+        serialized.pop("glider_hidden_units", None)
+        serialized.pop("companion_hidden_units", None)
+        serialized.pop("dps_best", None)
+        serialized.pop("speedrun_best", None)
+        serialized.pop("speedrun_boss_best", None)
+        serialized.pop("poi_done", None)
+        serialized.pop("dungeon_orb_done", None)
+        serialized.pop("entity_hidden_units", None)
+        if not serialized.get("speedrun_corunners"):
+            serialized.pop("speedrun_corunners", None)
+        if not serialized.get("server_custom_hosts"):
+            serialized.pop("server_custom_hosts", None)
+        if not serialized.get("geometry"):
+            serialized.pop("geometry", None)
+        # Runtime tracking state is in-memory only — never persist to disk
+        serialized.pop("track_kind", None)
+        serialized.pop("track_id", None)
+        # Remove empty strings/lists that don't need to be persisted when empty
+        for k in ("account_name", "account_code", "account_token", "account_avatar",
+                  "speedrun_build_override", "show_companions_debug",
+                  "dmg_display_type", "dmg_result_type"):
+            if not serialized.get(k):
+                serialized.pop(k, None)
+        for k in ("combat_options", "disabled_pages", "layer_links", "server_pings"):
+            if not serialized.get(k):
+                serialized.pop(k, None)
+        return serialized
 
     # --- profile data helpers -------------------------------------------
     def _ensure_profile_loaded(self, profile: str) -> None:
@@ -460,10 +545,35 @@ class Settings:
             else:
                 self._profile_progress[profile] = {}
 
+    def _fresh_profile(self, profile: str) -> dict | None:
+        """Current on-disk profile dict (FULL), or None when missing/unreadable.
+        Writers that must never clobber data from partial memory use this as
+        their base: the file is the truth, the memory cache is only a speed-up
+        (a second instance / fresh Settings / a failed load must not overwrite
+        a populated file with whatever happened to be cached)."""
+        path = config_dir() / f"progress_{profile}.json"
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except (OSError, json.JSONDecodeError):
+            pass
+        return None
+
     def save_profile_data(self, profile: str) -> None:
         try:
             path = config_dir() / f"progress_{profile}.json"
             raw = self._profile_progress.get(profile, {})
+            if not raw:
+                # A writer with NO in-memory reference (fresh/second instance
+                # or a failed load) must never clobber a populated file with a
+                # one-key/empty write: seed the base from the CURRENT file so
+                # the write lands on top of the real data.
+                fresh = self._fresh_profile(profile)
+                if fresh:
+                    raw = fresh
+                    self._profile_progress[profile] = fresh
             # Clean, deduplicate and compact progress data
             data = {}
             for k, v in raw.items():
@@ -475,14 +585,71 @@ class Settings:
                         data[k] = v
                 elif v:
                     data[k] = v
+            # Write-time loss guard: if this save would drop a done-list below
+            # 80% of the best-known state, the last good state is preserved
+            # into state_guard.json BEFORE the overwrite lands (the rolling
+            # master backups can be masked by a lossy exit snapshot - the
+            # safety file cannot). Never blocks the save itself.
+            from .master_backup import guard_profile_write
+            guard_profile_write(profile, data)
             atomic_write_json(path, data, compact_lists=True)
         except OSError:
             pass
 
     def save_profile_progress(self, profile: str, done_list: list[str]) -> None:
-        self._ensure_profile_loaded(profile)
-        self._profile_progress[profile]["poi_done"] = done_list
+        # Disk-authoritative base: the done_list may be fresh while the cache
+        # is stale - writing onto the cached dict would drag the OTHER keys
+        # (orbs / hidden) back to an older state. The file is the truth.
+        base = self._fresh_profile(profile)
+        if base is None:
+            base = dict(self._profile_progress.get(profile, {}))
+        base["poi_done"] = list(done_list)
+        self._profile_progress[profile] = base
         self.save_profile_data(profile)
+
+    def get_poi_done_authoritative(self, profile: str | None = None) -> list[str]:
+        """Disk-authoritative poi_done for the sync writers (orb/entity ticks).
+
+        Re-reads progress_<profile>.json FRESH so a second instance or a
+        fresh Settings object can never build a sync on stale/empty in-memory
+        state: the file is the truth, the memory cache is only a speed-up.
+        Refreshes the whole cached profile dict too, so a save right after
+        keeps the other done-lists (orbs / hidden) intact. Falls back to the
+        cache when the file is missing or unreadable.
+        """
+        if not profile:
+            return self.poi_done
+        path = config_dir() / f"progress_{profile}.json"
+        try:
+            if path.exists():
+                disk = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(disk, dict):
+                    self._profile_progress[profile] = disk
+                    return disk.setdefault("poi_done", [])
+        except (OSError, json.JSONDecodeError):
+            pass
+        self._ensure_profile_loaded(profile)
+        return self._profile_progress[profile].setdefault("poi_done", [])
+
+    def sync_done_list_safe(self, profile: str | None, done_list: list) -> bool:
+        """False when the about-to-be-synced done-list is EMPTY while the
+        on-disk profile file still holds done data - the partial-memory wipe
+        signature (a second instance / fresh Settings that never loaded the
+        profile must not wipe a populated file by syncing an empty base).
+        True for missing/empty files and for any non-empty write. The >20%
+        write-time guard in save_profile_data covers the partial-but-not-
+        empty variants on top of this."""
+        if not profile:
+            return True
+        path = config_dir() / f"progress_{profile}.json"
+        try:
+            if path.exists():
+                disk = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(disk, dict) and disk.get("poi_done"):
+                    return bool(done_list)
+        except (OSError, json.JSONDecodeError):
+            pass
+        return True
 
     def get_dps_best(self, profile: str | None = None) -> dict:
         if not profile:
@@ -498,8 +665,13 @@ class Settings:
             self.dps_best = dps_best
             self.save()
             return
-        self._ensure_profile_loaded(profile)
-        self._profile_progress[profile]["dps_best"] = dps_best
+        # Disk-authoritative base: a stale in-memory copy must never drag the
+        # whole profile back to an older state when this one key is written.
+        base = self._fresh_profile(profile)
+        if base is None:
+            base = dict(self._profile_progress.get(profile, {}))
+        base["dps_best"] = dps_best
+        self._profile_progress[profile] = base
         self.save_profile_data(profile)
 
     def get_speedrun_best(self, profile: str | None = None) -> dict:
@@ -516,8 +688,12 @@ class Settings:
             self.speedrun_best = speedrun_best
             self.save()
             return
-        self._ensure_profile_loaded(profile)
-        self._profile_progress[profile]["speedrun_best"] = speedrun_best
+        # Disk-authoritative base (see save_dps_best)
+        base = self._fresh_profile(profile)
+        if base is None:
+            base = dict(self._profile_progress.get(profile, {}))
+        base["speedrun_best"] = speedrun_best
+        self._profile_progress[profile] = base
         self.save_profile_data(profile)
 
     def get_speedrun_boss_best(self, profile: str | None = None) -> dict:
@@ -534,8 +710,12 @@ class Settings:
             self.speedrun_boss_best = boss_best
             self.save()
             return
-        self._ensure_profile_loaded(profile)
-        self._profile_progress[profile]["speedrun_boss_best"] = boss_best
+        # Disk-authoritative base (see save_dps_best)
+        base = self._fresh_profile(profile)
+        if base is None:
+            base = dict(self._profile_progress.get(profile, {}))
+        base["speedrun_boss_best"] = boss_best
+        self._profile_progress[profile] = base
         self.save_profile_data(profile)
 
     def get_poi_done(self, profile: str | None = None) -> list[str]:
@@ -560,34 +740,60 @@ class Settings:
         return orb_id in self.get_dungeon_orb_done(profile)
 
     def toggle_dungeon_orb_done(self, orb_id: str, profile: str | None = None) -> bool:
-        done_list = self.get_dungeon_orb_done(profile)
+        if profile:
+            # Disk-authoritative: read the CURRENT file, apply exactly this
+            # one toggle, write back - a stale/partial in-memory copy must
+            # never drag the whole profile to an older state (same pattern
+            # as toggle_companion_hidden).
+            base = self._fresh_profile(profile)
+            if base is None:
+                base = dict(self._profile_progress.get(profile, {}))
+            done_list = list(base.get("dungeon_orb_done", []) or [])
+            if orb_id in done_list:
+                done_list.remove(orb_id)
+                done = False
+            else:
+                done_list.append(orb_id)
+                done = True
+            base["dungeon_orb_done"] = done_list
+            self._profile_progress[profile] = base
+            self.save_profile_data(profile)
+            return done
+        done_list = self.dungeon_orb_done
         if orb_id in done_list:
             done_list.remove(orb_id)
             done = False
         else:
             done_list.append(orb_id)
             done = True
-        if profile:
-            self._profile_progress[profile]["dungeon_orb_done"] = done_list
-            self.save_profile_data(profile)
-        else:
-            self.save()
+        self.save()
         return done
 
     def toggle_done(self, poi_id: str, profile: str | None = None) -> bool:
-        done_list = self.get_poi_done(profile)
+        if profile:
+            # Disk-authoritative (see toggle_dungeon_orb_done)
+            base = self._fresh_profile(profile)
+            if base is None:
+                base = dict(self._profile_progress.get(profile, {}))
+            done_list = list(base.get("poi_done", []) or [])
+            if poi_id in done_list:
+                done_list.remove(poi_id)
+                done = False
+            else:
+                done_list.append(poi_id)
+                done = True
+            base["poi_done"] = done_list
+            self._profile_progress[profile] = base
+            self.save_profile_data(profile)
+            return done
+        done_list = self.poi_done
         if poi_id in done_list:
             done_list.remove(poi_id)
             done = False
         else:
             done_list.append(poi_id)
             done = True
-            
-        if profile:
-            self._profile_progress[profile]["poi_done"] = done_list
-            self.save_profile_data(profile)
-        else:
-            self.save()
+        self.save()
         return done
 
     def get_entity_hidden_units(self, profile: str | None = None) -> list[str]:
@@ -600,11 +806,14 @@ class Settings:
 
     def toggle_unit_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
         if profile:
-            hidden_list = self.get_entity_hidden_units(profile)
-            cur = set(hidden_list)
+            # Disk-authoritative (see toggle_dungeon_orb_done)
+            base = self._fresh_profile(profile)
+            if base is None:
+                base = dict(self._profile_progress.get(profile, {}))
+            cur = set(base.get("entity_hidden_units", []) or [])
             (cur.add if hidden else cur.discard)(uid)
-            new_list = sorted(cur)
-            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            base["entity_hidden_units"] = sorted(cur)
+            self._profile_progress[profile] = base
             self.save_profile_data(profile)
         else:
             cur = set(self.entity_hidden_units)
@@ -614,12 +823,15 @@ class Settings:
 
     def bulk_toggle_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
         if profile:
-            hidden_list = self.get_entity_hidden_units(profile)
-            cur = set(hidden_list)
+            # Disk-authoritative (see toggle_dungeon_orb_done)
+            base = self._fresh_profile(profile)
+            if base is None:
+                base = dict(self._profile_progress.get(profile, {}))
+            cur = set(base.get("entity_hidden_units", []) or [])
             for uid in uids:
                 (cur.add if hidden else cur.discard)(uid)
-            new_list = sorted(cur)
-            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            base["entity_hidden_units"] = sorted(cur)
+            self._profile_progress[profile] = base
             self.save_profile_data(profile)
         else:
             cur = set(self.entity_hidden_units)
@@ -630,9 +842,13 @@ class Settings:
 
     def set_all_units_hidden(self, uids: list[str], hidden: bool, profile: str | None = None) -> None:
         if profile:
-            new_list = sorted(uids) if hidden else []
-            self._ensure_profile_loaded(profile)
-            self._profile_progress[profile]["entity_hidden_units"] = new_list
+            # Disk-authoritative base so the other keys survive and the clear
+            # applies to what is CURRENTLY on disk, not a stale copy.
+            base = self._fresh_profile(profile)
+            if base is None:
+                base = dict(self._profile_progress.get(profile, {}))
+            base["entity_hidden_units"] = sorted(uids) if hidden else []
+            self._profile_progress[profile] = base
             self.save_profile_data(profile)
         else:
             self.entity_hidden_units = sorted(uids) if hidden else []
@@ -642,8 +858,76 @@ class Settings:
     def get_companion_hidden_units(self, profile: str | None = None) -> list[str]:
         return self.companion_hidden_units
 
-    def toggle_companion_hidden(self, uid: str, hidden: bool, profile: str | None = None) -> None:
-        cur = set(self.companion_hidden_units)
-        (cur.add if hidden else cur.discard)(uid)
-        self.companion_hidden_units = sorted(cur)
-        self.save_collection()
+    def toggle_companion_hidden(self, uid: str, hidden: bool,
+                                profile: str | None = None) -> None:
+        """Disk-authoritative companion hide/show toggle.
+
+        collection.json is the single source of truth and is never rewritten
+        wholesale from memory (a stale in-memory copy is how the file got
+        wiped before). This reads the CURRENT file, applies exactly this one
+        unit to its category, and writes it back; the in-memory lists are
+        synced to the written result so the UI stays consistent.
+        """
+        if not uid:
+            return
+        key = _categorize_companion(uid)
+        cur = _read_collection_disk()
+        lst = set(cur.get(key, []) or [])
+        (lst.add if hidden else lst.discard)(uid)
+        cur[key] = sorted(lst)
+        try:
+            atomic_write_json(_collection_path(), cur, compact_lists=True)
+        except OSError:
+            pass
+        self.pet_hidden_units = sorted(set(cur.get("pets", []) or []))
+        self.mount_hidden_units = sorted(set(cur.get("mounts", []) or []))
+        self.glider_hidden_units = sorted(set(cur.get("gliders", []) or []))
+
+
+def _read_collection_disk() -> dict:
+    """Current collection.json split into pets/mounts/gliders lists.
+
+    Returns empty lists on any read/parse failure — never raises. Companion
+    toggles start from this FILE state (not from memory), so a stale or empty
+    in-memory copy can never overwrite the only live copy of the data.
+    """
+    cp = _collection_path()
+    try:
+        data = json.loads(cp.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {
+                "pets": sorted(set(data.get("pets", []) or [])),
+                "mounts": sorted(set(data.get("mounts", []) or [])),
+                "gliders": sorted(set(data.get("gliders", []) or [])),
+            }
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"pets": [], "mounts": [], "gliders": []}
+
+
+def _restore_collection_from_backup(inst: "Settings") -> None:
+    """Repopulate hidden-companion lists from the newest backup snapshot.
+
+    Called only when collection.json was missing or unreadable at load time.
+    Persists the recovered lists immediately so memory and disk agree before
+    any later save() can run. Safe by construction: backups hold only data
+    this app itself wrote, and a valid empty file never reaches this path.
+    """
+    try:
+        from .master_backup import load_master_backup
+        backups = load_master_backup().get("backups", [])
+        if not backups:
+            return
+        bak = backups[0].get("collection", {})
+        pets = bak.get("pets", [])
+        mounts = bak.get("mounts", [])
+        gliders = bak.get("gliders", [])
+        if not any((pets, mounts, gliders)):
+            return
+        inst.pet_hidden_units = sorted(set(pets))
+        inst.mount_hidden_units = sorted(set(mounts))
+        inst.glider_hidden_units = sorted(set(gliders))
+        inst.save_collection()
+    except Exception:
+        pass
+
