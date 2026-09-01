@@ -15,7 +15,14 @@ import struct
 HOBJ = 11
 TO_NAME = 0x10
 TO_SUPER = 0x18
+TO_FIELDS = 0x20
+TO_RUNTIME = 0x48
 TO_GLOBALVAL = 0x38
+FIELD_STRIDE = 0x18
+RT_NFIELDS = 0x08
+RT_SIZE = 0x10
+RT_FI_CANDIDATES = (0x28, 0x20, 0x30, 0x18, 0x38)
+HL_WSIZE = 8
 
 
 class FakeProc:
@@ -163,17 +170,47 @@ class HeapBuilder:
         self.cur += n
         return a
 
-    def make_type(self, name: str, super_type: int = 0) -> int:
+    def make_type(self, name: str, super_type: int = 0,
+                  fields: dict[str, int] | None = None) -> int:
         """Create an hl_type (+ its hl_type_obj) for `name`. Returns the hl_type
-        pointer; the type_obj is recorded in `self.type_objs[name]`."""
+        pointer; the type_obj is recorded in `self.type_objs[name]`.
+
+        With `fields` (name -> byte offset) the type also gets a runtime layout
+        table (hl_runtime_obj + fields_indexes) and a fields array, so
+        ``Hl.field_offset`` resolves by name - mirroring a real, patched build.
+        Field offsets must start at HL_WSIZE (8) and strictly ascend.
+        """
         if name in self.types:
             return self.types[name]
         name_addr = self.alloc(len(name) * 2 + 2)
         self.proc.put_utf16(name_addr, name)
-        obj = self.alloc(0x40)
-        self.proc.put_i32(obj, 0)                       # nfields
+        obj = self.alloc(0x50)
+        nfields = len(fields) if fields else 0
+        self.proc.put_i32(obj, nfields)                     # nfields
         self.proc.put_u64(obj + TO_NAME, name_addr)
-        self.proc.put_u64(obj + TO_SUPER, super_type)   # super hl_type ptr (or 0)
+        self.proc.put_u64(obj + TO_SUPER, super_type)       # super hl_type ptr (or 0)
+        if fields:
+            fnames = list(fields)
+            fname_ptrs: list[int] = []
+            for f in fnames:
+                fa = self.alloc(len(f) * 2 + 2)
+                self.proc.put_utf16(fa, f)
+                fname_ptrs.append(fa)
+            farr = self.alloc(FIELD_STRIDE * nfields)
+            for i, np in enumerate(fname_ptrs):
+                self.proc.put_u64(farr + i * FIELD_STRIDE, np)
+            self.proc.put_u64(obj + TO_FIELDS, farr)
+            # runtime layout: nfields/size + fields_indexes at the first
+            # candidate slot (as the real HL runtime's lazily-computed rt)
+            rt = self.alloc(0x40)
+            self.proc.put_i32(rt + RT_NFIELDS, nfields)
+            size = max(fields.values()) + 0x10
+            self.proc.put_i32(rt + RT_SIZE, size)
+            idx = self.alloc(4 * nfields)
+            for i, f in enumerate(fnames):
+                self.proc.put_i32(idx + 4 * i, fields[f])
+            self.proc.put_u64(rt + RT_FI_CANDIDATES[0], idx)
+            self.proc.put_u64(obj + TO_RUNTIME, rt)
         tp = self.alloc(0x10)
         self.proc.put_i32(tp, HOBJ)                     # kind
         self.proc.put_u64(tp + 8, obj)
@@ -205,6 +242,12 @@ class HeapBuilder:
         for i, p in enumerate(ptrs):
             self.proc.put_u64(backing + 0x18 + 8 * i, p)
         arr = self.alloc(0x18)
+        tp = self.types.get("hl.types.ArrayObj")
+        if tp is None:
+            # real runtime arrays carry their hl_type at +0 (readers that
+            # class-verify arrays need it)
+            tp = self.make_type("hl.types.ArrayObj")
+        self.proc.put_u64(arr, tp)
         self.proc.put_i32(arr + 8, len(ptrs))           # ArrayObj length
         self.proc.put_u64(arr + 0x10, backing)
         return arr

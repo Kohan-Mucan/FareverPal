@@ -32,7 +32,8 @@ def _world_hero(hb, proc):
 
 
 def _build_anchor(*, with_hero: bool = True, with_inst: bool = True,
-                  hero_in_world: bool = True):
+                  hero_in_world: bool = True,
+                  hero_fields: dict | None = None):
     """Build the full GameApp anchor chain:
 
         GameApp type_obj --super--> App hl_type --obj--> App type_obj
@@ -49,8 +50,11 @@ def _build_anchor(*, with_hero: bool = True, with_inst: bool = True,
     gameapp_tp = hb.make_type("GameApp", super_type=app_tp)
     gameapp_obj = hb.type_objs["GameApp"]
 
-    # Other classes the field-scan resolves by name.
-    hb.make_type("ent.Hero")
+    # Other classes the field-scan resolves by name. Passing `hero_fields`
+    # gives ent.Hero a runtime layout table so Hl.field_offset resolves the
+    # combat fields by name (the reflection path PlayerLocator.combat_state
+    # prefers over the fixed constants).
+    hb.make_type("ent.Hero", fields=hero_fields)
     hb.make_type("st.Player")
     hb.make_type("st.GameLayer")
 
@@ -196,6 +200,84 @@ def test_locate_does_not_heapscan_when_anchored_but_no_hero():
     pl._candidates = lambda: (_ for _ in ()).throw(
         AssertionError("heap scan must not run while anchored"))
     assert pl.locate() is None
+
+
+# --- PlayerLocator: combat_state (game-authoritative encounter fields) ----
+def test_combat_state_reads_via_reflection_when_layout_resolvable():
+    # ent.Hero carries a runtime layout here, so combat_state must resolve
+    # the fields by NAME (survives the drift the fixed constants can't).
+    # The type only has these four fields, so its runtime table starts at
+    # HL_WSIZE (8) and ascends - the shape the real resolver accepts.
+    hero_fields = {
+        "isInCombat": 8,
+        "combatStartTime": 16,
+        "combatEndTime": 24,
+        "combatId": 32,
+    }
+    proc, hb, ref = _build_anchor(hero_fields=hero_fields)
+    hero = ref["hero"]
+    proc.put_i32(hero + 8, 1)
+    proc.put_i32(hero + 32, 42)
+    proc.put_f64(hero + 16, 100.5)
+    proc.put_f64(hero + 24, 120.25)
+
+    pl = PlayerLocator(proc, Hl(proc))
+    assert pl.locate() == hero
+    st = pl.combat_state()
+    assert st is not None
+    assert st["in_combat"] is True
+    assert st["combat_id"] == 42
+    assert abs(st["combat_start"] - 100.5) < 1e-9
+    assert abs(st["combat_end"] - 120.25) < 1e-9
+
+
+def test_combat_state_falls_back_to_fixed_offsets():
+    # ent.Hero has no runtime layout -> field_offset returns None and
+    # combat_state must fall back to the calibrated constants.
+    proc, hb, ref = _build_anchor()
+    hero = ref["hero"]
+    from farever_companion.constants import (
+        OFF_HERO_ISCOMBAT, OFF_HERO_COMBAT_START,
+        OFF_HERO_COMBAT_END, OFF_HERO_COMBAT_ID)
+    proc.put_i32(hero + OFF_HERO_ISCOMBAT, 1)
+    proc.put_i32(hero + OFF_HERO_COMBAT_ID, 7)
+    proc.put_f64(hero + OFF_HERO_COMBAT_START, 300.0)
+    proc.put_f64(hero + OFF_HERO_COMBAT_END, 0.0)
+
+    pl = PlayerLocator(proc, Hl(proc))
+    assert pl.locate() == hero
+    st = pl.combat_state()
+    assert st is not None
+    assert st["in_combat"] is True
+    assert st["combat_id"] == 7
+    assert abs(st["combat_start"] - 300.0) < 1e-9
+    assert st["combat_end"] == 0.0
+
+
+def test_combat_state_sanitizes_garbage_times():
+    # Uninitialised / bogus engine-time fields (NaN, huge, negative) must
+    # read as 0.0 rather than leaking garbage into the tracker.
+    proc, hb, ref = _build_anchor()
+    hero = ref["hero"]
+    import math as _math
+    from farever_companion.constants import (
+        OFF_HERO_COMBAT_START, OFF_HERO_COMBAT_END)
+    proc.put_f64(hero + OFF_HERO_COMBAT_START, _math.nan)
+    proc.put_f64(hero + OFF_HERO_COMBAT_END, 1e15)
+
+    pl = PlayerLocator(proc, Hl(proc))
+    assert pl.locate() == hero
+    st = pl.combat_state()
+    assert st is not None
+    assert st["combat_start"] == 0.0
+    assert st["combat_end"] == 0.0
+
+
+def test_combat_state_none_when_no_hero():
+    proc, hb, _ref = _build_anchor(with_hero=False)
+    pl = PlayerLocator(proc, Hl(proc))
+    assert pl.locate() is None
+    assert pl.combat_state() is None
 
 
 def test_preview_hero_without_gamelayer_is_not_located():

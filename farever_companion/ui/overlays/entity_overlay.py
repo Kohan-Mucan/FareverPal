@@ -161,7 +161,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         t += [("static", p[5]) for p, _ in self._static_pois]
         rift_mode = self._get_rift_mode()
 
-        rst = self.model.rift_status() if rift_mode != "Off" else None
+        rst = self.model.rift_status() if (self.model is not None and rift_mode != "Off") else None
         if rst and rst.state in ("WARNING", "ACTIVE", "CLOSING", "SCHEDULED"):
             if rift_mode == "Always" or (rift_mode == "Active" and rst.state in ("WARNING", "ACTIVE", "CLOSING")):
                 r_key = f"s{rst.poi_x:.1f},{rst.poi_y:.1f}" if rst.poi_x is not None else "rift_schedule"

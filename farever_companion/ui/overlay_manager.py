@@ -19,19 +19,19 @@ from ..geo import orb_sync
 # The game HUD overlays that share the global opacity + lock. One place so new overlays inherit both.
 # "devscanner" joins them for LOCKING (so it doesn't steal mouse clicks while
 # playing) but keeps its own always-visible rule in the visibility loop below.
-HUD_OVERLAYS = ("entity", "dps", "skills", "map", "speedrun", "dungeon",
-                "devscanner")
+HUD_OVERLAYS = ("entity", "map", "speedrun", "dungeon", "dps",
+                "combat", "devscanner")
 
 # Overlay key -> (module, class). Resolved lazily in _make() so opening the
-# app idle doesn't import six overlay modules' worth of code + PySide
+# app idle doesn't import overlay modules' worth of code + PySide
 # registrations — they only load when the user actually opens an overlay.
 _OVERLAY_SOURCES = {
     "entity": ("entity_overlay", "EntityOverlay"),
-    "dps": ("dps_overlay", "DpsOverlay"),
-    "skills": ("skill_overlay", "SkillOverlay"),
     "map": ("minimap", "MinimapOverlay"),
     "speedrun": ("speedrun_overlay", "SpeedrunOverlay"),
     "dungeon": ("dungeon_overlay", "DungeonOverlay"),
+    "dps": ("dps_overlay", "DpsOverlay"),
+    "combat": ("combat_state_overlay", "CombatStateOverlay"),
 }
 
 _OVERLAY_CLASSES: dict[str, type] = {}
@@ -136,6 +136,12 @@ class OverlayManager(QtCore.QObject):
         self.overlays: dict[str, QtWidgets.QWidget | None] = {}
         self.cards: dict[str, list] = {}
         self._detaching = False
+        self._pending_opens: set[str] = set()   # keys whose open was deferred by the player-locate gate
+        # True once the player has been located at least once this session.
+        # Overlay windows are pre-built (hidden) at app start so they open
+        # instantly; this latch keeps them from surfacing before that first
+        # locate (see the visibility loop in _combat_tick).
+        self._ever_located = False
         # the one compass-needle target, shared by every overlay
         self.tracker = TrackController(settings, self)
         # second needle for the Dungeon HUD: volatile target (never persisted),
@@ -165,6 +171,8 @@ class OverlayManager(QtCore.QObject):
             self._combat_timer.start(rate)
 
     def set_model(self, model) -> None:
+        if model is not None and getattr(model, "player_addr", None) is not None:
+            self._ever_located = True
         # Check for character change to clear compass tracker, selection, and hidden mob undo buffer
         if model:
             prof = model.player_profile()
@@ -195,6 +203,12 @@ class OverlayManager(QtCore.QObject):
         self.model = model
         self.tracker.set_model(model)
         self.dungeon_tracker.set_model(model)
+        for ov in self.overlays.values():
+            if ov is not None:
+                if hasattr(ov, "set_model"):
+                    ov.set_model(model)
+                elif hasattr(ov, "model"):
+                    ov.model = model
 
         if model is None:
             self.tracker.clear()
@@ -224,7 +238,13 @@ class OverlayManager(QtCore.QObject):
             return
         try:
             profile = m.player_profile()
-            done_list = self.s.get_poi_done(profile)
+            # Base on the DISK file, never on possibly-stale/empty memory: a
+            # second instance (or a fresh Settings) that never loaded the
+            # profile must not sync-wipe a populated file to whatever the
+            # live scan currently sees (the 17:33 partial-memory wipe).
+            done_list = self.s.get_poi_done_authoritative(profile)
+            if not self.s.sync_done_list_safe(profile, done_list):
+                return   # disk has data but our base is empty - refuse
             # resolve each live element to the nearest STATIC placement —
             # done lists (and the entity-list filter) key on prefab ids,
             # not the live instance ids
@@ -263,11 +283,7 @@ class OverlayManager(QtCore.QObject):
 
     def sync_cards(self, key: str) -> None:
         ov = self.overlays.get(key)
-        if self.model is not None and self.model.player_addr is not None:
-            active = bool(ov is not None)
-        else:
-            setting_name = f"open_overlay_{key}"
-            active = bool(getattr(self.s, setting_name, False))
+        active = bool(ov is not None) or bool(getattr(self.s, f"open_overlay_{key}", False))
 
         cards = self.cards.get(key)
         if not cards:
@@ -300,6 +316,10 @@ class OverlayManager(QtCore.QObject):
         elif hasattr(ov, "request_config"):
             # backwards compatibility for older overlays
             ov.request_config.connect(lambda: self.request_page.emit("overlays"))
+        if hasattr(ov, "log") and hasattr(ov.log, "connect"):
+            # An overlay's own log signal (DpsOverlay: st.Group roster
+            # join/leave lines) feeds the same Activity Log as the manager's.
+            ov.log.connect(self.log)
         if hasattr(ov, "set_collection_owned"):
             ov.set_collection_owned(self.collection_owned)
         if hasattr(ov, "set_tracker"):
@@ -368,28 +388,99 @@ class OverlayManager(QtCore.QObject):
             self.sync_cards(key)
             return
 
-        if self.model is None or self.model.player_addr is None:
+        # Build the window up front so construction (module imports + widget
+        # tree) happens at app launch / toggle time — never while the UI is
+        # busy catching up after a fresh player locate. The player-locate gate
+        # below then only decides VISIBILITY, so an enabled overlay is already
+        # built (and shows instantly) the moment the player is located.
+        ov = self.overlays.get(key)
+        if ov is None:
+            ov = self._make(key)
+            if ov is None:
+                self.sync_cards(key)   # revert the toggle
+                return
+            ov.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+            ov.destroyed.connect(lambda *_: self._on_closed(key))
+            if self.s.lock_overlays and hasattr(ov, "set_locked"):
+                ov.set_locked(True)
+            self.overlays[key] = ov
+
+        # Player-locate gate: the window stays HIDDEN until the player is
+        # located. The overlay cards keep their checked state (the intent is
+        # saved) and the window only surfaces once player_addr resolves —
+        # on_located retries then. Matches the pre-3afb584 behaviour where
+        # overlays were never visible before locate finished.
+        located = (self.model is not None
+                   and getattr(self.model, "player_addr", None) is not None)
+        if not located:
+            if key not in self._pending_opens:
+                self._pending_opens.add(key)
             self.sync_cards(key)
             return
+        self._ever_located = True
 
-        ov = self.overlays.get(key)
-        if ov is not None:
-            # If it already exists but is hidden (Alt-tabbed/Menu), show it
-            if not ov.isVisible():
+        # If it already exists but is hidden (Alt-tabbed/Menu), show it.
+        if not ov.isVisible():
+            # Dungeon HUD only opens when actually inside a dungeon/rift.
+            if key != "dungeon" or (self.model and self.model.is_in_dungeon_or_rift()):
                 ov.show()
-            return
-        ov = self._make(key)
-        if ov is None:
-            self.sync_cards(key)   # revert the toggle
-            return
-        ov.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
-        ov.destroyed.connect(lambda *_: self._on_closed(key))
-        ov.show()
-        if self.s.lock_overlays and hasattr(ov, "set_locked"):
-            ov.set_locked(True)
-        self.overlays[key] = ov
+                self.log.emit(f"Opened {key} overlay.")
         self.sync_cards(key)
-        self.log.emit(f"Opened {key} overlay.")
+
+    def on_located(self, located: bool) -> None:
+        """Retry any overlay opens that were deferred by the player-locate gate
+        or lost during a game restart/detach.
+
+        Called when the controller's ``located_changed`` signal fires — i.e.
+        when the player address resolves (or is lost). Only retries when
+        ``located`` flips to True; a locate failure is not retried here (the
+        watcher will re-issue RELOCATE ticks and eventually re-emit
+        ``located_changed(True)`` once the player loads in).
+        """
+        if not located:
+            return
+        self._ever_located = True
+
+        # Collect keys deferred by the player-locate gate, plus any enabled
+        # overlays that are currently missing (e.g. after a detach/reconnect cycle).
+        keys_to_open = set(self._pending_opens)
+        self._pending_opens.clear()
+        for key in HUD_OVERLAYS:
+            if key == "devscanner":
+                continue
+            setting_name = f"open_overlay_{key}"
+            if getattr(self.s, setting_name, False):
+                ov = self.overlays.get(key)
+                if ov is None or not ov.isVisible():
+                    keys_to_open.add(key)
+
+        for key in keys_to_open:
+            setting_name = f"open_overlay_{key}"
+            if getattr(self.s, setting_name, False):
+                self.request(key, True)
+
+    def open_startup_overlays(self) -> None:
+        """Re-apply the user's open-overlay preferences on app launch.
+
+        ``request()`` pre-builds every enabled overlay immediately (hidden) so
+        the expensive construction runs at launch instead of while the UI is
+        recovering from a fresh player locate. Windows only become VISIBLE
+        once the player is located (the pre-3afb584 rule) — ``on_located``
+        flips the pre-built windows to visible the instant ``located_changed``
+        fires, and the visibility loop keeps them hidden until then.
+        """
+        for key in HUD_OVERLAYS:
+            if key == "devscanner":
+                continue
+            setting_name = f"open_overlay_{key}"
+            if getattr(self.s, setting_name, False):
+                if self.overlays.get(key) is None:
+                    # request() pre-builds the window hidden and only surfaces
+                    # it once the player is located AND inside a dungeon/rift
+                    # (its dungeon gate + the visibility loop's Rule D), so
+                    # building at launch outside a dungeon is safe — and
+                    # required, or nothing ever creates it on dungeon entry.
+                    self.request(key, True)
 
     def _on_closed(self, key: str) -> None:
         self.overlays[key] = None
@@ -405,9 +496,15 @@ class OverlayManager(QtCore.QObject):
         self._detaching = True
         for key, ov in list(self.overlays.items()):
             if ov is not None:
+                try:
+                    ov.destroyed.disconnect()
+                except Exception:
+                    pass
                 ov.close()
             self.overlays[key] = None
-        QtCore.QTimer.singleShot(0, self._reset_detaching)
+            if getattr(self.s, f"open_overlay_{key}", False):
+                self._pending_opens.add(key)
+        QtCore.QTimer.singleShot(500, self._reset_detaching)
 
     def _reset_detaching(self) -> None:
         self._detaching = False
@@ -532,7 +629,7 @@ class OverlayManager(QtCore.QObject):
         except Exception:
             pass
 
-        # 4.5 Zone/Map change detection (auto-reset DPS/Speedrun on zone swap)
+        # 4.5 Zone/Map change detection (auto-reset on zone swap)
         try:
             curr_map = m.scene.map_id(m.player_addr) or m.scene.activity_id(m.player_addr)
         except Exception:
@@ -543,18 +640,6 @@ class OverlayManager(QtCore.QObject):
                 # Clear active compass tracking on map/zone/dungeon/rift swap
                 # This ensures the tracker doesn't point to non-existent objects in new scenes.
                 self.tracker.clear()
-                # Reset combat session data
-                try:
-                    m.reset_combat()
-                except Exception:
-                    pass
-                # Reset DPS overlay history cycles
-                dps_ov = self.overlays.get("dps")
-                if dps_ov is not None and hasattr(dps_ov, "_reset"):
-                    try:
-                        dps_ov._reset()
-                    except Exception:
-                        pass
                 # Reset Speedrun Timer
                 sr_ov = self.overlays.get("speedrun")
                 if sr_ov is not None and hasattr(sr_ov, "reset"):
@@ -588,6 +673,14 @@ class OverlayManager(QtCore.QObject):
                     if not ov.isVisible():
                         ov.show()
                     continue
+                # Player-locate gate for the PRE-BUILT overlays: windows are
+                # constructed hidden at app start (so they open instantly once
+                # located) and must not surface before that first locate — the
+                # rule the old deferred build enforced by not existing yet.
+                if not self._ever_located:
+                    if ov.isVisible():
+                        ov.hide()
+                    continue
                 # 1. Player / Focus check: Immediately hide map, entity, and compasses if player address is missing (character screen, loading) or neither game nor app is focused
                 if m.player_addr is None and key in ("map", "entity", "compass", "dcompass"):
                     if ov.isVisible():
@@ -619,27 +712,31 @@ class OverlayManager(QtCore.QObject):
                     is_esc_menu = menu_any and not menu_hide
                     auto_hide_enabled = getattr(self.s, "auto_hide_menus", False)
                     
-                    # Rule A: Escape menu hides everything except Entity and Minimap
-                    # (Dungeon HUD joins the Entity exception)
+                    # Rule A: Escape menu hides everything except Entity, Minimap, Dungeon HUD, DPS
                     if is_esc_menu:
-                        should_hide = (key not in ("entity", "map", "dungeon"))
+                        should_hide = (key not in ("entity", "map", "dungeon", "dps", "speedrun"))
                     # Rule B: Gameplay menus hide everything if enabled
                     elif menu_hide and auto_hide_enabled:
                         should_hide = True
                     
                     # Rule C: Dungeons/Rifts hide Minimap and Entity
-                    # (Compass stays — the Dungeon HUD tracks rift bosses in there)
+                    # (Compass stays — the Dungeon HUD tracks rift bosses in there; DPS stays active)
                     if not should_hide:
                         should_hide = (in_dungeon or in_rift) and key in ("map", "entity")
 
-                    # Exception: DPS and Speedrun never auto-hide in dungeons/rifts (ignore menus)
-                    if (in_dungeon or in_rift) and key in ("dps", "speedrun"):
+                    # Exception: Speedrun and DPS never auto-hide in dungeons/rifts (ignore menus)
+                    if (in_dungeon or in_rift) and key in ("speedrun", "dps"):
                         should_hide = False
 
                 # Rule D: Dungeon HUD only exists inside dungeons/rifts — hide
-                # it anywhere else, even when the app has focus.
+                # it anywhere else, even when the app has focus. Also honor
+                # the user's card intent: if they toggled it off mid-session
+                # (window destroyed, setting off), never resurrect it here.
                 if not should_hide and key == "dungeon":
-                    should_hide = not (in_dungeon or in_rift)
+                    if not getattr(self.s, "open_overlay_dungeon", False):
+                        should_hide = True
+                    else:
+                        should_hide = not (in_dungeon or in_rift)
 
                 if should_hide:
                     if ov.isVisible():

@@ -90,6 +90,66 @@ class FlowLayout(QtWidgets.QLayout):
         return used
 
 
+class StretchFlow(FlowLayout):
+    """FlowLayout whose items fill each row edge to edge.
+
+    Items are grouped so a row only takes as many as can share the width at
+    or above their minimum size; rows are then stretched so the items spread
+    across the full width (like a grid row). When the viewport is too narrow
+    to keep everything in one row the layout wraps to fewer per row instead of
+    overflowing horizontally. A lone leftover item keeps its natural width.
+    """
+
+    def _do_layout(self, rect: QtCore.QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        space = self.spacing()
+        avail = max(0, rect.width() - m.left() - m.right())
+        items = [it for it in self._items
+                 if it.widget() is not None and not it.widget().isHidden()]
+        if not items or avail <= 0:
+            return 0
+
+        def _share(n: int) -> float:
+            return (avail - space * (n - 1)) / n if n else 0.0
+
+        # Group into rows: a candidate row must fit every member at least at
+        # its own minimum width when the row's width is shared equally.
+        rows: list[list] = []
+        row: list = []
+        row_max_min = 0
+        for it in items:
+            w = it.widget()
+            mn = max(it.minimumSize().width(), w.minimumSizeHint().width())
+            n = len(row) + 1
+            if row and _share(n) < row_max_min - 1:
+                rows.append(row)
+                row, row_max_min = [], 0
+            row.append(it)
+            row_max_min = max(row_max_min, mn)
+        if row:
+            rows.append(row)
+
+        y = rect.y() + m.top()
+        for row in rows:
+            n = len(row)
+            widths = [it.sizeHint().width() for it in row]
+            w_i = (min(avail, widths[0]) if n == 1
+                   else int((avail - space * (n - 1)) / n))
+            row_h = 0
+            for it in row:
+                h = it.heightForWidth(w_i)
+                if h < 0:
+                    h = it.sizeHint().height()
+                row_h = max(row_h, h)
+            if not test_only:
+                x = rect.x() + m.left()
+                for it in row:
+                    it.setGeometry(QtCore.QRect(x, y, w_i, row_h))
+                    x += w_i + space
+            y += row_h + space
+        return y - space + m.bottom() if rows else 0
+
+
 class FlowRow(QtWidgets.QWidget):
     """A widget hosting a wrapping FlowLayout whose sizeHint mirrors its
     container's width (less container margins), so nested wrapping layouts can't

@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6 import QtWidgets, QtGui, QtCore
 
 from .config import Settings, find_backup_files
+from .master_backup import check_for_data_loss, create_snapshot_if_changed
 from .ui import theme
 from .ui.backup_scan import BackupScanDialog
 from .ui.copy_menu import install_copy_menu
@@ -63,10 +64,91 @@ def _app_icon() -> QtGui.QIcon:
     return ic
 
 
+def _instance_lock() -> tuple[str, QtCore.QLockFile | None]:
+    """Single-instance guard for the data folder.
+
+    collection.json / settings.json / progress_*.json are rewritten wholesale
+    from in-memory state, so two app instances on the same moddata folder can
+    wipe each other's data (the recurring collection-loss incidents). Returns
+    ("ok", lock) when this launch holds the lock (keep `lock` referenced for
+    the app's lifetime), ("conflict", None) when another live instance holds
+    it, or ("skip", None) when locking is unavailable — startup must never be
+    bricked by an unwritable data folder.
+
+    Detects orphaned locks left by crashes by checking the locking PID's
+    aliveness before declaring a conflict.
+    """
+    try:
+        from .config import config_dir
+    except Exception:
+        return "skip", None
+    try:
+        lock = QtCore.QLockFile(str(config_dir() / "fareverpal.lock"))
+        # In Qt, setStaleLockTime(0) means 'never consider stale', which broke
+        # crash recovery. Default 30s + active PID verification handles orphaned locks.
+        lock.setStaleLockTime(30000)
+        if lock.tryLock(0):
+            return "ok", lock
+        err = lock.error()
+        if err == QtCore.QLockFile.PermissionError:
+            return "skip", None
+        if err == QtCore.QLockFile.LockFailedError:
+            # Check if the process holding the lock is dead (orphaned crash lock)
+            try:
+                owner_info = lock.getLockInfo()
+                pid = owner_info[0] if owner_info else 0
+                if pid > 0:
+                    import ctypes
+                    SYNCHRONIZE = 0x00100000
+                    h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+                    if not h:
+                        # Owner process is dead — remove orphaned lock and claim
+                        lock.removeStaleLockFile()
+                        if lock.tryLock(0):
+                            return "ok", lock
+                    else:
+                        ctypes.windll.kernel32.CloseHandle(h)
+            except Exception:
+                pass
+        return "conflict", None
+    except Exception:
+        return "skip", None
+
+
+def _warn_conflict(parent: QtWidgets.QWidget | None = None,
+                    timeout_ms: int = 6000) -> int:
+    """Warn about a second instance on the same data folder, then exit.
+
+    The dialog auto-closes after ``timeout_ms`` (or on OK click), so a stray
+    double-launch can never leave a parked 4 MB warning process behind -
+    every loser of the single-instance race exits on its own."""
+    box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Warning,
+                                "Farever Pal is already running",
+                                "Another Farever Pal instance is already "
+                                "open on this data folder.\n\nTwo instances "
+                                "writing the same settings can wipe your "
+                                "collection and progress data.\n\nClose the "
+                                "other instance and start again.",
+                                parent=parent)
+    box.setStandardButtons(QtWidgets.QMessageBox.Ok)
+    QtCore.QTimer.singleShot(timeout_ms, box.close)   # never lingers
+    box.exec()
+    return 2
+
+
 def main() -> int:
     _probe(f"app start argv={sys.argv} qpa={os.environ.get('QT_QPA_PLATFORM', '')}")
     app = QtWidgets.QApplication(sys.argv)
     _probe(f"qapp created platform={app.platformName()}")
+    # Single-instance guard: refuse a second instance on the same data folder
+    # (two writers = the data-loss hazard). Set FAREVER_ALLOW_MULTI=1 to
+    # opt out for tooling/CI runs.
+    _lock_guard: QtCore.QLockFile | None = None
+    if os.environ.get("FAREVER_ALLOW_MULTI", "").strip().lower() \
+            not in ("1", "true", "yes"):
+        status, _lock_guard = _instance_lock()
+        if status == "conflict":
+            return _warn_conflict()
     # silence the cosmetic Qt-internal pixel-font warning (see above); the
     # installed handler chain stays active for the whole app run
     global _prev_msg_handler
@@ -81,12 +163,13 @@ def main() -> int:
     _probe("theme applied")
     app.setWindowIcon(_app_icon())
 
-    # Startup scan: files moved aside to *.bak after a corrupt read are listed
-    # here BEFORE settings load, so a restored settings.json / collection.json
-    # is picked up by the normal load path — no restart needed.
+    # Startup recovery check:
+    # 1. Any corrupt files moved aside to *.bak
+    # 2. Any data loss (>20% loss or missing files) detected against Master Backup
     baks = find_backup_files()
-    if baks:
-        BackupScanDialog(baks).exec()
+    loss_info = check_for_data_loss()
+    if baks or loss_info:
+        BackupScanDialog(baks=baks, loss_info=loss_info).exec()
 
     settings = Settings.load()
     _probe("settings loaded")
@@ -98,6 +181,7 @@ def main() -> int:
     # down (fires for window close AND programmatic quit) so no QThread is
     # destroyed while its thread is still running.
     from .ui.workers import shutdown_all
+    app.aboutToQuit.connect(create_snapshot_if_changed)
     app.aboutToQuit.connect(shutdown_all)
     win = ControlPanel(settings)
     _probe("control panel built")

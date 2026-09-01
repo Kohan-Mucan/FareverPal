@@ -72,7 +72,10 @@ def build_loot_specs(drops, xyz, floor: str, is_tracked, track,
             value=f"{_drop_dist(nd):>6.0f}m",
             bold=tracked, highlight=tracked,
             border_color=col,
-            bg_tint=col if not tracked else None,
+            # Legendary rows get the gold background fill; every other
+            # rarity keeps its rarity-colored border on a plain row.
+            bg_tint=(col if (rar or "") == "Legendary" and not tracked
+                     else None),
             cb=(lambda k=pos_key: track("pos", k)),
             right_cb=(lambda v=iid: copy_id(v)) if copy_id else None,
             key=("loot", iid)))

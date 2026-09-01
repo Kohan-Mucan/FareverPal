@@ -583,15 +583,7 @@ class DungeonOverlay(DungeonLootMixin, OverlayWindow):
 
             def _hero_class(e) -> str:
                 """Same class resolution as the entity HUD's PLAYERS rows."""
-                cls_name = getattr(e, "cls", "") or ""
-                if cls_name.startswith("ent.hero."):
-                    return cls_name.replace("ent.hero.", "").title() or "Hero"
-                unit = (getattr(e, "unit_id", "") or "").lower()
-                for c in ("warrior", "rogue", "mage", "priest",
-                          "paladin", "hunter", "bard", "druid"):
-                    if c in unit:
-                        return c.title()
-                return "Hero"
+                return getattr(e, "hero_class", None) or udata.resolve_hero_class(getattr(e, "cls", None), getattr(e, "unit_id", None)) or "Hero"
 
             for e, d in self._dg_players:
                 classes.setdefault(_hero_class(e), []).append((e, d))

@@ -300,7 +300,7 @@ class SpeedrunOverlay(OverlayWindow):
         # behaves identically every run: it only fires on deliberate movement
         # away from a stationary spawn baseline, never on the teleport-in jitter.
         try:
-            pos = self.model.player_xyz()
+            pos = self.model.player_xyz() if self.model is not None else None
         except Exception:
             pos = None
         if self._starter.feed(self._in_dungeon, pos):
@@ -328,7 +328,7 @@ class SpeedrunOverlay(OverlayWindow):
         bid = self.timer.boss_id or "_"
         saved = False
         cur = self.timer.last
-        profile = self.model.player_profile()
+        profile = self.model.player_profile() if self.model is not None else ""
         if cur is not None:
             best_dict = self.s.get_speedrun_best(profile)
             best = best_dict.get(bid)
@@ -586,7 +586,7 @@ class SpeedrunOverlay(OverlayWindow):
         as the headline, the full-run PB on a smaller secondary line below."""
         t = self.timer
         bid = t.boss_id or "_"
-        profile = self.model.player_profile()
+        profile = self.model.player_profile() if self.model is not None else ""
         primary, secondary = record_lines(
             done=(t.state == t.DONE),
             boss_armed=boss_armed,
@@ -651,6 +651,9 @@ class SpeedrunOverlay(OverlayWindow):
             return
         self.warn_lbl.setStyleSheet(f"color:{theme.GOLD};background:transparent;")
         self.warn_lbl.show()
+
+    def set_model(self, model) -> None:
+        self.model = model
 
     def closeEvent(self, e):
         self._poll.stop()

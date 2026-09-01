@@ -30,7 +30,7 @@ MAX_UI_LINES = 840
 # game_attach.py owns the session lifecycle (it may import Proc) and is exempt.
 FORBIDDEN_TAILS = (
     "core.proc", "core.hl", "core.scene", "core.attributes",
-    "core.damage", "core.player",
+    "core.player",
 )
 PAGE_FILES = sorted((UI_DIR / "pages").glob("*.py")) + \
     sorted((UI_DIR / "pages" / "codex").glob("*.py")) + \

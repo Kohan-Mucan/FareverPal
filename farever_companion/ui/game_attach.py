@@ -10,7 +10,7 @@ Read-only throughout: the locate runs on a worker thread (a pure memory scan),
 and detach cleanly stops the model's background threads and closes the handle.
 """
 from __future__ import annotations
-
+import os
 import time
 
 from PySide6 import QtCore
@@ -20,6 +20,143 @@ from ..core.proc import Proc, ProcError, backend_name, find_pid
 from ..core.model import LiveModel
 from ..core.autoattach import AutoAttach, Act
 from .workers import register as _register_worker
+
+
+def dmg_hints_from(settings: Settings) -> tuple[str, str]:
+    """(DamageDisplay ptr, DamageResult ptr) to seed the reader with.
+
+    Precedence: an explicit FAREVER_DMG_* env override (dev runs) wins,
+    otherwise the class-cached pointers from the last calibration in settings.
+    Either value is class-name-verified on use and falls back to scanning when
+    the game relaunched and the saved address went stale."""
+    return (os.environ.get("FAREVER_DMG_TYPE", "") or getattr(
+                settings, "dmg_display_type", "") or "",
+            os.environ.get("FAREVER_DMG_RESULT_TYPE", "") or getattr(
+                settings, "dmg_result_type", "") or "")
+
+
+_INJECTED_PIDS: set[int] = set()
+
+
+def _try_launch_hook(pid: int, force: bool = False, log_cb: object = None) -> None:
+    """Launch dps_bridge/farever_dps.exe <pid> asynchronously in the background."""
+    if not pid:
+        return
+    if not force and pid in _INJECTED_PIDS:
+        return  # Never execute repeatedly for the same process
+    _INJECTED_PIDS.add(pid)
+    import threading
+
+    def _worker():
+        try:
+            import subprocess
+            import sys
+            from pathlib import Path
+            candidates = [
+                Path(__file__).resolve().parents[2] / "dps_bridge" / "farever_dps.exe",
+                Path("D:/1MobileApp/vs/FareverPal-SC/GameFiles/Farever/hooks/hook/farever_dps/farever_dps.exe"),
+                Path("D:/1MobileApp/vs/FareverPal-SC/GameFiles/Farever/hooks/hook/farever_dps.exe"),
+                Path("D:/1MobileApp/vs/FareverPal-SC/GameFiles/Farever/hooks/farever_dps.exe"),
+                Path(__file__).resolve().parents[2] / "hook" / "farever_dps.exe",
+                Path(__file__).resolve().parents[2] / "dist" / "dps_bridge" / "farever_dps.exe",
+                Path(sys.executable).parent / "dps_bridge" / "farever_dps.exe" if getattr(sys, "frozen", False) else None,
+                Path(sys.executable).parent / "farever_dps.exe" if getattr(sys, "frozen", False) else None,
+            ]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            import logging
+            logger = logging.getLogger("farever_companion")
+            found = False
+            for c in candidates:
+                if c and c.is_file():
+                    found = True
+                    logger.info("[dps-hook-launch] Launching injector %s for PID %d", c, pid)
+                    if callable(log_cb):
+                        log_cb(f"Combat Bridge: Launching injector {c.name} for PID {pid}…")
+                    proc = subprocess.Popen([str(c), str(pid)], cwd=str(c.parent),
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            creationflags=flags, text=True)
+                    try:
+                        out, _ = proc.communicate(timeout=2.5)
+                        if out:
+                            out_clean = out.strip()
+                            logger.info("[dps-hook-launch] %s", out_clean)
+                            if callable(log_cb):
+                                log_cb(f"Combat Bridge Injector: {out_clean}")
+                    except Exception as ex:
+                        logger.warning("[dps-hook-launch] Injector wait error: %s", ex)
+                        if callable(log_cb):
+                            log_cb(f"Combat Bridge Injector timeout/error: {ex}")
+                    break
+            if not found and callable(log_cb):
+                log_cb("Combat Bridge Notice: farever_dps.exe injector not found in project folders.")
+        except Exception as e:
+            import logging
+            logging.getLogger("farever_companion").warning("[dps-hook-launch] Failed: %s", e)
+            if callable(log_cb):
+                log_cb(f"Combat Bridge Injector failed: {e}")
+
+    threading.Thread(target=_worker, daemon=True, name="dps-hook-launcher").start()
+
+
+def _try_uninject_hook(pid: int, log_cb: object = None) -> None:
+    """Launch dps_bridge/farever_uninject.exe or farever_dps.exe --uninject asynchronously."""
+    if not pid:
+        return
+    _INJECTED_PIDS.discard(pid)
+    import threading
+
+    def _worker():
+        try:
+            import subprocess
+            import sys
+            from pathlib import Path
+            candidates = [
+                Path(__file__).resolve().parents[2] / "dps_bridge" / "farever_uninject.exe",
+                Path(__file__).resolve().parents[2] / "dps_bridge" / "farever_dps.exe",
+                Path("D:/1MobileApp/vs/FareverPal-SC/GameFiles/Farever/hooks/hook/farever_dps/farever_dps.exe"),
+                Path("D:/1MobileApp/vs/FareverPal-SC/GameFiles/Farever/hooks/hook/farever_dps.exe"),
+                Path(__file__).resolve().parents[2] / "hook" / "farever_dps.exe",
+                Path(sys.executable).parent / "dps_bridge" / "farever_dps.exe" if getattr(sys, "frozen", False) else None,
+                Path(sys.executable).parent / "farever_dps.exe" if getattr(sys, "frozen", False) else None,
+            ]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            import logging
+            logger = logging.getLogger("farever_companion")
+            found = False
+            for c in candidates:
+                if c and c.is_file():
+                    found = True
+                    logger.info("[dps-hook-uninject] Launching uninjector %s for PID %d", c, pid)
+                    if callable(log_cb):
+                        log_cb(f"Combat Bridge: Uninjecting hook via {c.name} for PID {pid}…")
+                    args = [str(c), "--uninject"] if c.name != "farever_uninject.exe" else [str(c)]
+                    proc = subprocess.Popen(args, cwd=str(c.parent),
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            creationflags=flags, text=True)
+                    try:
+                        out, _ = proc.communicate(timeout=2.5)
+                        if out:
+                            out_clean = out.strip()
+                            logger.info("[dps-hook-uninject] %s", out_clean)
+                            if callable(log_cb):
+                                log_cb(f"Combat Bridge Uninjector: {out_clean}")
+                    except Exception as ex:
+                        logger.warning("[dps-hook-uninject] Uninjector error: %s", ex)
+                        if callable(log_cb):
+                            log_cb(f"Combat Bridge Uninjector error: {ex}")
+                    break
+            if not found:
+                from ..core.proc import unload_module
+                res = unload_module(pid, "farever_dps.dll")
+                if res and callable(log_cb):
+                    log_cb("Combat Bridge: Unloaded farever_dps.dll from game via FreeLibrary.")
+        except Exception as e:
+            import logging
+            logging.getLogger("farever_companion").warning("[dps-hook-uninject] Failed: %s", e)
+            if callable(log_cb):
+                log_cb(f"Combat Bridge Uninject failed: {e}")
+
+    threading.Thread(target=_worker, daemon=True, name="dps-hook-uninjector").start()
 
 
 class _LocateWorker(QtCore.QThread):
@@ -149,6 +286,54 @@ class GameAttachmentController(QtCore.QObject):
             return
         self.model = LiveModel(self.proc)
         self.model_changed.emit(self.model)
+        # Past-fight history survives restarts: enable on-disk persistence at
+        # the shared moddata location. Files are per-character
+        # (dps_history_<profile>.json) so different heroes keep separate
+        # history - the tracker swaps files on character change.
+        try:
+            from ..config import dps_dir
+            self.model.dps.set_history_dir(dps_dir())
+        except Exception:
+            pass
+        # Seed the located DamageDisplay / DamageResult type pointers so a cold
+        # start skips the multi-minute scan: an explicit env override wins (dev
+        # runs), otherwise the class-cached pointers from the last calibration
+        # (settings). Either is verified by class name inside find_type /
+        # find_result_type and falls back to scanning when the game relaunched
+        # and the saved address went stale.
+        hint, rhint = dmg_hints_from(self.s)
+        if hint:
+            self.model.damage.set_type_hint(hint)
+        if rhint:
+            self.model.damage.set_result_type_hint(rhint)
+        dps_mode = getattr(self.s, "dps_mode", "proxy")
+        if hasattr(self.model, "damage"):
+            self.model.damage.log_line = self.log.emit
+            self.model.damage.set_mode(dps_mode)
+        if hasattr(self.model, "dps"):
+            self.model.dps.log_line = self.log.emit
+            # Fresh attach under a capture mode: drop stale HP baselines so
+            # the HP-diff fallback re-baselines on the next fight.
+            tracker = getattr(self.model, "dps", None)
+            if tracker is not None and hasattr(tracker, "reset_hp_baselines"):
+                tracker.reset_hp_baselines(reason=f"attach ({dps_mode})")
+
+        # Check and report combat bridge DLL detection to the Activity Log
+        bridge = self.proc.detect_combat_bridge()
+        if bridge.get("detected"):
+            self.log.emit(f"Combat Bridge: {bridge['status_summary']}")
+        else:
+            if dps_mode == "injector":
+                if getattr(self.s, "dps_hook_enabled", True):
+                    self.log.emit(f"Combat Bridge: farever_dps.dll not detected. Launching injector for PID {self.proc.pid}…")
+                    _try_launch_hook(self.proc.pid, log_cb=self.log.emit)
+                else:
+                    self.log.emit("Combat Bridge: Option 2 (Injector) selected, but hook is disabled in settings.")
+            elif dps_mode == "proxy":
+                self.log.emit(f"Combat Bridge: {bridge['status_summary']}")
+            elif dps_mode == "memory":
+                self.log.emit("Combat Bridge: Option 3 (Memory Reader fallback active, no DLL required).")
+
         self._located_fail_logged = False
         self.status.emit(True, f"attached PID {self.proc.pid} · locating player…")
         self._start_locate()
@@ -237,6 +422,26 @@ class GameAttachmentController(QtCore.QObject):
             elif pa is None and self._located_shown:
                 self.status.emit(True, "attached · waiting for world")
                 self._mark_lost()              # left to menu -> re-lock the tools
+        # Persist the located DamageDisplay/DamageResult pointers once the
+        # reader has calibrated (2 s watcher cadence keeps checking cheaply;
+        # save() only writes when the value actually changed, so a successful
+        # cache just stops touching disk). Stale pointers from a game relaunch
+        # are replaced the moment the reader re-locates.
+        if self.proc is not None and self.model is not None:
+            try:
+                dp, rp = self.model.damage.located_pointers()
+            except Exception:
+                dp = rp = None
+            if dp and rp:
+                d_hex, r_hex = f"{dp:#x}", f"{rp:#x}"
+                if (self.s.dmg_display_type != d_hex
+                        or self.s.dmg_result_type != r_hex):
+                    self.s.dmg_display_type = d_hex
+                    self.s.dmg_result_type = r_hex
+                    try:
+                        self.s.save()
+                    except Exception:
+                        pass
 
     def _relocate(self) -> None:
         """Quietly re-run the locate worker (attached but not yet in-world)."""

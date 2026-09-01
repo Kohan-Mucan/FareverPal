@@ -11,7 +11,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets  # noqa: E402
+from PySide6 import QtCore, QtWidgets  # noqa: E402
 
 from farever_companion.config import Settings  # noqa: E402
 from farever_companion.ui.control_panel import ControlPanel, NAV  # noqa: E402
@@ -56,9 +56,44 @@ def test_guarded_callbacks_survive_eviction(cp):
         for k in keys:
             cp._select_nav(k)
 
-    # these reach into possibly-evicted pages; they must not raise
+    # these reach into possibly-evicted pages; they must not raise.
+    # (_set_unit_hidden itself walks the hasattr-guarded cross-page syncs -
+    # codex refresh - so a direct _update_unit_tag call is redundant: that
+    # legacy Entity-tab hook no longer exists on ControlPanel.)
     cp._select_nav("codex")
     cp.log("after eviction")
     cp._set_unit_hidden("SomeUnit", True)
+    cp._set_all_units_hidden(True)
     cp._friends_poll()
-    cp._update_unit_tag()
+
+
+def test_current_page_degrades_when_active_page_evicted(cp):
+    """Minimizing evicts even the ACTIVE page, yet the stack can keep an
+    evicted slot current (its widget tree swapped for a placeholder). Timer
+    callbacks that derive the current page (the 1s rift sidebar tick,
+    page-history snapshots) must then degrade to the bare nav key instead of
+    touching the page's deleted tab widgets (_codex_tabs / _settings_tabs)
+    and raising on a dead C++ object."""
+    order = [k for k, _, _ in NAV]
+    cp._select_nav("codex")
+    cp._select_nav("settings")
+    assert cp._pages_built.get("codex") and cp._pages_built.get("settings")
+
+    cp._on_minimized()                      # sheds every page, incl. the current one
+    QtWidgets.QApplication.processEvents()  # drain the event queue
+    QtCore.QCoreApplication.sendPostedEvents(
+        None, QtCore.QEvent.DeferredDelete)  # deleteLater only runs here
+    QtWidgets.QApplication.processEvents()
+    assert not cp._pages_built.get("codex")
+    assert not cp._widget_alive(getattr(cp, "_codex_tabs", None))
+    assert not cp._widget_alive(getattr(cp, "_settings_tabs", None))
+
+    # An evicted page parked on the current index degrades to its bare key
+    # (sub-tab state is gone) instead of raising on the deleted tabs widget.
+    for key in ("codex", "settings"):
+        cp.stack.setCurrentIndex(order.index(key))
+        assert cp._current_page() == key, key
+    # ...and the sidebar rift tick survives that state (Settings' tab bar is
+    # read directly there, so pin the settings slot for it).
+    cp.stack.setCurrentIndex(order.index("settings"))
+    cp._update_sidebar_rift()
