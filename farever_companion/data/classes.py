@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from . import cdb
-
 CLASS_APTITUDE = {
     "Warrior": "Fighter",
     "Rogue": "Assassin",
@@ -27,8 +25,23 @@ CLASSES = tuple(CLASS_APTITUDE)
 
 @lru_cache(maxsize=1)
 def _item_aptitudes() -> dict[str, frozenset[str]]:
+    """item id -> the aptitudes that may wield it.
+
+    Read from the item_drops index, NOT `cdb.display_data("items")`: that is
+    the compiled `raw_items` sheet, whose per-sheet field list in
+    compiler.py keeps only id/rarity/type (+baked name) — `aptitudes` is
+    dropped there, so the old read returned an empty map for every item and
+    `is_for_class` was silently always False. The drops index is built from
+    the same sheet (compiler.py stamps `aptitudes` onto its rows) and is the
+    payload `data/items/stats.py` already reads classes from.
+
+    build_tools/check_compiled_fields.py guards this: it fails the build if a
+    field read off a compiled shim survives on no row of that payload while
+    the compile input still carries it.
+    """
+    from .items import catalog
     out: dict[str, frozenset[str]] = {}
-    for it in cdb.display_data("items"):
+    for it in catalog.items():
         apts = it.get("aptitudes") or []
         if apts:
             out[it["id"]] = frozenset(apts)

@@ -15,7 +15,8 @@ Gear-tab look), composed like the items page (assembly + detail):
 - queue.py  the Craft List tab (added recipes + summed Total Needed bill)
             — the queue's own full-width page, no cramped docked rail
 
-ControlPanel composes the resulting CraftPageMixin into its base list.
+`control_panel.py` imports `CraftPageMixin` from here and mixes it into its base
+list; no page imports another page's package.
 """
 from .page import CraftPageBase
 from .detail import CraftDetailMixin

@@ -35,6 +35,17 @@ REGION_NAMES = {
 }
 
 
+# The static index covers the OVERWORLD RedOrb placements only — the ones the
+# "Collector of <region>" achievements count and the minimap orb layer plots.
+# Dungeon-instance orbs are found live from the scene (`model.live_orbs`) and
+# deliberately stay out of here. The 2026-09-11 data regen added ~40 instance
+# placements to `orb_positions.json` (`Z1_POI_Beehive_RedOrb_*`,
+# `R1_POI_KoboldsMines_RedOrb*`, `Flamethrower_Kobolds_redOrb_*`, bare
+# `RedOrb` spawners), taking the index from 284 to 324, so only the
+# `RedOrb_World_*` prefab placements are kept.
+_WORLD_ORB_PREFIX = "RedOrb_World"
+
+
 @lru_cache(maxsize=1)
 def load_orbs() -> list[Orb]:
     from ..data import cdb
@@ -46,6 +57,8 @@ def load_orbs() -> list[Orb]:
     out = []
     for o in raw:
         if not isinstance(o, dict) or not o.get("id"):
+            continue
+        if not str(o["id"]).startswith(_WORLD_ORB_PREFIX):
             continue
         # Normalize coordinates to float — the source JSON may encode whole
         # numbers as int (e.g. "z": 348) and every consumer does float math.

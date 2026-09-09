@@ -26,4 +26,4 @@ located in `assets/icons/` and `assets/atlas/`.
 ## Optional
 - `app_icon.ico` / `app_icon.png` — a Farever logo mark for the window/taskbar
   (and the `.exe` via `--icon`). If absent, the app falls back to the tinted
-  brand glyph. See `notes/UI_OVERHAUL.md §11`.
+  brand glyph.

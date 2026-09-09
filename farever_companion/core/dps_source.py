@@ -1,190 +1,341 @@
-"""DamageSourceManager: one model-owned background source of combat events.
+"""DamageSourceManager: the one model-owned source of combat events.
 
-Arbitrates the floaty reader and the HUD meter (meter-takeover exclusivity:
-meter wins once live so events are never double-counted). Consumers drain one
-shared ring with their own cursor.
+Owns the event ring every consumer drains, and routes capture to exactly one of
+two deliberately separate engines:
+
+* ``dps_bridge.py`` - Options 1 & 2: the in-game DLL, either dropped in as a
+  proxy (``version.dll`` / ``dinput8.dll``) or injected (``farever_dps.dll``).
+  Both options are the same native capture, so they share that one file.
+* ``dps_memory.py`` - Option 3: the DLL-free memory scanner. Different capture
+  mechanism entirely (offset-sensitive process reads).
+
+The two engines share no code on purpose: a fix for one must never break the
+other. This module only coordinates - it picks the engine, owns the ring, and
+reports one combined status to the UI.
+
+Where to fix what:
+  DLL / proxy / injector / UDP protocol  ->  dps_bridge.py
+  offsets / floaty decoding / calibration ->  dps_memory.py
+  ring, mode routing, combined status     ->  here
+
+Consumers drain one shared ring with their own cursor (``events_after``).
 """
 from __future__ import annotations
 
-import json
 import logging
-import socket
 import threading
 import time
 from collections import deque
 from typing import Callable
 
-from .damage import DamageReader
-from .damage_events import DamageEvent, K_DAMAGE, K_HEAL, K_SHIELD
-from .hl import Hl
-from .proc import Proc, ProcError
+from .damage_events import DamageEvent
+from .dps_bridge import BridgeSource, parse_hook_event
+from .dps_memory import MemorySource
 
 log = logging.getLogger(__name__)
 
 RING_LIMIT = 20000          # events kept for lagging consumers
-POLL_IN_COMBAT = 0.08       # s between polls while events flow
-POLL_IDLE = 0.5             # s between polls in a lull
-DERIVE_LULL_S = 45          # re-derive cadence when nothing anchors
-DERIVE_HEALTHY_S = 300      # re-derive cadence while events decode
-DERIVE_STALE_S = 8          # re-derive cadence while displays sit undecoded
-DERIVE_FIRST_S = 4          # probe cadence before the first event ever
-DERIVE_SILENCE_S = 0.3      # silent this long -> map ran out of pages
-DERIVE_HOT_S = 1.0          # in-fight re-map cadence (fresh pool page per hit)
-DERIVE_HOT_WINDOW_S = 6.0   # still "in combat" this long after last event
+
+CAPTURE_MODES = ("proxy", "injector", "memory")   # Option 1 | Option 2 | Option 3
+
+
+class DpsEventStats:
+    """Where DPS events are getting to, stage by stage.
+
+    The capture status line answers "is the engine healthy"; this answers the
+    question a dead meter cannot answer on its own: did anything ARRIVE, did
+    anything DECODE, did the tracker PULL it, and did attribution keep it? Each
+    stage with a zero and the one above it non-zero names the broken link —
+    which is the whole diagnosis, because the three failures look identical on
+    a board that reads zero.
+
+    Monotonic for the life of the source (a process, not a fight): the question
+    is about the PATH, and a per-fight counter would reset exactly when someone
+    is trying to read it. Lock-guarded, because the bridge listener thread, the
+    memory poller and the tracker's tick all write here.
+    """
+
+    __slots__ = ("_lock", "payload_bytes", "payload_packets", "payload_counted",
+                 "decoded", "pulled", "attributed", "filtered", "dropped",
+                 "dropped_unresolved")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.payload_bytes = 0
+        self.payload_packets = 0
+        # False until an engine actually hands us a payload to measure: the
+        # memory reader has no stream at all, so its payload counters stay empty
+        # BY DESIGN and a report must say "n/a" rather than "0 bytes".
+        self.payload_counted = False
+        self.decoded = 0
+        self.pulled = 0
+        self.attributed = 0
+        # Deliberately not recorded (the solo filter, the post-wipe hold, a
+        # zero-amount kill ping) — a separate bucket so a healthy solo session
+        # never reads as lossy.
+        self.filtered = 0
+        self.dropped = 0
+        # The subset dropped because the caster/target could not be identified.
+        # On a bridge this is the actionable one: it means the DLL is sending
+        # perfectly good events and the reading of WHO did what is failing.
+        self.dropped_unresolved = 0
+
+    def note_payload(self, n_bytes: int) -> None:
+        """One datagram's worth of raw payload off the wire."""
+        with self._lock:
+            self.payload_bytes += max(0, int(n_bytes))
+            self.payload_packets += 1
+            self.payload_counted = True
+
+    def note_decoded(self, n: int) -> None:
+        """`n` events the engine turned into real :class:`DamageEvent`s."""
+        with self._lock:
+            self.decoded += max(0, int(n))
+
+    def note_drained(self, pulled: int, attributed: int, unresolved: int = 0,
+                     filtered: int = 0) -> None:
+        """One tracker drain pass: `pulled` events off the ring, `attributed` of
+        them credited to a session. Drops are DERIVED here, never counted at each
+        exit, so they cannot drift from the numbers above them."""
+        with self._lock:
+            self.pulled += max(0, int(pulled))
+            self.attributed += max(0, int(attributed))
+            self.filtered += max(0, int(filtered))
+            self.dropped += (max(0, int(pulled))
+                             - max(0, int(attributed))
+                             - max(0, int(filtered)))
+            self.dropped_unresolved += max(0, int(unresolved))
+
+    def snapshot(self) -> dict:
+        """A consistent copy of every counter (one lock, no half-updates)."""
+        with self._lock:
+            return {
+                "payload_bytes": self.payload_bytes,
+                "payload_packets": self.payload_packets,
+                "payload_counted": self.payload_counted,
+                "decoded": self.decoded,
+                "pulled": self.pulled,
+                "attributed": self.attributed,
+                "filtered": self.filtered,
+                "dropped": self.dropped,
+                "dropped_unresolved": self.dropped_unresolved,
+            }
 
 
 class DamageSourceManager:
-    def __init__(self, proc: Proc, type_hint: str | None = None,
+    def __init__(self, proc, type_hint: str | None = None,
                  result_type_hint: str | None = None):
         """Type hints skip the full-process locate on future launches."""
         self.proc = proc
-        self._type_hint = type_hint
-        self._result_type_hint = result_type_hint
         self._stop = False
         self._started = False
-        self._thread: threading.Thread | None = None
-        self._redrive = threading.Event()
 
-        self.mode: str = "proxy"  # "proxy" (Option 1) | "injector" (Option 2) | "memory" (Option 3)
-        self._reader: DamageReader | None = None
-        self._damage_locate_done = False
-        self._damage_found = False
-        self._result_locate_done = False
-        self._result_found = False
+        self.mode: str = "proxy"   # Option 1 default
 
-        # locate progress for the UI status line.
-        self._locate_attempts = 0
-        self._locate_running = False
-        self._locate_started = 0.0
-
-        # live counters (bg thread writes, UI reads)
-        self._last_damage_ts: float = 0.0
-        self._last_damage_n: int = 0
-
-        # live hook counters (UDP/pipe listener writes, UI reads)
-        self._hook_thread: threading.Thread | None = None
-        self._hook_last_ts: float = 0.0
-        self._last_heartbeat_ts: float = 0.0
-        self._hook_events_n: int = 0
-        self._hook_check_ts: float = 0.0
-        self._hook_is_loaded: bool = False
-        # Hook-install status telemetry from the DLL (ts, stage, ok, msg);
-        # a loaded-but-silent bridge can explain itself from these.
-        self._bridge_status_log: deque = deque(maxlen=24)
-
-        # stage timings for the status line.
-        self._started_at: float = 0.0
-        self._calib_s: float = 0.0          # both type locates done
-        self._map_s: float = 0.0            # first successful map duration
-        self._first_event_s: float = 0.0    # first decoded event delay
-        self._map_started: float = 0.0      # monotonic while a map is in flight
-
-        # event ring (cursor-drained)
+        # Event ring (cursor-drained) - the one thing all consumers share.
         self._ring: deque = deque(maxlen=RING_LIMIT)
         self._total = 0
         self._lock = threading.Lock()
 
-        # Activity log callback and event flags
-        self.log_line: Callable[[str], None] | None = None
-        self._first_packet_logged: bool = False
-        self._first_event_logged: bool = False
+        # Stage-by-stage event counters for the on-demand capture diagnostic
+        # (see DpsEventStats). One object, read by the report, written by
+        # whichever thread owns that stage.
+        self.stats = DpsEventStats()
+
+        # Stage timings shared by both engines.
+        self._started_at: float = 0.0
+        self._first_event_s: float = 0.0
+
+        self._log_line: Callable[[str], None] | None = None
+
+        # Local-hero addr for the memory reader's incoming flag, refreshed by
+        # the tracker every tick (it owns player_addr); without it decoded hits
+        # on you never mark incoming and the taken channel stays dark.
+        self.my_hero_hint: int | None = None
+
+        # True while a fight is live, refreshed by the tracker each tick so the
+        # memory scanner's re-derive cadence stays in combat mode mid-fight
+        # (event recency collapses the instant the reader goes deaf — exactly
+        # when re-derivation is needed most).
+        self._combat_hint_val: bool = False
+
+        # True while the fight on the meter is one the log narrates — a
+        # dungeon/rift run or a dummy test — refreshed by the tracker each tick
+        # beside the combat hint. The bridge's periodic health roll-up is gated
+        # on it (see BridgeSource._health_line_wanted), so open-world hits still
+        # feed the meter without writing a line per 50 events forever.
+        self._watched_hint_val: bool = False
+
+        # --- the two capture engines (keep them apart!) --------------------
+        # Strict isolation: the bridge (Options 1 & 2) and the scanner
+        # (Option 3) share no callbacks. Exactly one is started at a time;
+        # the other is stopped, so a leftover mapped DLL can never feed the
+        # ring or hijack the status while memory owns the capture.
+        self.bridge = BridgeSource(proc, emit=self._push)
+        # The tracker's per-tick context (see note_watched) gates the bridge's
+        # periodic health roll-up: narrated fights only, quiet open world.
+        self.bridge.heartbeat_gate = self._watched_hint
+        self._count_bridge_payload()
+        self.memory = MemorySource(proc, emit=self._push,
+                                   type_hint=type_hint,
+                                   result_type_hint=result_type_hint,
+                                   hero_hint=lambda: self.my_hero_hint,
+                                   combat_hint=lambda: self._combat_hint(),
+                                   active=lambda: self.mode == "memory")
+
+    def _count_bridge_payload(self) -> None:
+        """Measure the bridge's raw payload without touching the bridge.
+
+        The bridge owns its socket, so the only place this coordinator can see
+        a datagram's SIZE is the bridge's single ingest entry point. Counting it
+        from out here is deliberate on both counts: the byte count is
+        DIAGNOSTIC, so it must not be able to break a capture engine, and a
+        future rewrite of that engine cannot silently lose the number — if the
+        seam is ever renamed, the report degrades to "payload n/a" and the
+        stages below it still work.
+        """
+        ingest = getattr(self.bridge, "_ingest", None)
+        if not callable(ingest):
+            return
+
+        def _counted(text: str, now: float, _ingest=ingest) -> None:
+            try:
+                self.stats.note_payload(len(text))
+            except Exception:
+                pass
+            _ingest(text, now)
+
+        self.bridge._ingest = _counted
+
+    def _combat_hint(self) -> bool:
+        """The tracker's fight state, forwarded to the memory scanner so its
+        calibration keeps combat cadence through a whole boss fight. The old
+        event-recency window (6 s) collapsed the moment the reader went deaf
+        mid-fight: no events -> "not hot" -> up to 300 s without a re-derive
+        -> every remaining hit burst in when the fight ended (live
+        2026-09-18: a 0.0 s 'fight' holding 81 hits)."""
+        return self._combat_hint_val
+
+    def note_combat(self, in_fight: bool) -> None:
+        """Tracker hook: one line per tick (cheap bool write, no locks)."""
+        self._combat_hint_val = bool(in_fight)
+
+    def note_watched(self, in_watched: bool) -> None:
+        """Tracker hook: is the live fight one the log narrates?
+
+        True inside a dungeon/rift or at a training dummy (the tracker owns
+        both reads); the bridge's periodic health roll-up only speaks then.
+        Same one-bool-write-per-tick contract as `note_combat`, which this sits
+        beside in the tracker's tick.
+        """
+        self._watched_hint_val = bool(in_watched)
+
+    def _watched_hint(self) -> bool:
+        return self._watched_hint_val
+
+    # --- activity log -------------------------------------------------------
+    @property
+    def log_line(self) -> Callable[[str], None] | None:
+        return self._log_line
+
+    @log_line.setter
+    def log_line(self, cb: Callable[[str], None] | None) -> None:
+        """One sink for every engine's diagnostics (Activity Log)."""
+        self._log_line = cb
+        self.bridge.log_line = cb
+        self.memory.log_line = cb
 
     def _emit_log(self, msg: str) -> None:
-        """Forward diagnostic messages to Python logger and Activity Log."""
-        log.info("[dps-bridge] %s", msg)
-        if self.log_line is not None:
+        log.info("[dps-source] %s", msg)
+        cb = self._log_line
+        if cb is not None:
             try:
-                self.log_line(msg)
+                cb(msg)
             except Exception:
                 pass
 
-    # --- lifecycle --------------------------------------------------------
+    # --- lifecycle ----------------------------------------------------------
     def ensure_started(self) -> None:
-        """Start both the hook IPC listener and fallback memory reader."""
+        """Start the selected capture engine (exactly one — never both)."""
         if self._started or self._stop:
             return
         self._started = True
         self._started_at = time.monotonic()
         self._emit_log(f"DPS Engine started (Mode: {self.mode.upper()})")
-        self._hook_thread = threading.Thread(target=self._ipc_loop, daemon=True,
-                                             name="dps-hook-ipc")
-        self._hook_thread.start()
         if self.mode == "memory":
-            self._thread = threading.Thread(target=self._loop, daemon=True,
-                                            name="dps-memory-poller")
-            self._thread.start()
+            self.memory.start()
+        else:
+            self.bridge.set_mode(self.mode)
+            self.bridge.start()
 
     def shutdown(self) -> None:
         self._stop = True
-        self._redrive.set()
-        if self._thread is not None:
-            try:
-                self._thread.join(timeout=2.0)
-            except Exception:
-                pass
-            self._thread = None
-        if self._hook_thread is not None:
-            self._hook_thread = None
+        self.bridge.stop()
+        self.memory.stop()
 
     def recalibrate(self) -> None:
-        """Ask the loop to re-map the cluster now."""
-        self._redrive.set()
+        """Ask the memory scanner to re-map its cluster now (no-op for bridges)."""
+        self.memory.recalibrate()
 
-    def _refresh_timed(self, dr) -> int:
-        """refresh_ranges() with the first-map duration recorded."""
-        self._map_started = time.monotonic()
-        try:
-            n = dr.refresh_ranges()
-        finally:
-            if self._map_s <= 0.0 and getattr(dr, "_ranges_ready", False):
-                self._map_s = time.monotonic() - self._map_started
-            self._map_started = 0.0
-        return n
+    def force_wide_rehunt(self, why: str = "") -> None:
+        """Forward a forced whole-RW re-hunt to the memory scanner (Option 3).
 
-    def set_type_hint(self, hint: str) -> None:
-        """Seed the DamageDisplay type pointer (ignored once live)."""
-        hint = (hint or "").strip()
-        if hint:
-            self._type_hint = hint
-            if self._reader is not None and self._reader._type_ptr is None:
-                self._reader._type_hint = hint
-
-    def set_result_type_hint(self, hint: str) -> None:
-        """Seed the DamageResult type pointer (ignored once live)."""
-        hint = (hint or "").strip()
-        if hint:
-            self._result_type_hint = hint
-            if self._reader is not None and self._reader._result_type_ptr is None:
-                self._reader._result_type_hint = hint
-
-    def set_mode(self, mode: str) -> None:
-        """Switch between: 'proxy' (Option 1) | 'injector' (Option 2) | 'memory' (Option 3)."""
-        mode = (mode or "proxy").strip().lower()
-        if mode not in ("proxy", "injector", "memory"):
-            mode = "proxy"
-        old_mode = self.mode
-        self.mode = mode
-        log.info("[dps-source] Switched DPS capture mode to: %s", self.mode)
-        if old_mode != mode:
-            self._emit_log(f"DPS capture mode changed to: {self.mode.upper()}")
-        if self._started and not self._stop and mode == "memory":
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._loop, daemon=True,
-                                                name="dps-memory-poller")
-                self._thread.start()
+        The scanner loop applies it within one poll pass; bridge modes have
+        no scan cluster and simply ignore it.
+        """
+        fn = getattr(self.memory, "force_wide_rehunt", None)
+        if callable(fn):
+            fn(why)
 
     @property
     def started(self) -> bool:
         return self._started
 
-    # --- event ring -------------------------------------------------------
+    def set_mode(self, mode: str) -> None:
+        """Switch capture: 'proxy' (Option 1) | 'injector' (Option 2) | 'memory' (Option 3).
+
+        Exactly one engine stays live: the engine losing ownership is
+        stopped before the winner starts, so a leftover mapped DLL stops
+        feeding the ring the moment Option 3 takes over (and the scanner
+        stops polling the moment a bridge option takes over).
+        """
+        mode = (mode or "proxy").strip().lower()
+        if mode not in CAPTURE_MODES:
+            mode = "proxy"
+        old_mode = self.mode
+        self.mode = mode
+        if mode != "memory":
+            self.bridge.set_mode(mode)
+        log.info("[dps-source] Switched DPS capture mode to: %s", self.mode)
+        if old_mode != mode:
+            self._emit_log(f"DPS capture mode changed to: {self.mode.upper()}")
+        if not self._started or self._stop:
+            return  # ensure_started() will start the selected engine
+        if mode == "memory":
+            self.bridge.stop()
+            self.memory.start()
+        else:
+            self.memory.stop()
+            self.bridge.start()
+
+    def set_type_hint(self, hint: str) -> None:
+        self.memory.set_type_hint(hint)
+
+    def set_result_type_hint(self, hint: str) -> None:
+        self.memory.set_result_type_hint(hint)
+
+    # --- event ring ---------------------------------------------------------
     def _push(self, events: list) -> None:
+        """Sink both engines emit into; records the first-event timing."""
         if not events:
             return
+        self.stats.note_decoded(len(events))
         with self._lock:
             for ev in events:
                 self._ring.append(ev)
                 self._total += 1
+        if self._first_event_s <= 0.0 and self._started_at:
+            self._first_event_s = time.monotonic() - self._started_at
 
     def events_after(self, cursor: int) -> tuple[int, list]:
         """``(new_cursor, events)`` for one consumer since ``cursor``."""
@@ -198,383 +349,193 @@ class DamageSourceManager:
             out = list(self._ring)[len(self._ring) - n:]
             return self._total, out
 
-    # --- status for the UI ------------------------------------------------
-    def is_hook_available(self) -> bool:
-        """Check if bridge module is loaded in the game process (cached 2s)."""
-        now = time.monotonic()
-        if self._hook_last_ts > 0.0 and now - self._hook_last_ts < 30.0:
-            return True
-        if now - self._hook_check_ts > 2.0:
-            self._hook_check_ts = now
-            bridge_fn = getattr(self.proc, "detect_combat_bridge", None)
-            if callable(bridge_fn):
-                info = bridge_fn()
-                new_loaded = False
-                if self.mode == "proxy":
-                    new_loaded = (info.get("option") == 1)
-                elif self.mode == "injector":
-                    new_loaded = (info.get("option") == 2)
-                if new_loaded and not self._hook_is_loaded:
-                    self._emit_log(f"Combat Bridge: DLL detected loaded in game — {info.get('status_summary', '')}")
-                elif not new_loaded and info.get("proxy_in_game_dir") and not getattr(self, "_logged_proxy_on_disk", False):
-                    self._logged_proxy_on_disk = True
-                    self._emit_log(f"Combat Bridge: {info.get('status_summary', '')}")
-                self._hook_is_loaded = new_loaded
-            else:
-                fn = getattr(self.proc, "is_module_loaded", None)
-                if callable(fn):
-                    if self.mode == "proxy":
-                        self._hook_is_loaded = bool(fn("version.dll") or fn("dinput8.dll"))
-                    elif self.mode == "injector":
-                        self._hook_is_loaded = bool(fn("farever_dps.dll"))
-                    else:
-                        self._hook_is_loaded = False
-                else:
-                    self._hook_is_loaded = False
-        return self._hook_is_loaded
-
+    # --- status for the UI --------------------------------------------------
     def status(self) -> str:
-        """One of: live | bridge_ready | missing_proxy | need_inject | off."""
-        now = time.monotonic()
-        if (self._hook_last_ts > 0.0 and now - self._hook_last_ts < 5.0) or \
-           (self._last_damage_ts > 0.0 and now - self._last_damage_ts < 5.0):
-            return "live"
-        if self.mode in ("proxy", "injector"):
-            hook_loaded = self.is_hook_available()
-            hb_ts = getattr(self, "_last_heartbeat_ts", 0.0)
-            hb_alive = (hb_ts > 0.0 and (now - hb_ts) < 6.0)
-            if self._hook_events_n > 0 or hook_loaded or hb_alive:
-                return "bridge_ready"
-            if self.mode == "proxy":
-                return "missing_proxy"
-            elif self.mode == "injector":
-                return "need_inject"
-        elif self.mode == "memory":
-            if self._started:
-                return "live"
-        return "off"
+        """One of: live | bridge_ready | missing_proxy | need_inject |
+        inject_failed | locating | mapping | silent | noscan | off.
+
+        Strictly per selected engine: in memory mode a leftover mapped DLL
+        never hijacks the status (it is stopped, and its stream is ignored
+        even if the game still has it resident).
+        """
+        if not self._started:
+            return "off"
+        if self.mode == "memory":
+            return self.memory.status()
+        return self.bridge.status()
+
+    def note_inject_result(self, ok: bool, reason: str = "") -> None:
+        """Record one injector run's outcome (see ui.game_attach).
+
+        Only meaningful for Option 2: a refusal is otherwise invisible,
+        because the DLL genuinely is not loaded and the status reads exactly
+        like an injection nobody has tried yet.
+        """
+        if self.mode == "memory":
+            return
+        self.bridge.inject_problem = "" if ok else (reason or "injector refused")
+
+    @property
+    def inject_problem(self) -> str:
+        """Why the last injector run failed ('' when none / it worked)."""
+        return self.bridge.inject_problem
 
     def counts(self) -> tuple[int, int]:
-        """(last damage numbers read per poll, last hook events count)."""
-        now = time.monotonic()
-        if self._hook_last_ts > 0.0 and (now - self._hook_last_ts) < 10.0:
-            return self._hook_events_n, 0
-        return self._last_damage_n, self._hook_events_n
+        """(events from the live capture, other-source event count)."""
+        if self.mode == "memory":
+            return self.memory.last_batch_n, 0
+        return self.bridge.events_n, 0
+
+    def live_source_name(self) -> str:
+        """Which engine owns the capture right now (selected mode, not traffic)."""
+        if self.mode == "memory":
+            return "memory reader"
+        return self.bridge.source_name()
+
+    def diagnostics(self) -> dict:
+        """Per-poll drop diagnostics from the memory scanner (read by the UI)."""
+        return self.memory.diagnostics()
+
+    def event_path_counts(self) -> dict:
+        """Every stage counter in one dict, for the capture diagnostic.
+
+        Ring occupancy rides along: events decoded but never drained is its own
+        failure (a consumer that died mid-fight, or a drain that stopped), and
+        it is the one number a caller cannot compute from the counters above.
+        """
+        counts = self.stats.snapshot()
+        with self._lock:
+            counts["in_ring"] = len(self._ring)
+            counts["ring_total"] = self._total
+        return counts
 
     def located_pointers(self) -> tuple[int | None, int | None]:
         """(DamageDisplay type ptr, DamageResult type ptr); (None, None) while locating."""
-        dr = self._reader
-        if dr is not None:
-            return dr._type_ptr, dr._result_type_ptr
-        return None, None
-
-    def live_source_name(self) -> str:
-        now = time.monotonic()
-        if self.mode == "proxy":
-            return "combat bridge (proxy)"
-        elif self.mode == "injector":
-            return "combat bridge (injector)"
-        elif self.mode == "memory":
-            return "memory reader"
-        if self._hook_last_ts > 0.0 and (now - self._hook_last_ts) < 10.0:
-            return "combat bridge"
-        return "damage numbers"
-
-    def diagnostics(self) -> dict:
-        """Per-poll drop diagnostics from the active reader (read by the UI)."""
-        dr = self._reader
-        if dr is not None:
-            return dict(dr._diag)
-        return {}
-
-    def timing_text(self) -> str:
-        """Stage timings for the status line (only completed stages)."""
-        parts: list[str] = []
-        if self._calib_s > 0.0:
-            parts.append(f"calib {self._calib_s:.1f}s")
-        if self._map_started and self._map_s <= 0.0:
-            parts.append(f"mapping {time.monotonic() - self._map_started:.0f}s…")
-        elif self._map_s > 0.0:
-            parts.append(f"map {self._map_s:.1f}s")
-        if self._first_event_s > 0.0:
-            parts.append(f"1st event {self._first_event_s:.1f}s")
-        elif self._calib_s > 0.0 and self._started_at:
-            el = time.monotonic() - self._started_at
-            if el < 120.0:
-                parts.append(f"no event yet ({el:.0f}s)")
-        return " · ".join(parts)
+        return self.memory.located_pointers()
 
     def locate_progress(self) -> str:
-        """Type-locate status for the status line ("" while not locating)."""
-        if not self._locate_running:
-            return ""
-        el = time.monotonic() - self._locate_started
-        return f"scan {self._locate_attempts + 1} · {el:.0f}s"
+        return self.memory.locate_progress()
 
     @property
     def damage_stale(self) -> bool:
         """Displays found but nothing decoded (stale offsets, not a quiet fight)."""
-        d = self.diagnostics()
-        return bool(d.get("displays") and not d.get("ok"))
+        return self.memory.damage_stale
 
     @property
     def has_decoded(self) -> bool:
         """True once at least one real event decoded this run."""
         return self._first_event_s > 0.0
 
-    # --- hook IPC event receiver ------------------------------------------
-    # --- hook-install status telemetry ("why is the bridge silent?") ------
-    def _handle_bridge_status(self, obj: dict, now: float | None = None) -> None:
-        """Consume one one-shot status line the DLL emits at hook install time.
-
-        Stages: boot, net, table, mh_init, hook (per function), mh_enable.
-        Every line goes to the Activity Log; failures are kept (per session)
-        so bridge_issue() can explain a loaded-but-silent bridge.
-        """
-        now = time.time() if now is None else now
-        stage = str(obj.get("s") or obj.get("stage") or "status")
-        ok = bool(obj.get("ok"))
-        msg = str(obj.get("m") or obj.get("msg") or "")
-        try:
-            self._bridge_status_log.append((now, stage, ok, msg))
-        except Exception:
-            pass
-        self._emit_log(f"Combat Bridge: {msg or stage}{'' if ok else ' — FAILED'}")
-
     def bridge_issue(self) -> str:
-        """Human reason the bridge is loaded but silent ('' when healthy).
+        """Human reason the bridge is loaded but silent ('' when healthy)."""
+        return self.bridge.bridge_issue()
 
-        Only failures from the NEWEST DLL session count: scanning backwards
-        stops at that session's ``boot`` line, and a healthy ``mh_enable``
-        closes the window — so a working install never shows stale warnings.
+    def bridge_unnamed_hits(self) -> tuple[int, bool]:
+        """(hits sent with a placeholder name, whether the DLL reports it).
+
+        The bridge resolves every unit name inside the game and, when both of
+        its reads come back empty, sends the literal "Enemy" for the hit it
+        could not name. That is not a silence problem - the capture works - so
+        it is reported apart from :meth:`bridge_issue`: a build whose foe-name
+        offsets stopped resolving looks healthy everywhere else, and the names
+        it produces are the only thing that is wrong.
+
+        The flag is what keeps an older DLL's silence apart from a reported
+        zero; the event-path report must not read one as the other.
         """
         try:
-            now = time.time()
-            lines = [x for x in self._bridge_status_log if now - x[0] <= 600.0]
-            out: list[str] = []
-            for _ts, stage, ok, msg in reversed(lines):
-                if stage == "boot":
-                    break
-                if ok and stage == "mh_enable":
-                    return ""
-                if not ok and msg and msg not in out:
-                    out.append(msg)
-                if len(out) >= 3:
-                    break
-            return " · ".join(out)
+            return (int(getattr(self.bridge, "unnamed_n", 0) or 0),
+                    bool(getattr(self.bridge, "unnamed_reported", False)))
         except Exception:
-            return ""
+            return (0, False)
 
-    def _parse_hook_event(self, obj: dict | str, now: float | None = None) -> DamageEvent | None:
-        try:
-            if isinstance(obj, str):
-                obj = json.loads(obj)
-            if not isinstance(obj, dict):
-                return None
-            now = time.time() if now is None else now
-            kind_raw = str(obj.get("t") or obj.get("kind") or "hit").lower()
-            amt = float(obj.get("amt") or obj.get("amount") or obj.get("landed") or 0.0)
-            kill = bool(obj.get("k") or obj.get("kill") or kind_raw == "kill" or False)
-            if amt <= 0.0 and not kill:
-                return None
-            sk = str(obj.get("sk") or obj.get("skill") or "")
-            src = str(obj.get("src") or obj.get("player") or obj.get("caster") or "")
-            tgt = str(obj.get("tgt") or obj.get("target") or "")
-            # Pure kill notifications (st.Player.notifyUnitKilled__impl) carry
-            # only the killed unit's raw id under "uid" — no amount, no killer.
-            uid = str(obj.get("uid") or "")
-            if not tgt and uid:
-                tgt = uid
-            me = bool(obj.get("me") or obj.get("is_me") or False)
-            crit = bool(obj.get("c") or obj.get("crit") or False)
-            pet = str(obj.get("p") or obj.get("pet") or "")
-            if pet and not sk.endswith("(pet)"):
-                sk = f"{sk} (pet)"
+    def timing_text(self) -> str:
+        """Stage timings for the status line (only completed stages)."""
+        m = self.memory
+        parts: list[str] = []
+        if m.calib_s > 0.0:
+            parts.append(f"calib {m.calib_s:.1f}s")
+        if m.mapping:
+            parts.append(f"mapping {time.monotonic() - m.map_started:.0f}s…")
+        elif m.map_s > 0.0:
+            parts.append(f"map {m.map_s:.1f}s")
+        if self._first_event_s > 0.0:
+            parts.append(f"1st event {self._first_event_s:.1f}s")
+        elif m.calib_s > 0.0 and self._started_at:
+            el = time.monotonic() - self._started_at
+            if el < 120.0:
+                parts.append(f"no event yet ({el:.0f}s)")
+        return " · ".join(parts)
 
-            inc = bool(obj.get("inc") or obj.get("incoming") or False)
-            if not src:
-                src = "You" if me else "Player"
-            if not tgt:
-                tgt = "Enemy"
+    # --- compatibility surface ---------------------------------------------
+    # Older call sites and headless tests reach into the engine internals by
+    # name. Keep them working while the state itself lives in the split files.
+    def _parse_hook_event(self, obj, now: float | None = None) -> DamageEvent | None:
+        return parse_hook_event(obj, now)
 
-            if kind_raw in ("heal", "h"):
-                landed = float(obj.get("landed", amt))
-                return DamageEvent(
-                    amount=landed,
-                    skill=sk or "Heal",
-                    skill_name=sk,
-                    crit=False,
-                    kill=kill,
-                    kind=K_HEAL,
-                    source_name=src,
-                    target_name=tgt,
-                    incoming=False,
-                    is_me=me,
-                    t=now,
-                )
-            return DamageEvent(
-                amount=amt,
-                skill=sk or "Attack",
-                skill_name=sk,
-                crit=crit,
-                kill=kill,
-                kind=K_DAMAGE,
-                source_name=src,
-                target_name=tgt,
-                incoming=inc,
-                is_me=me,
-                t=now,
-            )
-        except Exception:
-            return None
+    def _handle_bridge_status(self, obj: dict, now: float | None = None) -> None:
+        self.bridge.handle_status(obj, now)
 
-    def _ipc_loop(self) -> None:
-        """Listen for UDP combat events from farever_dps.dll on localhost:49152."""
-        sock = None
-        while not self._stop:
+    def _ensure_reader(self):
+        return self.memory.ensure_reader()
 
-            if sock is None:
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    try:
-                        sock.bind(("127.0.0.1", 49152))
-                    except Exception:
-                        sock.bind(("0.0.0.0", 49152))
-                    sock.settimeout(0.5)
-                    log.info("[dps-source] UDP IPC listening on port 49152")
-                    self._emit_log("Combat Bridge: Listening for DLL events on UDP 127.0.0.1:49152")
-                except Exception as e:
-                    log.debug("[dps-source] UDP IPC bind 49152: %s (will retry)", e)
-                    if sock:
-                        try:
-                            sock.close()
-                        except Exception:
-                            pass
-                    sock = None
-                    time.sleep(1.0)
-                    continue
+    @property
+    def _reader(self):
+        return self.memory.reader
 
-            try:
-                data, addr = sock.recvfrom(65535)
-                if not data:
-                    continue
-                if not self._first_packet_logged:
-                    self._first_packet_logged = True
-                    self._emit_log(f"Combat Bridge: Connected — received UDP packet from DLL ({addr[0]}:{addr[1]})")
-                now = time.time()
-                text = data.decode("utf-8", errors="replace").replace("\x00", "")
-                lines = text.splitlines()
-                evs = []
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        log.debug("[dps-hook-ipc] Non-JSON line: %r", line)
-                        continue
-                    if not isinstance(obj, dict):
-                        log.debug("[dps-hook-ipc] Discarded non-object line: %r", line)
-                        continue
-                    # Hook-install status telemetry — never a combat event.
-                    if str(obj.get("t") or "") == "status":
-                        self._handle_bridge_status(obj, now)
-                        continue
-                    if str(obj.get("t") or "") == "heartbeat":
-                        self._last_heartbeat_ts = time.monotonic()
-                        self._hook_is_loaded = True
-                        continue
-                    try:
-                        ev = self._parse_hook_event(obj, now)
-                        if ev is not None:
-                            evs.append(ev)
-                        else:
-                            log.debug("[dps-hook-ipc] Discarded/unparsed line: %r", line)
-                    except Exception as pe:
-                        log.warning("[dps-hook-ipc] Parse error for line %r: %s", line, pe)
-                if evs:
-                    self._push(evs)
-                    self._hook_last_ts = time.monotonic()
-                    prev_count = self._hook_events_n
-                    self._hook_events_n += len(evs)
-                    if self._first_event_s <= 0.0 and self._started_at:
-                        self._first_event_s = time.monotonic() - self._started_at
-                    if not self._first_event_logged:
-                        self._first_event_logged = True
-                        self._emit_log(f"Combat Bridge: Live combat events streaming from DLL!")
-                    # Log the first 10 hits individually so user sees confirmation in Activity Log
-                    if prev_count < 10:
-                        for e in evs:
-                            if prev_count < 10:
-                                prev_count += 1
-                                crit_flag = " (CRIT)" if e.crit else ""
-                                kill_flag = " [KILL]" if e.kill else ""
-                                tag = "[HEAL]" if e.is_heal else ("[TAKEN]" if e.incoming else "[HIT]")
-                                suffix = " heal" if e.is_heal else " dmg"
-                                self._emit_log(f"Combat Bridge: {tag} #{prev_count} {e.source_name} -> {e.target_name} | {e.skill_name} | {e.amount:.1f}{suffix}{crit_flag}{kill_flag}")
-                    elif self._hook_events_n % 50 == 0:
-                        self._emit_log(f"Combat Bridge: Live stream healthy — {self._hook_events_n} combat events captured.")
-                    log.info("[dps-hook-ipc] Successfully applied %d combat event(s)", len(evs))
-            except socket.timeout:
-                continue
-            except Exception:
-                time.sleep(0.05)
-        if sock:
-            try:
-                sock.close()
-            except Exception:
-                pass
+    @_reader.setter
+    def _reader(self, value) -> None:
+        self.memory.reader = value
 
-    # --- background loop (memory reader fallback) -------------------------
-    def _loop(self) -> None:
-        """Background memory reader fallback (polls combat floaties when hook is inactive)."""
-        time.sleep(0.5)
-        dr = None
-        last_ev = 0.0
-        while not self._stop:
-            if self.mode != "memory":
-                time.sleep(1.0)
-                continue
-            # If native hook is actively streaming events, yield to it (no double counting)
-            now = time.monotonic()
-            if self._hook_last_ts > 0.0 and (now - self._hook_last_ts) < 5.0:
-                time.sleep(1.0)
-                continue
+    @property
+    def _locate_running(self) -> bool:
+        return self.memory._locate_running
 
-            if dr is None:
-                try:
-                    dr = self._ensure_reader()
-                except Exception as e:
-                    log.debug("[dps-source] Failed to initialize DamageReader: %s", e)
-                    time.sleep(1.0)
-                    continue
+    @_locate_running.setter
+    def _locate_running(self, value: bool) -> None:
+        self.memory._locate_running = value
 
-            try:
-                evs = dr.poll()
-            except (ProcError, OSError):
-                evs = []
-            except Exception as e:
-                log.debug("[dps-source] Poll exception: %s", e)
-                evs = []
+    @property
+    def _locate_started(self) -> float:
+        return self.memory._locate_started
 
-            if evs:
-                now_ev = time.monotonic()
-                last_ev = now_ev
-                self._push(evs)
-                self._last_damage_ts = now_ev
-                self._last_damage_n = len(evs)
-                if self._first_event_s <= 0.0 and self._started_at:
-                    self._first_event_s = now_ev - self._started_at
+    @_locate_started.setter
+    def _locate_started(self, value: float) -> None:
+        self.memory._locate_started = value
 
-            in_combat = (time.monotonic() - last_ev) < 3.0
-            time.sleep(POLL_IN_COMBAT if in_combat else POLL_IDLE)
+    @property
+    def _locate_attempts(self) -> int:
+        return self.memory._locate_attempts
 
-    def _ensure_reader(self) -> DamageReader:
-        if self._reader is None:
-            # Dedicated Hl: bg poller caches must not race the UI thread's hl.
-            self._reader = DamageReader(self.proc, Hl(self.proc),
-                                        type_hint=self._type_hint,
-                                        result_type_hint=self._result_type_hint)
-        return self._reader
+    @_locate_attempts.setter
+    def _locate_attempts(self, value: int) -> None:
+        self.memory._locate_attempts = value
+
+    @property
+    def _calib_s(self) -> float:
+        return self.memory.calib_s
+
+    @_calib_s.setter
+    def _calib_s(self, value: float) -> None:
+        self.memory.calib_s = value
+
+    @property
+    def _map_s(self) -> float:
+        return self.memory.map_s
+
+    @_map_s.setter
+    def _map_s(self, value: float) -> None:
+        self.memory.map_s = value
+
+    @property
+    def _hook_events_n(self) -> int:
+        return self.bridge.events_n
+
+    @property
+    def _hook_last_ts(self) -> float:
+        return self.bridge.last_event_ts
+
+    @property
+    def _last_heartbeat_ts(self) -> float:
+        return self.bridge.heartbeat_ts
+

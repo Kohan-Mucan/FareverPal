@@ -74,18 +74,29 @@ if not has_raw_data:
         if os.path.exists(src):
             datas.append((src, "assets/data"))
 
-# --- data: dps_bridge (combat proxy DLLs) ---------------------------------
-# The DPS settings page copies version.dll / dinput8.dll from here into the
-# game folder (Install DLL) and classifies game-folder DLLs by hashing them
-# against these reference copies (the DLLs themselves are the ground truth,
-# so no checksums manifest ships — is_farever_proxy derives the hashes from
-# them at runtime). The frozen build therefore reports 3rd-party mods
-# correctly instead of falling back to the weak embedded-signature check.
-# Guarded like the atlas section: builds without the bridge files (e.g. CI)
-# still succeed.
+# --- data: active native combat bridge binaries ---------------------------
+# The native build keeps outputs beside the C sources, then publishes only
+# the active bridge set here for development and packaging. version.dll is
+# retired: its source stays in GameFiles/Farever/hooks, but it is not built,
+# copied, packaged, or offered by the app.
+#
+# farever_dps.exe is the only helper binary the app ever RUNS (Option 2's hot
+# attach), and the only one shipped. A second copy also shipped as
+# farever_uninject.exe: injector.c used to pick inject-vs-uninject from its own
+# filename, so identically built bytes under that name were a DIFFERENT
+# program, and handing it to the launch list made Option 2 uninject instead of
+# inject. Both halves of that are now gone - the filename dispatch was removed
+# from injector.c, where a mode needs an explicit --uninject argument, and the
+# copy is neither published nor packaged. Removal runs through the crash-safe
+# Python path (core.proc.safe_uninject_hook, which calls the DLL's SafeUnload
+# export). test_dps_capture.py pins that the uninjector is neither launched nor
+# shipped and that no name can select a mode. The dev hot-uninject scripts are
+# unaffected: they run `farever_dps.exe --uninject` from the hooks source
+# folder.
 dps_bridge_src = os.path.join(SPECPATH, "dps_bridge")
 if os.path.isdir(dps_bridge_src):
-    for _bridge_f in ("version.dll", "dinput8.dll", "farever_dps.dll"):
+    for _bridge_f in ("dinput8.dll", "userenv.dll", "farever_dps.dll",
+                      "farever_dps.exe"):
         _bridge_src = os.path.join(dps_bridge_src, _bridge_f)
         if os.path.isfile(_bridge_src):
             datas.append((_bridge_src, "dps_bridge"))
@@ -255,6 +266,30 @@ a = Analysis(
         "farever_companion.data.raw_craft",
         "farever_companion.data.raw_item_drops",
         "farever_companion.data.raw_locs",
+        # HUD overlays are imported BY RUNTIME STRING in ui/overlay_manager.py
+        # (_overlay_class -> import_module(f".overlays.{mod_name}")), so
+        # PyInstaller's static analysis never sees them - ui/overlays/__init__.py
+        # is empty, so there is no static edge to follow either. Without these
+        # the frozen exe raises ModuleNotFoundError the moment
+        # open_startup_overlays tries to restore the user's remembered
+        # overlays: the toggles stay checked (settings persist) but the windows
+        # never open.
+        #
+        # Keep these in step with overlay_manager._OVERLAY_SOURCES, in both
+        # directions. The DPS entry is the PACKAGE `overlays.dps`, not a module
+        # inside it: _OVERLAY_SOURCES["dps"] is ("dps", "DpsOverlay") and
+        # DpsOverlay is re-exported from ui/overlays/dps/__init__.py. Listing a
+        # non-existent `dps_overlay` module fails silently in a release - the
+        # request() safety net logs "Overlay 'dps' failed to build" and reverts
+        # the toggle, so only a user who had the DPS HUD on at launch ever sees
+        # it. test_every_hiddenimport_resolves_and_covers_the_overlay_registry
+        # in tests/test_repo_hygiene.py is what keeps the list honest.
+        "farever_companion.ui.overlays.entity_overlay",
+        "farever_companion.ui.overlays.minimap",
+        "farever_companion.ui.overlays.speedrun_overlay",
+        "farever_companion.ui.overlays.dungeon_overlay",
+        "farever_companion.ui.overlays.dps",
+        "farever_companion.ui.overlays.dummy_overlay",
     ],
     hookspath=[],
     hooksconfig={},

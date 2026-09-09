@@ -2,6 +2,69 @@
 import os
 import sys
 
+# Developer-only fatal crash capture. Normal users get no crash file; when a
+# developer sets FAREVER_DEV_CRASH_LOG, faulthandler records Python/native
+# thread stacks before a fatal signal or Windows access violation terminates
+# the process, which cannot be caught by the normal excepthook.
+_DEV_CRASH_LOG = None
+_dev_crash_path = os.environ.get("FAREVER_DEV_CRASH_LOG", "").strip()
+if _dev_crash_path:
+    try:
+        import faulthandler
+        from farever_companion.runtime import crash_log
+        # ONE descriptor for the whole session: faulthandler's dump, the VEH's
+        # fatal stamp, the session marker and every Python traceback all write
+        # through it, so run.log reads in the order things happened and with a
+        # single line ending. It used to be five writers with three different
+        # line-ending behaviours, which is what left the file unreadable.
+        _DEV_CRASH_LOG = crash_log.open_dev_log(_dev_crash_path)
+        faulthandler.enable(file=_DEV_CRASH_LOG.file(), all_threads=True)
+        # The dump below that line has no clock of its own, and it cannot be
+        # given one afterwards: faulthandler writes it to the file DESCRIPTOR
+        # (a file object's write() is never called) and the process dies right
+        # after it lands. A vectored exception handler stamps each fatal entry
+        # instead — installed SECOND, because the handlers run in reverse
+        # registration order, which is what puts the stamp above the dump.
+        # Diagnostics only: a failure here must never stop the app from
+        # starting, so every step is contained (see farever_companion/crash_log).
+        try:
+            crash_log.install_fatal_stamp(_dev_crash_path)
+            crash_log.write_session_marker(_dev_crash_path)
+        except Exception:
+            pass
+        print(f"[dev] fatal crash capture -> {_dev_crash_path}", flush=True)
+    except (OSError, RuntimeError):
+        _DEV_CRASH_LOG = None
+
+
+def _write_dev_crash(text: str) -> None:
+    """Append a Python traceback to the opt-in developer crash log.
+
+    Stamped with the wall-clock time: run.log is APPENDED across sessions and
+    faulthandler's own dumps carry no timestamp at all, so without this a
+    second crash is indistinguishable from the first that preceded it.
+
+    Goes through crash_log's single writer — the same descriptor faulthandler
+    and the fatal stamp hold — instead of opening the path again: a second
+    handle wrote the text-mode ``\r\n`` the rest of the file does not use, and
+    opening the path is what let entries interleave.
+    """
+    path = os.environ.get("FAREVER_DEV_CRASH_LOG", "").strip()
+    if not path:
+        return
+    try:
+        from farever_companion.runtime import crash_log
+        crash_log.write_python_exception(path, text)
+    except Exception:
+        pass
+
+# A source-tree launch is a development run: keep it in the disposable
+# dist/dev-moddata folder. Frozen builds are identified by sys.frozen and use
+# <exe>/moddata; an explicit FAREVER_MODDATA_DIR still wins for tools/tests.
+# Clear a stale user flavor inherited from the shell so run.py cannot
+# accidentally resolve to the main user-data folder.
+os.environ.pop("FAREVER_DATA_FLAVOR", None)
+
 
 def _profile_raw_data() -> None:
     """Time each raw_* payload load at startup and log the durations.
@@ -125,6 +188,8 @@ try:
 except Exception as e:
     import traceback
     tb = traceback.format_exc()
+    _write_dev_crash(tb)
+    print(tb, file=sys.stderr, flush=True)
     try:
         from PySide6 import QtWidgets
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -146,6 +211,7 @@ if __name__ == "__main__":
         # bootloader's raw error box - show a clear dialog instead.
         import traceback
         tb = traceback.format_exc()
+        print(tb, file=sys.stderr, flush=True)
         try:
             from PySide6 import QtWidgets
             app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

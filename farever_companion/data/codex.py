@@ -9,6 +9,7 @@ import re
 from functools import lru_cache
 
 from .. import paths
+from ..rules import NO_LOC_KINDS, PREMIUM_SHOP_ID_RE, is_premium_shop_id
 from . import cdb, units, names, collections as col
 
 try:
@@ -85,6 +86,45 @@ def unit_regions() -> dict[str, str]:
 
 
 @lru_cache(maxsize=256)
+@lru_cache(maxsize=1)
+def _by_display_name() -> dict[str, str]:
+    """Lowercased display name -> codex unit id, for names only ONE unit
+    carries.
+
+    Ambiguous names are dropped rather than resolved first-wins: two critters
+    sharing a name must send the reader to neither rather than to whichever
+    sorted first.
+
+    Built from `enemies_data()` rather than the raw codex payload, so it
+    carries exactly the keys the app compiles — the raw rows keep `icon` and
+    `region`, the compiled ones do not.
+    """
+    counts: dict[str, list[str]] = {}
+    for uid, entry in enemies_data().items():
+        nm = str(entry.get("name") or "").strip().lower()
+        if nm:
+            counts.setdefault(nm, []).append(uid)
+    return {nm: ids[0] for nm, ids in counts.items() if len(ids) == 1}
+
+
+def find_by_name(name: str | None) -> str | None:
+    """The codex unit id carrying this display name, or None.
+
+    How a merchant offer for something that is not an ITEM still finds its
+    page. The pets and critters have no `item.json` row at all — a vendor sells
+    "Demonic Raminiature" and the item sheets have never heard of it — but they
+    are full codex entries with a card, a region and art. Reporting them as
+    unnamed was true of the item sheet and false of the game.
+
+    None is a real answer: a name no codex unit carries is genuinely unknown,
+    and inventing a link for it is the guess this whole module refuses.
+    """
+    nm = str(name or "").strip()
+    if not nm:
+        return None
+    return _by_display_name().get(nm.lower())
+
+
 def find_unit_region(unit_id: str | None) -> str | None:
     """The region a codex unit's card lives in ('Z1'..'Z3', 'Bosses',
     'Pets', 'Z0'), or None when the unit has no codex card. Powers the
@@ -120,6 +160,25 @@ def enemies_data() -> dict[str, dict]:
                     if isinstance(item, dict) and "id" in item:
                         out[item["id"]] = {**out.get(item["id"], {}), **item}
     return out
+
+
+def unit_icon(unit_id: str | None) -> str:
+    """The atlas sprite key for a codex unit card.
+
+    A card names its own art in an `icon` field, and for the `TODO_*`
+    placeholder cards that field is the ONLY usable key: the id names the
+    CARD, the icon names the SPRITE. `TODO_WanderingMerchant.icon` is
+    `WanderingMerchant` and `TODO_StableMaster.icon` is `StableMaster`, so
+    drawing the id directly (as the Drops From rows did) hit no atlas entry
+    and painted a bare placeholder box on every Guild Merchant / Stable
+    Master row. Falls back to `unit_id` when the card carries no icon, and ''
+    for an empty id."""
+    if not unit_id:
+        return ""
+    entry = enemies_data().get(unit_id)
+    if isinstance(entry, dict) and entry.get("icon"):
+        return str(entry["icon"])
+    return unit_id
 
 
 @lru_cache(maxsize=1)
@@ -167,7 +226,7 @@ def dungeon_zone_tag(uid: str) -> str | None:
 # 'achievement' is the reflagged (compiler) form: an achievement reward is
 # obtainable in-game but has no world spawn, so it resolves to its achievement
 # title rather than the fuzzy species-group fallback.
-_NO_LOC_KINDS = ("todo", "unreleased", "achievement")
+_NO_LOC_KINDS = NO_LOC_KINDS
 
 # Rift reward tables (scan_item_drops anchors them at the arena entrance as
 # chest sources) — display as their natural name instead of "Chest: Rift_Tier6".
@@ -212,14 +271,17 @@ def _vendor_name_coords() -> dict[str, tuple[tuple[dict, ...], str]]:
     return {nm: (tuple(cs), nm) for nm, cs in out.items()}
 
 
-# Cash-shop / early-access premium items. The canonical list is the game's
-# shop.json, compiled into raw_shop by compiler.py — until the dump ships it,
-# the known premium set is identified by id: an `_EA_` / `EarlyAccess` token
+# Cash-shop / early-access premium items. The canonical list is the item
+# data's own vendor rows (`_shop_ids` → `sources.shop_item_ids()`), so a shop
+# item is one a counter actually sells; an id that reads as premium but has no
+# vendor row is still caught here: an `_EA_` / `EarlyAccess` token
 # (Glider_Butterfly_EA_Spark, Rabbit_EarlyAccess_Spark) or the 'Spark'
 # premium species PREFIX (SparkHorse_01). Wild 'spark-dust' pets use the
 # `_Spark` SUFFIX on a normal species (Rabbit_Spark, Frog_Spark) and are
 # deliberately NOT matched.
-_SHOP_ID_RE = re.compile(r"(?i)(_ea_|earlyaccess|^spark)")
+# Re-exported from the shared rule module so `codex._SHOP_ID_RE` keeps
+# resolving here (the tests read it) while the compiler reads the same pattern.
+_SHOP_ID_RE = PREMIUM_SHOP_ID_RE
 
 # Zone-mob ids embed their zone tag ('OgreManfish_Z2W_FS_Claws',
 # 'Manfish_Z1D_Claws'). An ID-derived species group must never be one of
@@ -231,29 +293,28 @@ _ZONE_TAG_RE = re.compile(r"(?i)^Z\d")
 
 @lru_cache(maxsize=1)
 def _shop_ids() -> frozenset[str]:
-    """Cash-shop item ids. Prefers the compiled raw_shop (every row in the
-    game's shop.json); falls back to an empty set until the dump ships it."""
+    """Item ids a shop counter sells — derived from the drops index.
+
+    The index records every shop offer as a vendor drop row on the item, so
+    the set comes from the item data itself (`sources.shop_item_ids()`) rather
+    than a separate `shop.json` sheet (retired 2026-10-05: the dump never
+    shipped it, so `raw_shop` was a placeholder and every read fell through to
+    the id pattern below). Imported lazily — `sources` imports this package's
+    siblings, and this is only ever called at runtime.
+    """
     try:
-        from . import raw_shop
-        rows = getattr(raw_shop, "DATA", None)
-        if rows:
-            if isinstance(rows, dict):
-                rows = rows.get("shop") or rows.get("items") or []
-            if isinstance(rows, list):
-                ids = {str(r.get("id")) for r in rows if isinstance(r, dict) and r.get("id")}
-                if ids:
-                    return frozenset(ids)
+        from .items import sources as _sources
+        return _sources.shop_item_ids()
     except Exception:
-        pass
-    return frozenset()
+        return frozenset()
 
 
 def is_shop_item(item: dict) -> bool:
     """True for cash-shop / early-access premium items: the id is in the
-    compiled shop.json list (raw_shop), or matches the known-premium id
-    pattern (_SHOP_ID_RE) until the dump ships shop.json."""
+    drops index's vendor-derived shop set (sources.shop_item_ids()), or
+    matches the known-premium id pattern (_SHOP_ID_RE)."""
     uid = item.get("id") or ""
-    return uid in _shop_ids() or bool(_SHOP_ID_RE.search(uid))
+    return uid in _shop_ids() or is_premium_shop_id(uid)
 
 
 def item_sources(item: dict) -> set[str]:
@@ -350,33 +411,52 @@ def _group_mob_coords(group: str) -> tuple[tuple[dict, ...], tuple[str, ...]]:
     return tuple(coords), tuple(names)
 
 
+def _poi_locs_rows() -> list[dict]:
+    """The poi_locs sheet as a flat list of rows, whichever shape it shipped in.
+
+    The compiled shims keep this sheet two different ways: raw_data as a flat
+    list, raw_locs as the scanner's own {"pois": [...]} wrapper. Reading
+    raw_locs first and iterating the wrapper directly yielded its *keys*
+    ("pois") instead of its rows, so the soulstone lookup came back empty no
+    matter how fresh the data was. Unwrap here, then read the shims, then the
+    loose JSON (a dev checkout can have a stale shim).
+    """
+    def rows_of(payload) -> list[dict]:
+        if isinstance(payload, dict):
+            payload = next((v for v in payload.values() if isinstance(v, list)), [])
+        return [r for r in (payload or []) if isinstance(r, dict)]
+
+    # Lazy like the original: raw_locs is a ~500 KB module and most sessions
+    # never need this sheet at all.
+    try:
+        from . import raw_locs
+    except Exception:
+        raw_locs = None
+    try:
+        from . import raw_data
+    except Exception:
+        raw_data = None
+    for mod in (raw_locs, raw_data):
+        if mod is None:
+            continue
+        rows = rows_of((getattr(mod, "DATA", None) or {}).get("poi_locs"))
+        if rows:
+            return rows
+    try:
+        data = json.loads(paths.poi_locs_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return rows_of(data)
+
+
 @lru_cache(maxsize=1)
 def soulstone_pois() -> tuple[dict, ...]:
     """The 8 soulstone demon-boss summon spots (the poi_locs rows), each with
     the boss name, world position, zone, and summon cost. Read from the
-    compiled raw_data shim first (the frozen build has no loose JSONs),
-    falling back to the JSON file in dev checkouts with a stale shim."""
-    try:
-        from . import raw_locs
-        rows = getattr(raw_locs, "DATA", None)
-        rows = rows.get("poi_locs") if isinstance(rows, dict) else None
-    except Exception:
-        rows = None
-    if not rows:
-        try:
-            from . import raw_data
-            rows = getattr(raw_data, "DATA", None)
-            rows = rows.get("poi_locs") if isinstance(rows, dict) else None
-        except Exception:
-            rows = None
-    if not rows:
-        try:
-            data = json.loads(paths.poi_locs_path().read_text(encoding="utf-8"))
-            rows = data.get("pois") if isinstance(data, dict) else data
-        except (OSError, ValueError):
-            return ()
-    return tuple(r for r in rows or []
-                 if isinstance(r, dict) and r.get("sub_kind") == "soulstone")
+    compiled shims (a frozen build has no loose JSONs), falling back to the
+    JSON file in dev checkouts with a stale shim."""
+    return tuple(r for r in _poi_locs_rows()
+                 if r.get("sub_kind") == "soulstone")
 
 
 @lru_cache(maxsize=1)

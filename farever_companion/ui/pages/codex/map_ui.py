@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid as _is_valid
 
 from ... import theme
+from ....core import game_state
 from ....core.updater import is_frozen
 from ....data import codex
 from .map import CodexZoneMapCanvas
@@ -74,21 +76,41 @@ class CodexMapUiMixin:
         map_v.addWidget(self._map_info_lbl)
         return self._map_container
 
+    def _codex_map_canvas(self) -> QtWidgets.QWidget | None:
+        """The live map canvas, or None when the Codex page was never built or
+        has since been evicted.
+
+        The panel's page-local attrs OUTLIVE the page they were built for:
+        `_evict_page` deleteLater()s the page's widget tree, but the Python
+        attributes on the panel survive, pointing at deleted C++ objects. So
+        `hasattr` is not a liveness check here - calling into one of those
+        raises `RuntimeError: Internal C++ object ... already deleted`. Every
+        map write goes through here (same guard `_refresh_codex_grid` uses).
+        """
+        w = getattr(self, "_codex_map_widget", None)
+        return w if (w is not None and _is_valid(w)) else None
+
+    def _codex_info_label(self) -> QtWidgets.QLabel | None:
+        """The live info-line label under the map, or None (see
+        `_codex_map_canvas`)."""
+        lbl = getattr(self, "_map_info_lbl", None)
+        return lbl if (lbl is not None and _is_valid(lbl)) else None
+
     def _clear_codex_map_selection(self):
-        if hasattr(self, "_codex_map_widget"):
-            self._codex_map_widget.set_multi_pins("", [])
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText("Left-click card to plot spawns")
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_multi_pins("", [])
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText("Left-click card to plot spawns")
         self._last_codex_item = None
         self._zone_pins_active = False
 
     def _drop_mob_names(self) -> list[str]:
         """Clean human names of the mobs that drop the last selected item.
 
-        Reads the compiled `drops_from` markers (dicts carry id + name; plain
-        strings are raw ids) and falls back to resolving single
-        mob_id/drop_mob/mob_name fields through enemies_data for a display
-        name — matching the resolver's mob-drop chain. Deduped, order kept.
+        Reads the compiled `drops_from` markers, then falls back to resolving
+        mob_id/drop_mob/mob_name through enemies_data. Deduped, order kept.
         """
         item = self._last_codex_item
         if not item:
@@ -167,24 +189,18 @@ class CodexMapUiMixin:
             copy_json = menu.addAction("Copy Data (JSON)")
             copy_json.setEnabled(self._last_codex_item is not None)
 
-        # Mob-drop sources in clean human names (disabled actions are
-        # display-only). Dev builds nest them under a submenu and offer a
-        # copy action; user builds list them flat with a header and nothing
-        # else.
+        # Mob drops as clean human names, display-only. Dev nests them under
+        # a submenu plus a copy action; user builds list them under a header.
         copy_drops: QtWidgets.QAction | None = None
         if drop_names:
+            head = f"Dropped By ({len(drop_names)} Mobs)"
+            host = menu.addMenu(head) if dev else menu
+            if not dev:
+                host.addAction(head).setEnabled(False)
+            for nm in drop_names:
+                host.addAction(nm).setEnabled(False)
             if dev:
-                sub = menu.addMenu(f"Dropped By ({len(drop_names)} Mobs)")
-                for nm in drop_names:
-                    act = sub.addAction(nm)
-                    act.setEnabled(False)
                 copy_drops = menu.addAction("Copy Drop Mobs")
-            else:
-                header = menu.addAction(f"Dropped By ({len(drop_names)} Mobs)")
-                header.setEnabled(False)
-                for nm in drop_names:
-                    act = menu.addAction(nm)
-                    act.setEnabled(False)
 
         # Full achievement reward info (name, category · points, desc) —
         # display-only in both builds. Separator only when something precedes
@@ -273,18 +289,17 @@ class CodexMapUiMixin:
             mob_count += 1
             for c in coords:
                 all_pins.append({
-                    "x": c.get("x", 0),
-                    "y": c.get("y", 0),
-                    "color": m_col,
-                    "name": item.get("name") or card.uid,
-                    "is_dungeon": is_dung
-                })
+                    "x": c.get("x", 0), "y": c.get("y", 0),
+                    "color": m_col, "name": item.get("name") or card.uid,
+                    "is_dungeon": is_dung})
 
-        if hasattr(self, "_codex_map_widget"):
-            self._codex_map_widget.set_multi_pins("All Visible Mobs", all_pins)
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_multi_pins("All Visible Mobs", all_pins)
 
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"Plotted {len(all_pins)} Pins ({mob_count} Mobs)" if all_pins else "No visible pins to plot")
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"Plotted {len(all_pins)} Pins ({mob_count} Mobs)" if all_pins else "No visible pins to plot")
 
     def _on_codex_mob_selected(self, uid: str, item: dict):
         mname = item.get("name") or uid
@@ -292,8 +307,9 @@ class CodexMapUiMixin:
         self._last_codex_item = item  # right-click menu can dump the full data dict
 
         # Update Right-Side Zone Spawn Map canvas
-        if hasattr(self, "_codex_map_widget"):
-            self._codex_map_widget.set_selected_mob(mname, coords, item=item)
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_selected_mob(mname, coords, item=item)
 
         # Mounts/gliders that drop from mobs read as a drop count (unique
         # mobs) instead of a spawn-location count.
@@ -311,9 +327,6 @@ class CodexMapUiMixin:
         if isinstance(ach, dict) and ach.get("name"):
             ach_line = f" — Achievement: {ach['name']}"
 
-        # Human name only — the uid stays available via the right-click Copy
-        # Data (JSON) dev menu and the card tooltip, so the label reads
-        # cleanly without the raw id.
         if mob_ids:
             label = f"{mname} (Dropped by {len(mob_ids)} Mobs)"
         elif coords:
@@ -341,8 +354,9 @@ class CodexMapUiMixin:
         if ach_line and "Achievement" not in label:
             label += ach_line
 
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(label)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(label)
 
     # --- jump into the Codex (the source-row / mount-glider links on the
     # Items/Craft pages) ---
@@ -357,13 +371,12 @@ class CodexMapUiMixin:
         if not hasattr(self, "_codex_tabs"):
             return
         self._codex_reset_jump_filters()
-        from ....data import codex as cdx
         # Soulstone bosses have no card — reveal their spot in the Soulstones list.
-        for p in cdx.soulstone_pois():
+        for p in codex.soulstone_pois():
             if p.get("spawn_unit") == unit_id:
                 self._codex_open_soulstone(p.get("id") or "")
                 return
-        rid = cdx.find_unit_region(unit_id)
+        rid = codex.find_unit_region(unit_id)
         if rid is None:
             # a single chest (no unit card) -> the Collection Chests list
             self._codex_open_chest(unit_id)
@@ -436,8 +449,7 @@ class CodexMapUiMixin:
         like a real user would. Mounts/gliders land on the Collection tab's
         Mounts/Gliders sub-view; pets on its Pets sub-view; everything else
         on its region tab (Z1/Z2/Z3 or the Others catch-all)."""
-        from ....data import codex as cdx
-        info = cdx.enemies_data().get(unit_id) or {}
+        info = codex.enemies_data().get(unit_id) or {}
         itype = (info.get("type") or "").lower()
         is_mount = "mount" in itype or unit_id.startswith("Mount_")
         is_glider = "glider" in itype or unit_id.startswith("Glider_")
@@ -452,7 +464,7 @@ class CodexMapUiMixin:
             if btn is not None:
                 btn.click()
         else:
-            tab = cdx.region_names().get(rid)
+            tab = codex.region_names().get(rid)
             if tab and hasattr(self, "_codex_tabs"):
                 self._codex_tabs.setCurrentText(tab)
         self._refresh_codex_grid(reset_scroll=True)
@@ -632,7 +644,7 @@ class CodexMapUiMixin:
             # Attached: use the model's stateful RiftTracker (it carries the
             # once-per-entry announcement-clear hysteresis the HUD relies on).
             try:
-                rst = model.rift_status()
+                rst = game_state.rift(model)
             except Exception:
                 return None
         else:
@@ -687,6 +699,15 @@ class CodexMapUiMixin:
             return tr.is_tracked("orb", item["id"])
         return tr.is_tracked("chest", self._chest_track_key(item))
 
+    def _codex_chest_orb_pin(self, item: dict) -> dict:
+        """One codex-map pin for a chest/orb row. Both the single-row track
+        and the plot-the-remaining pass build the same dict, so it is built
+        once here: a secret orb plots red on THIS preview map, everything
+        else in its normal chest colour."""
+        color = ORB_PIN_COLOR if item["kind"] == "orb" else theme.CHEST
+        return {"x": item["x"], "y": item["y"], "color": QtGui.QColor(color),
+                "name": item["label"], "is_chest": item["kind"] == "chest"}
+
     def _track_chest_orb(self, item: dict) -> None:
         """Track a chest/orb row exactly like clicking its minimap marker
         (compass needle + Entity HUD waypoint row), and plot the same spot as
@@ -698,16 +719,13 @@ class CodexMapUiMixin:
             tr.toggle("orb", item["id"])
         else:
             tr.toggle("chest", self._chest_track_key(item))
-        if hasattr(self, "_codex_map_widget"):
-            color = ORB_PIN_COLOR if item["kind"] == "orb" else theme.CHEST
-            self._codex_map_widget.set_multi_pins(item["label"], [{
-                "x": item["x"], "y": item["y"],
-                "color": QtGui.QColor(color),
-                "name": item["label"],
-                "is_chest": item["kind"] == "chest",
-            }])
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(item["label"])
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_multi_pins(item["label"],
+                                  [self._codex_chest_orb_pin(item)])
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(item["label"])
 
     def _mark_chest_orb_done(self, item: dict) -> None:
         """Right-click on a Chests/Orbs row: record it as collected in the
@@ -725,10 +743,12 @@ class CodexMapUiMixin:
                 tr.clear()
         if hasattr(self, "_zone_pins_active"):
             self._zone_pins_active = False
-        if hasattr(self, "_codex_map_widget"):
-            self._codex_map_widget.set_multi_pins("", [])
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"Collected: {item['label']}")
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_multi_pins("", [])
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"Collected: {item['label']}")
         # Undo chip: show the Last Hidden frame so a mistaken right-click can
         # be reverted (click the chip to un-collect).
         if hasattr(self, "_last_hidden_chest_orb"):
@@ -742,7 +762,8 @@ class CodexMapUiMixin:
         single zone when `zone` is given) — used by the Chests / Orbs views'
         zone keys and their pins button. Only the active kind is plotted."""
         self._zone_pins_active = True
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         from .chest_orb_list import remaining_items
         kind = self._codex_chest_orb_kind()
@@ -751,17 +772,12 @@ class CodexMapUiMixin:
         for it in remaining_items(self, kinds):
             if zone and it["zone"] != zone:
                 continue
-            color = ORB_PIN_COLOR if it["kind"] == "orb" else theme.CHEST
-            pins.append({
-                "x": it["x"], "y": it["y"],
-                "color": QtGui.QColor(color),
-                "name": it["label"],
-                "is_chest": it["kind"] == "chest",
-            })
+            pins.append(self._codex_chest_orb_pin(it))
         label = f"{zone} Remaining" if zone else "Remaining Chests & Orbs"
-        self._codex_map_widget.set_multi_pins(label, pins)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{len(pins)} remaining plotted")
+        canvas.set_multi_pins(label, pins)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{len(pins)} remaining plotted")
 
     def _track_dungeon(self, d: dict) -> None:
         """Track a dungeon's entrance exactly like clicking its minimap marker
@@ -792,7 +808,8 @@ class CodexMapUiMixin:
         """Plot the tracked dungeon/rift spot on the codex map (same coords
         as the waypoint — the entrance for dungeons, the live/next-due rift
         for rifts), so the list row does both: track + show on the map."""
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         try:
             xyz, spot, _pid = key.split("|")
@@ -802,6 +819,7 @@ class CodexMapUiMixin:
         mname = d.get("boss_name") or d.get("name") or "Dungeon"
         coords = [{"x": x, "y": y, "z": z}]
         item = {"is_dungeon": True, "is_rift": kind == "rift"}
-        self._codex_map_widget.set_selected_mob(mname, coords, item=item)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{mname} — {spot}")
+        canvas.set_selected_mob(mname, coords, item=item)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{mname} — {spot}")

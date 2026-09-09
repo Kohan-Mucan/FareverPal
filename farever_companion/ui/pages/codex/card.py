@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ... import components as C
 from ... import theme
 from ....data import codex
+from ....data import units as udata
 
 
 class CodexUnitCard(QtWidgets.QFrame):
@@ -114,38 +115,38 @@ class CodexUnitCard(QtWidgets.QFrame):
         super().mousePressEvent(event)
 
     def _badge(self, attr: str, size: int = 21) -> C.IconTile:
+        """The lazily created badge, explicitly HIDDEN until a caller shows it.
+
+        A fresh child widget is not `isHidden()` while its parent card is
+        unshown — it is merely not visible — so creating a badge here without
+        hiding it leaves an unwanted badge "shown" for any card built before
+        (or while) it is off screen. The badge blocks in `set_active` are the
+        only thing that decides which ones appear, and they always call
+        `setVisible(True)` on the one they want.
+        """
         w = getattr(self, attr, None)
         if w is None:
             w = C.IconTile(size=size, parent=self)
             w.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+            w.setVisible(False)
             setattr(self, attr, w)
         return w
 
     def _hide_badge(self, attr: str) -> None:
+        # Guard on isHidden(), not isVisible(): isVisible() is also False for
+        # every badge on a card that is itself not shown, which used to make
+        # this a silent no-op for off-screen cards (stale badge kept alive).
         w = getattr(self, attr, None)
-        if w is not None and w.isVisible():
+        if w is not None and not w.isHidden():
             w.setVisible(False)
 
-    @property
-    def check_icon(self): return self._badge("_check_icon", 20)
-    @property
-    def hide_icon(self): return self._badge("_hide_icon", 20)
-    @property
-    def dungeon_ico(self): return self._badge("_dungeon_ico", 21)
-    @property
-    def chest_ico(self): return self._badge("_chest_ico", 21)
-    @property
-    def vendor_ico(self): return self._badge("_vendor_ico", 21)
-    @property
-    def shop_ico(self): return self._badge("_shop_ico", 21)
+
     @property
     def mob_ico(self): return self._badge("_mob_ico", 21)
     @property
     def soulstone_ico(self): return self._badge("_soulstone_ico", 21)
     @property
     def achievement_ico(self): return self._badge("_achievement_ico", 21)
-    @property
-    def spark_ico(self): return self._badge("_spark_ico", 21)
 
     def set_active(self, active: bool) -> None:
         """Update visual state (dimming and hide icon badge)."""
@@ -193,7 +194,11 @@ class CodexUnitCard(QtWidgets.QFrame):
         is_boss = self.data.get("is_boss", False)
         is_elite = self.data.get("is_elite", False)
         is_critter = self.data.get("is_critter", False) or self.sheet == "collection"
-        is_spark_critter = is_critter and (self.data.get("drops_spark", False) or "spark" in (self.data.get("name") or "").lower() or "spark" in (self.data.get("id") or "").lower())
+        # The VARIANT question ("is this a sparkling one"), asked through the one
+        # shared predicate instead of a private `"spark" in name` test — the same
+        # answer the rest of the app gives, including for the `_Spark` companions
+        # and the `<creature> Sparkle` elementals the build's own test misses.
+        is_spark_critter = is_critter and udata.is_spark_variant(self.uid)
         
         # Apply icon style
         if self.compact:
@@ -334,8 +339,12 @@ class CodexUnitCard(QtWidgets.QFrame):
         else:
             self._hide_badge("_mob_ico")
 
-        # Spark Dust badge
-        if self.data.get("drops_spark"):
+        # Spark Dust badge — the DUST question, deliberately narrower than the
+        # variant one above: a sparkling companion is caught, not killed, so it
+        # keeps its outline and never claims to drop dust (see
+        # units.drops_spark). Asked through the shared predicate rather than the
+        # raw payload key, so the two can't be built differently.
+        if udata.drops_spark(self.uid):
             b = self._badge("_spark_ico", 21)
             b.set_marker("sparkdust", theme.GOLD if active else theme.DIM, outlined=True)
             b.setStyleSheet("background: transparent; border: 0;")

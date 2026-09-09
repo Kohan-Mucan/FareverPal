@@ -107,9 +107,6 @@ class GameAppLocator:
                     continue
                 yield from self._typeobj_candidates(name_addr)
 
-    def _typeobj_name(self, type_obj: int) -> str | None:
-        nm = self._u64(type_obj + TO_NAME)
-        return self.hl._read_utf16(nm) if nm else None
 
     # --- the no-scan chain -----------------------------------------------
     def _static_app_obj_from(self, gameapp_obj: int) -> int | None:

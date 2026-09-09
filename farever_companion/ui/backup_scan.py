@@ -9,14 +9,13 @@ from __future__ import annotations
 import difflib
 import json
 from pathlib import Path
-from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import theme
-from ..backup_summary import summarize, summarize_snapshot
+from ..backup.summary import summarize, summarize_snapshot
 from ..config import config_dir
-from ..master_backup import (
+from ..backup.master import (
     load_master_backup,
     master_backup_path,
     restore_from_snapshot,
@@ -24,7 +23,7 @@ from ..master_backup import (
     accept_current_moddata_state,
     dismiss_profile_alert,
 )
-from ..persist import (
+from ..runtime.persist import (
     atomic_write_json,
     delete_backup_file,
     preserve_file_aside,
@@ -126,8 +125,11 @@ class BackupScanDialog(QtWidgets.QDialog):
 
         if loss_info and loss_info.get("reasons"):
             warn_card = QtWidgets.QFrame()
+            # `.QFrame` (exact class): a bare `QFrame` rule cascades to every
+            # QLabel inside (QLabel IS-A QFrame) — each warning bullet drew
+            # its own red 1px box
             warn_card.setStyleSheet(
-                f"QFrame {{ background: rgba(239, 68, 68, 0.15); border: 1px solid {theme.DANGER}; "
+                f".QFrame {{ background: rgba(239, 68, 68, 0.15); border: 1px solid {theme.DANGER}; "
                 f"border-radius: 6px; padding: 8px; }}"
             )
             warn_lay = QtWidgets.QVBoxLayout(warn_card)

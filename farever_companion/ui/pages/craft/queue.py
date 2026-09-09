@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtWidgets
 
 from ... import theme
 from ... import components as C
-from .... import planner
+from ....craft import planner
 from ....data import icons
 from ....data import items as idata
 from ..items.drops import (_deduped_drops, _kind_group_rows, _row_label)
@@ -327,16 +327,7 @@ class CraftQueueMixin:
         """A small flat COPY button that exports the Total Needed list as
         plain text to the clipboard (flashes ✓ COPIED). `get_bill` is
         called at click time so the copy always reflects the current state."""
-        btn = QtWidgets.QPushButton("COPY")
-        btn.setCursor(QtCore.Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton{{color:{theme.MUTED};"
-            f"background:{theme.with_alpha(theme.ACCENT, 12)};"
-            f"border:1px solid {theme.BORDER};"
-            "border-radius:4px;padding:2px 9px;font-size:10px;"
-            "font-weight:700;letter-spacing:1px;}"
-            f"QPushButton:hover{{color:{theme.TEXT};"
-            f"background:{theme.with_alpha(theme.ACCENT, 30)};}}")
+        btn = C.copy_button()
         btn.clicked.connect(lambda: self._craft_copy_bill(btn, get_bill))
         return btn
 

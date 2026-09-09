@@ -6,7 +6,7 @@ import logging
 from .hl import Hl, is_ptr
 from .proc import Proc
 from ..constants import (
-    OFF_HERO_OWNERPLAYER, OFF_PLAYER_SYSTEM_CLIENT, OFF_SYSTEM_CLIENT_HISTORY, OFF_SYSTEM_MESSAGE_BRUTE_SCAN
+    OFF_HERO_OWNERPLAYER, OFF_PLAYER_SYSTEM_CLIENT, OFF_SYSTEM_MESSAGE_BRUTE_SCAN
 )
 
 
@@ -27,7 +27,7 @@ class AnnouncementReader:
         self.seen_ptrs = set()
         self.last_announcement: Announcement | None = None
         self._last_poll = 0.0
-        self._poll_interval = 2.0
+        self._logged_null_history = False
 
     def clear(self):
         """Explicitly clear the cached announcement (called when rift is entered or closed)."""
@@ -101,14 +101,43 @@ class AnnouncementReader:
                 return self.last_announcement
             
             client_tp = self.hl.ptr(client_ptr)
-            off_history = self.hl.field_offset(client_tp, "history")
-            if off_history is None: off_history = OFF_SYSTEM_CLIENT_HISTORY
-            
-            history_arr_ptr = self.hl.ptr(client_ptr + off_history)
+            # `history` is NOT on st.player.ChatClient any more (checked live
+            # 2026-10-01, and against the bytecode type table): that class is
+            # exactly {player, chat}, and the slot the old calibrated constant
+            # names is `chat`. So the old code dereferenced the chat subsystem
+            # and read it as a message array - a wrong-KIND pointer, not a
+            # drifted one, and it failed silently.
+            #
+            # The messages are one object down, on the chat subsystem's own
+            # class. Both hops resolve BY NAME, so there is no offset here to
+            # re-calibrate when either of them moves again.
+            off_chat = self.hl.field_offset(client_tp, "chat")
+            if off_chat is None:
+                return self.last_announcement
+            chat_ptr = self.hl.ptr(client_ptr + off_chat)
+            if not chat_ptr:
+                # The chat subsystem is simply not allocated in this state (no
+                # chat opened, a menu, loading). Benign, and deliberately NOT
+                # logged: this is the common case, and it used to raise the
+                # "slot may have drifted" warning on every state where no
+                # announcement could have been read anyway.
+                return self.last_announcement
+            chat_tp = self.hl.ptr(chat_ptr)
+            off_history = self.hl.field_offset(chat_tp, "history")
+            if off_history is None:
+                return self.last_announcement
+
+            history_arr_ptr = self.hl.ptr(chat_ptr + off_history)
 
             if not history_arr_ptr:
-                print(f"[DEBUG AnnouncementReader] history_arr_ptr is NULL at client(0x{client_ptr:X}) + off_history(0x{off_history:X})")
+                # Chat is up but its history array is not. That IS worth one
+                # line, once: it is the state that means "the game has messages
+                # we cannot read", as opposed to "no chat yet".
+                if not self._logged_null_history:
+                    self._logged_null_history = True
+                    log.debug("chat object 0x%X has a NULL history array", chat_ptr)
                 return self.last_announcement
+            self._logged_null_history = False
             
             msg_ptrs = self.hl.array(history_arr_ptr, max_elems=100)
             if not msg_ptrs:
@@ -145,7 +174,7 @@ class AnnouncementReader:
                 current = list(self.seen_ptrs)
                 self.seen_ptrs = set(current[-250:])
                 
-        except Exception as e:
+        except Exception:
             pass
 
         if self.last_announcement and (time.time() - self.last_announcement.received_at > 1200):

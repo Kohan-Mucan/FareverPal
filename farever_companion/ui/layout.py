@@ -5,7 +5,6 @@ layout clearing, and box constructors) so pages and components remain lean and m
 """
 from __future__ import annotations
 
-from typing import Iterable, Sequence
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
@@ -52,7 +51,6 @@ class FlowLayout(QtWidgets.QLayout):
     def sizeHint(self):
         parent = self.parentWidget()
         width = parent.width() if parent is not None else 0
-        m = self.contentsMargins()
         if width <= 0:
             return self.minimumSize()
         return QtCore.QSize(width, self.heightForWidth(width))
@@ -140,6 +138,13 @@ class StretchFlow(FlowLayout):
                 h = it.heightForWidth(w_i)
                 if h < 0:
                     h = it.sizeHint().height()
+                    wdg = it.widget()
+                    if wdg is not None:
+                        # A widget whose sizeHint is not yet computed (or
+                        # collapsed by an earlier squeeze) reports 1; the
+                        # minimum never lies. This keeps a card alive when
+                        # it joins a flow row pre-polish.
+                        h = max(h, wdg.minimumSizeHint().height())
                 row_h = max(row_h, h)
             if not test_only:
                 x = rect.x() + m.left()
@@ -197,13 +202,16 @@ class WrapLabel(QtWidgets.QLabel):
 
 class CardScroll(QtWidgets.QScrollArea):
     """Detail-pane scroll area whose card hugs its content: it fills the pane width,
-    sizes to the content's sizeHint, and only scrolls when content is taller than the pane."""
+    sizes to the content's sizeHint, and only scrolls when content is taller than the pane.
+    Top-anchored: QScrollArea centers a short widget by default, which left short
+    cards (and their item names) floating mid-pane — alignment pins them up top."""
 
     def __init__(self, card: QtWidgets.QWidget, parent=None):
         super().__init__(parent)
         self.setWidgetResizable(False)
         self.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        self.setAlignment(QtCore.Qt.AlignTop)
         self.setWidget(card)
         self._card = card
 
@@ -243,29 +251,6 @@ class CardScroll(QtWidgets.QScrollArea):
         self._fit()
 
 
-class HScrollCard(QtWidgets.QScrollArea):
-    """Horizontal-only scroll card for a wide stat table: content keeps its natural
-    width and reserves vertical height so the scrollbar never clips content."""
-
-    def __init__(self, widget: QtWidgets.QWidget, parent=None):
-        super().__init__(parent)
-        self.setWidgetResizable(True)
-        self.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.setStyleSheet("QScrollArea{background:transparent;border:0;}")
-        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.setMinimumWidth(0)
-        widget.setMinimumWidth(widget.sizeHint().width())
-        self.setWidget(widget)
-        self._content = widget
-        self.setFixedHeight(widget.sizeHint().height()
-                            + self.horizontalScrollBar().sizeHint().height())
-
-    def sizeHint(self) -> QtCore.QSize:
-        sh = super().sizeHint()
-        return QtCore.QSize(sh.width(), sh.height())
-
-
 def make_scroll(widget: QtWidgets.QWidget, h_scroll: bool = False,
                 v_scroll: bool = True, parent=None) -> QtWidgets.QScrollArea:
     """Create a transparent, borderless QScrollArea hosting the given widget."""
@@ -281,14 +266,77 @@ def make_scroll(widget: QtWidgets.QWidget, h_scroll: bool = False,
     return sa
 
 
+def span_trailing_row(grid: QtWidgets.QGridLayout, cols: int = 2,
+                      from_row: int = 0) -> None:
+    """Make a partly-filled last row span the grid's full width.
+
+    The tile grids in Settings (the Layers matrix and both Pages sections)
+    fill row-major two at a time, so an odd number of tiles left the final
+    row half empty and the hole read as a layout bug — three Sidebar Elements
+    in a frozen build, where the dev-only Dev Icons tile is absent, was the
+    case that shipped. Re-adding the trailing item across every column closes
+    the hole and hands the odd one out the width it was missing anyway.
+
+    `from_row` scopes the search, which is what a grid holding several groups
+    needs: the Layers matrix is ONE grid with a row range per layer group, so
+    it calls this once per group (right after adding that group's cards) and
+    an odd group in the middle is closed just like one at the bottom. Items
+    already spanning `cols` — the group's own `// HEADER` label — are left
+    alone; a header is a lone cell too, and re-adding it is a no-op.
+    """
+    rows: dict[int, list[tuple[int, int, int]]] = {}
+    for i in range(grid.count()):
+        r, c, _rs, cs = grid.getItemPosition(i)
+        if r < from_row:
+            continue
+        rows.setdefault(r, []).append((c, cs, i))
+    if not rows:
+        return
+    last = max(rows)
+    cells = rows[last]
+    if len(cells) != 1:
+        return                      # full row, nothing to close up
+    col, cs, idx = cells[0]
+    if col != 0 or cs >= cols:
+        return                      # not the odd-one-out (already spans)
+    item = grid.takeAt(idx)
+    if item is not None:
+        grid.addItem(item, last, 0, 1, cols)
+
+
+def place_popup(pop: QtWidgets.QWidget, pos: QtCore.QPoint) -> None:
+    """Put `pop` at `pos`, clamped inside the screen it lands on, and show it.
+
+    A popup anchored under a row can hang off the bottom or right edge of the
+    monitor it opens on; clamping against that screen's available geometry
+    keeps a long list readable instead of cut off. The Combat rail's skill
+    popup and the Items skill section's both needed exactly this."""
+    scr = QtGui.QGuiApplication.screenAt(pos)
+    if scr is None:
+        scr = QtGui.QGuiApplication.primaryScreen()
+    if scr is not None:
+        geo = scr.availableGeometry()
+        pos.setX(max(geo.left(), min(pos.x(), geo.right() - pop.width())))
+        pos.setY(max(geo.top(), min(pos.y(), geo.bottom() - pop.height())))
+    pop.move(pos)
+    pop.show()
+
+
 def clear_layout(layout: QtWidgets.QLayout | None) -> None:
-    """Safely remove and delete all child widgets and nested items from a layout."""
+    """Safely remove and delete all child widgets and nested items from a layout.
+
+    Detached + hidden synchronously (not just deleteLater'd): rebuilt rows
+    (filter chips, flow tiles) would otherwise stay findable — and painted
+    for a frame — until the event loop delivers the deferred deletion, which
+    headless tests never do."""
     if layout is None:
         return
     while layout.count():
         item = layout.takeAt(0)
         w = item.widget()
         if w is not None:
+            w.hide()
+            w.setParent(None)
             w.deleteLater()
         child_lay = item.layout()
         if child_lay is not None:

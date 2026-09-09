@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import deque
 
 log = logging.getLogger(__name__)
 
 from .proc import Proc, ProcError
-from .hl import Hl
+from .hl import Hl, is_ptr as _is_ptr
 from .scene import Scene, Entity, Element
 from .player import PlayerLocator
 from .announcement_reader import AnnouncementReader
@@ -18,15 +17,22 @@ from .rift_tracker import RiftTracker, RiftStatus
 from .dps_source import DamageSourceManager
 from .dps_tracker import DpsTracker
 from .group_reader import GroupReader
-from . import attributes
+from .game_state import GameState, read_game_state
+from . import attributes, game_state
 from ..constants import (OFF_HERO_OWNERPLAYER, OFF_FOE_OWNER, OFF_FOE_TARGET_OBJ,
                          OFF_FOE_TARGET_HERO, OFF_FOE_TARGET_ALT,
                          OFF_FOE_TARGET_DIRECT, OFF_FOE_RECENT_HATE,
                          OFF_FOE_HATE_LIST, AGGRO_SWEEP_BYTES,
-                         FOE_TARGET_HOLD_S, OFF_OWNER, OFF_PLAYER_NAME)
+                         FOE_TARGET_HOLD_S, OFF_OWNER, OFF_PLAYER_NAME,
+                         OFF_UI_WINDOWS)
 from ..data import units as udata, encounters as encdata
 
 XYZ = tuple[float, float, float]
+
+# Sanity bound on the open-window list: the game never has more than a handful
+# of windows up, so a bigger count means the pointer we followed isn't a window
+# array (a stale/freed GameUI reads as garbage) and the read must not be trusted.
+MAX_UI_WINDOWS = 256
 
 
 class LiveModel:
@@ -54,9 +60,43 @@ class LiveModel:
         self.dps = DpsTracker(self)
         self._units_cache: list[Entity] = []
         self._units_at = 0.0
+        self._units_key: int | None = None
         self.dungeon_boss: str | None = None
         self.units_ok: bool = True   # False while the units read fails (zone swap)
         self._last_profile: str | None = None
+        # Per-tick snapshot (core/game_state.py): published once by the overlay
+        # manager's tick, then read by every overlay and rule instead of each
+        # re-deriving the same answers from memory.
+        self._state: GameState | None = None
+
+    # --- the per-tick snapshot -------------------------------------------
+    @property
+    def published_state(self) -> GameState | None:
+        """This tick's shared snapshot, or None when no tick has published one.
+        Never builds one - readers that need an answer either way use the
+        accessors in core/game_state.py, which fall back to a live read."""
+        return self._state
+
+    @property
+    def state(self) -> GameState:
+        """The shared snapshot; built on the spot if no tick published one.
+
+        Published snapshots are reused for the rest of the tick, so every
+        overlay and rule in a tick sees the SAME object (and the same answers).
+        The fallback build is for reads with no tick behind them (detached, one
+        -off diagnostics) - it isn't cached, so it can't go stale.
+        """
+        st = self._state
+        return st if st is not None else read_game_state(self)
+
+    def publish_state(self, state: GameState) -> None:
+        """Adopt a tick's snapshot (called by OverlayManager's tick)."""
+        self._state = state
+
+    def clear_state(self) -> None:
+        """Forget the snapshot - a detach must not leave one for the next
+        session's overlays to read."""
+        self._state = None
 
     # --- lifecycle -------------------------------------------------------
     def locate_player(self) -> int | None:
@@ -120,8 +160,15 @@ class LiveModel:
         except ProcError:
             return None
 
-    def player_heading(self) -> float | None:
-        fn = getattr(self.locator, "read_heading", None)
+    def _locator_probe(self, name: str):
+        """`self.locator.<name>()`, or None when it has no such method or the
+        read fails.
+
+        The locator's optional readers (`read_heading`, `combat_state`) are
+        absent on older captures and on the test fakes, so a missing method is
+        a plain "not available" answer rather than an error - the fail-closed
+        guard both auxiliary signals need."""
+        fn = getattr(self.locator, name, None)
         if fn is None:
             return None
         try:
@@ -129,18 +176,47 @@ class LiveModel:
         except ProcError:
             return None
 
+    def player_heading(self) -> float | None:
+        return self._locator_probe("read_heading")
+
     def combat_state(self) -> dict | None:
         """Game-authoritative Hero combat fields (isInCombat, combatId,
         combatStartTime, combatEndTime) or None when the player isn't
         located. Used by the DPS tracker as an auxiliary encounter signal
         (see PlayerLocator.combat_state)."""
-        fn = getattr(self.locator, "combat_state", None)
-        if fn is None:
+        return self._locator_probe("combat_state")
+
+    def party_combat_state(self) -> bool | None:
+        """Return whether any current group member is in combat.
+
+        ``True`` means at least one member is active, ``False`` means every
+        connected member explicitly reported out of combat, and ``None`` means
+        the group or one of its member combat fields could not be read. The
+        attach-time Run Timer gate must fail closed on ``None``.
+        """
+        roster = self.cached_group_roster()
+        if roster is None:
             return None
-        try:
-            return fn()
-        except ProcError:
-            return None
+        members = [m for m in (getattr(roster, "members", ()) or ())
+                   if getattr(m, "connected", True)]
+        if not members:
+            state = self.combat_state()
+            value = state.get("in_combat") if isinstance(state, dict) else None
+            return bool(value) if isinstance(value, bool) else None
+
+        active = False
+        for member in members:
+            hero = int(getattr(member, "hero", 0) or 0)
+            if not hero and getattr(member, "is_me", False):
+                hero = int(self.player_addr or 0)
+            if not hero:
+                return None
+            state = self.locator.combat_state(hero)
+            value = state.get("in_combat") if isinstance(state, dict) else None
+            if not isinstance(value, bool):
+                return None
+            active = active or value
+        return active
 
     @property
     def chests(self):
@@ -149,7 +225,11 @@ class LiveModel:
     # --- scene -----------------------------------------------------------
     def units(self) -> list[Entity]:
         now = time.monotonic()
-        if now - self._units_at < self.UNITS_TTL and self._units_cache:
+        # Keyed on the player too: a zone swap changes the scene the address
+        # resolves in, and a time-only key would hand the previous zone's units
+        # to the first reader after the swap.
+        if (now - self._units_at < self.UNITS_TTL and self._units_cache
+                and self._units_key == self.player_addr):
             return self._units_cache
         try:
             self._units_cache = self.scene.units(self.player_addr)
@@ -158,11 +238,65 @@ class LiveModel:
             self._units_cache = []
             self.units_ok = False
         self._units_at = now
-        # boss of the current instance, cleared when none present so a prior
-        # dungeon's boss can't linger
-        self.dungeon_boss = next(
-            (e.unit_id for e in self._units_cache
-             if e.unit_id and udata.is_boss(e.unit_id)), None)
+        self._units_key = self.player_addr
+        # The boss of the current instance, cleared when none is present so a
+        # prior dungeon's boss cannot linger into the next one.
+        #
+        # Three signals, in this order, and the order is the whole point.
+        # `dungeon_boss` is not only "the boss of this instance" for the codex
+        # and the chest resolver - it is the unit whose DEATH ENDS THE RUN
+        # TIMER (`encounter_state` -> `encdata.resolve` -> `Encounter.kill_id`).
+        # So picking the wrong one ends a healthy run.
+        #
+        # 1. DECLARED - the game's own activity table names this instance's
+        #    boss (`dungeons.declared_boss_id`). It is a statement, not an
+        #    inference, and it is the one signal that can say "this unit is THE
+        #    boss" when the unit walk only says "this unit looks like one".
+        # 2. STICKY - keep the boss we already had while it is still in the
+        #    scene, so a second boss-tagged unit cannot steal the fight
+        #    mid-encounter.
+        # 3. NEAREST - the fallback, and what this used to do unconditionally.
+        #
+        # Why 1 and 2 exist: `units.is_boss` counts a rift's TRUE CLONE as a
+        # boss, which is right for DAMAGE (killing the clone is damage worth
+        # recording) and wrong for the kill target - it is a phase, not the
+        # fight. Live 2026-10-03, a rift: the Run Timer finished the moment the
+        # clone died with the boss still standing. Distance alone picked
+        # whichever clone was closer to the player.
+        #
+        # This is deliberately the SAME precedence the DPS meter's scan already
+        # uses (`dps_tracker_tick._scan_foes`: declared outranks distance, plus
+        # its own stickiness in `_track_boss_target`). Two rules for one
+        # question is how the meter and the timer came to disagree about which
+        # fight they were in.
+        bosses = [e for e in self._units_cache
+                  if e.unit_id and udata.is_boss(e.unit_id)]
+        if not bosses:
+            self.dungeon_boss = None
+            return self._units_cache
+
+        declared = None
+        try:
+            from ..data import dungeons as ddata
+            declared = ddata.declared_boss_id(game_state.zone(self))
+        except Exception:
+            declared = None
+
+        pick = next((e for e in bosses if e.unit_id == declared), None)
+        if pick is None and self.dungeon_boss:
+            pick = next((e for e in bosses if e.unit_id == self.dungeon_boss),
+                        None)
+        if pick is None:
+            me = next((e for e in self._units_cache
+                       if e.addr and e.addr == self.player_addr), None)
+            pick = bosses[0]
+            if me is not None:
+                pick_d = pick.dist(me.x, me.y, me.z)
+                for e in bosses[1:]:
+                    d = e.dist(me.x, me.y, me.z)
+                    if d < pick_d:
+                        pick, pick_d = e, d
+        self.dungeon_boss = pick.unit_id
         return self._units_cache
 
     def enemies(self) -> list[Entity]:
@@ -503,6 +637,54 @@ class LiveModel:
         except Exception:
             return None
 
+    def group_member_zones(self, roster=None) -> dict[int, str]:
+        """{hero_addr: readable zone name} for every roster member with a
+        usable position.
+
+        Wraps the roster's own hero positions (GroupMember.xyz) in the same
+        zone resolution the map uses: world coords -> zone id -> readable
+        name. Best-effort throughout - a member with no readable position, or
+        one whose zone id the sheet does not know, is simply absent from the
+        result rather than guessed at.
+        """
+        if roster is None:
+            roster = self.cached_group_roster()
+        members = list(getattr(roster, "members", None) or []) if roster else []
+        if not members:
+            return {}
+        from ..data import names as gnames
+        from ..geo import zones as geo_zones
+        out: dict[int, str] = {}
+        for m in members:
+            hero = getattr(m, "hero", 0) or 0
+            xyz = getattr(m, "xyz", None)
+            if not hero or not xyz or not any(xyz):
+                continue
+            try:
+                zid = geo_zones.resolve_zone(*xyz)
+            except Exception:
+                continue
+            if not zid:
+                continue
+            # zone_display, NOT zone_name: the latter humanizes an id the
+            # sheet doesn't know into "Z 9 Unknownlands", which would put a
+            # raw technical id in front of the user.
+            zname = gnames.zone_display(zid)
+            if not zname:
+                continue
+            out[hero] = zname
+        return out
+
+    def cached_group_roster(self):
+        """The last decoded roster, WITHOUT triggering a decode — for UI
+        threads. See GroupReader.last: a live decode is a heap sweep measured in
+        seconds, so a page that only wants the party list should read the cache
+        and let a background thread call ``group_roster()``."""
+        try:
+            return self._group_reader.last()
+        except Exception:
+            return None
+
     def are_in_same_group(self, other_hero_addr: int) -> bool:
         try:
             local_hero = self.player_addr
@@ -563,12 +745,9 @@ class LiveModel:
                 if e.is_hero and e.addr != self.player_addr]
         # For group members, we ignore player_zone filtering if they are close enough (within max_dist)
         # as zone boundaries shouldn't hide teammates.
-        if player_zone and max_dist > 0:
-            from ..geo import zones as geo_zones
-            # Keep them if they are in the same zone OR within the distance limit
-            # (which _ranked will filter anyway).
-            # Actually, just removing the zone filter for group members is better.
-            pass
+        # Group members ignore player_zone filtering when close enough (within
+        # max_dist): zone boundaries shouldn't hide teammates, and _ranked
+        # applies the distance limit anyway.
         return self._ranked(pool, xyz, n, max_dist, use_2d=use_2d)
 
     def live_chests(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
@@ -616,43 +795,44 @@ class LiveModel:
         except ProcError:
             return []
 
+    def _window(self, source, player_zone: str | None = None,
+                max_dist: float = 0.0, use_2d: bool = False) -> list:
+        """Apply the shared distance + zone window to a stream of elements.
+
+        Every `*_scene` query below asks the same two questions of what it
+        found - is it inside `max_dist` of the player, and is it in the
+        player's zone - so the rule lives here once instead of in each query.
+        `source` is any iterable of elements with x/y/z and dist/dist2d; which
+        elements are in it stays the caller's business."""
+        pxyz = self.player_xyz()
+        zone_mod = None
+        if player_zone:
+            from ..geo import zones as zone_mod
+        out = []
+        for e in source:
+            if max_dist > 0 and pxyz:
+                dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
+                if dist > max_dist:
+                    continue
+            if player_zone:
+                if zone_mod.resolve_zone(e.x, e.y, e.z) != player_zone:
+                    continue
+            out.append(e)
+        return out
+
     def gatherables(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         try:
-            from ..geo import zones as geo_zones
-            pxyz = self.player_xyz()
-            out = []
-            for e in self.scene.elements(self.player_addr):
-                if e.is_gatherable:
-                    if max_dist > 0 and pxyz:
-                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
-                        if dist > max_dist:
-                            continue
-                    if player_zone:
-                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
-                        if ezone != player_zone:
-                            continue
-                    out.append(e)
-            return out
+            return self._window(
+                (e for e in self.scene.elements(self.player_addr) if e.is_gatherable),
+                player_zone, max_dist, use_2d)
         except ProcError:
             return []
 
     def obelisks(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         try:
-            from ..geo import zones as geo_zones
-            pxyz = self.player_xyz()
-            out = []
-            for e in self.scene.elements(self.player_addr):
-                if e.is_obelisk:
-                    if max_dist > 0 and pxyz:
-                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
-                        if dist > max_dist:
-                            continue
-                    if player_zone:
-                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
-                        if ezone != player_zone:
-                            continue
-                    out.append(e)
-            return out
+            return self._window(
+                (e for e in self.scene.elements(self.player_addr) if e.is_obelisk),
+                player_zone, max_dist, use_2d)
         except ProcError:
             return []
 
@@ -660,16 +840,8 @@ class LiveModel:
         """Dropped loot (ent.interactible.LootDrop) in the loaded scene,
         item ids resolved via st.Item.kind."""
         try:
-            pxyz = self.player_xyz()
-            out = []
-            for d in self.scene.loot_drops(self.player_addr):
-                if max_dist > 0 and pxyz:
-                    dist = d.dist2d(pxyz[0], pxyz[1]) if use_2d \
-                        else d.dist(*pxyz)
-                    if dist > max_dist:
-                        continue
-                out.append(d)
-            return out
+            return self._window(self.scene.loot_drops(self.player_addr),
+                                max_dist=max_dist, use_2d=use_2d)
         except ProcError:
             return []
 
@@ -677,40 +849,20 @@ class LiveModel:
         """Player-placed food/consumables (WorldConsumable) in the scene,
         display names resolved off their st.skill.Skill."""
         try:
-            pxyz = self.player_xyz()
-            out = []
-            for f in self.scene.food_stations(self.player_addr):
-                if max_dist > 0 and pxyz:
-                    dist = f.dist2d(pxyz[0], pxyz[1]) if use_2d \
-                        else f.dist(*pxyz)
-                    if dist > max_dist:
-                        continue
-                out.append(f)
-            return out
+            return self._window(self.scene.food_stations(self.player_addr),
+                                max_dist=max_dist, use_2d=use_2d)
         except ProcError:
             return []
 
     def live_orbs(self, player_zone: str | None = None, max_dist: float = 0.0, use_2d: bool = False) -> list[Element]:
         """Dungeon secret orbs (InstanceOrb) in the loaded scene."""
         try:
-            from ..geo import zones as geo_zones
-            pxyz = self.player_xyz()
-            out = []
-            for e in self.scene.elements(self.player_addr):
-                if e.is_orb and e.elem_id and (
-                    "redorb" in e.elem_id.lower() or
-                    "secretorb" in e.elem_id.lower()
-                ):
-                    if max_dist > 0 and pxyz:
-                        dist = e.dist2d(pxyz[0], pxyz[1]) if use_2d else e.dist(*pxyz)
-                        if dist > max_dist:
-                            continue
-                    if player_zone:
-                        ezone = geo_zones.resolve_zone(e.x, e.y, e.z)
-                        if ezone != player_zone:
-                            continue
-                    out.append(e)
-            return out
+            return self._window(
+                (e for e in self.scene.elements(self.player_addr)
+                 if e.is_orb and e.elem_id and (
+                     "redorb" in e.elem_id.lower() or
+                     "secretorb" in e.elem_id.lower())),
+                player_zone, max_dist, use_2d)
         except ProcError:
             return []
 
@@ -767,24 +919,59 @@ class LiveModel:
         except ProcError:
             return []
 
-    _FX_OFF_CACHE: dict[int, int | None] = {}
-
     def world_orb_fx(self) -> list[tuple[str, bool, float, float]]:
         """(elem_id, glow-fx present, x, y) for loaded world secret orbs. The
         fx pointer is the reliable collected signal (collected = no fx); the
         position lets callers resolve the live element to the STATIC placement
-        id (instance ids don't correspond to prefab ids) done lists key on."""
-        from ..constants import OFF_ELEM_FX
-        out = []
+        id (instance ids don't correspond to prefab ids) done lists key on.
+
+        Untrusted reads are DROPPED, never coerced to False: the field offset
+        comes from reflection (currentFx, super-chain). Before the reflection
+        hardening a garbage read at the hardcoded slot read as fx-present for
+        every orb ( junk-pointer-in-range) or fx-less after a patch shifted
+        layouts - either lie then walks the done list (the 2026-09-18
+        hide-collected regression: marked dungeon orbs reappearing red)."""
+        out: list[tuple[str, bool, float, float]] = []
         try:
             for e in self.scene.elements(self.player_addr):
                 if not (e.elem_id and e.elem_id.startswith("RedOrb_World")):
                     continue
-                out.append((e.elem_id, bool(self.hl.u64(e.addr + OFF_ELEM_FX)),
-                            e.x, e.y))
+                fx = self.orb_fx_present(e)
+                if fx is None:
+                    continue
+                out.append((e.elem_id, fx, e.x, e.y))
         except ProcError:
             return []
         return out
+
+    def orb_fx_present(self, e: Element) -> bool | None:
+        """Whether element `e` currently carries its glow-fx pointer, or None
+        when the read can't be trusted. The offset is reflected per element
+        type (field 'currentFx', cached by hl.field_offset) — never a
+        hardcoded slot (same rule as the ownerPlayer field: a drifted layout
+        must degrade to "no opinion", not to a confident lie).
+
+        Trust rules: null at the reflected slot = genuinely dark (collected);
+        a plausible heap pointer = glowing; anything else (junk value, no
+        runtime layout, unreadable memory) = None, i.e. "no opinion" —
+        callers must treat that as unknown, NEVER as 'no fx' (a wrong-slot
+        read would mark every orb collected / un-done every persisted
+        mark — the 2026-09-18 hide-collected regression)."""
+        try:
+            tp = e.type_ptr
+            if not tp:
+                return None
+            off = self.hl.field_offset(tp, "currentFx")
+            if off is None:
+                return None
+            raw = self.hl.u64(e.addr + off)
+        except ProcError:
+            return None
+        except Exception:
+            return None
+        if raw == 0:
+            return False                # genuinely null fx -> collected
+        return True if _is_ptr(raw) else None   # junk value -> no opinion
 
     def boss_state(self) -> tuple[str | None, bool, float | None]:
         scene = self.units()        # populates dungeon_boss; must run first
@@ -798,6 +985,24 @@ class LiveModel:
                 except ProcError:
                     return (bid, True, None)
         return (bid, False, None)
+
+    def boss_max_health(self) -> float | None:
+        """True max HP for the current dungeon boss, or None if not exposed.
+
+        This is intentionally separate from current HP: an attach-time BOSS
+        split is valid only when current/max proves the boss was still pristine.
+        """
+        scene = self.units()        # populates dungeon_boss; cached by LiveModel
+        bid = self.dungeon_boss
+        if not bid:
+            return None
+        for e in scene:
+            if e.unit_id == bid:
+                try:
+                    return attributes.max_health(self.hl, e.addr)
+                except ProcError:
+                    return None
+        return None
 
     def encounter_state(self):
         """The boss-only split's per-tick view: `(members, kill_id, states, engage_any)`
@@ -833,6 +1038,60 @@ class LiveModel:
                 states.append((uid, False, None))
         return (members, kill_id, states, engage_any)
 
+    def party_health_state(self) -> tuple[bool, set[int], set[int]] | None:
+        """Return ``(grouped, alive_hero_addrs, present_hero_addrs)`` for the
+        current scene. ``None`` means the scene/group read is not trustworthy.
+
+        The cached ``st.Group`` roster decides whether this is a party. When it
+        is unavailable, multiple live hero entities in the loaded instance are
+        the conservative fallback. Only members seen in this dungeon latch into
+        the Run Timer's group-wipe watcher, so someone remaining in town does
+        not prevent a local dungeon wipe from resetting the boss split.
+        """
+        try:
+            scene = self.units()
+            heroes = {e.addr: e for e in scene if getattr(e, "is_hero", False)}
+            roster = self.cached_group_roster()
+            roster_heroes: set[int] = set()
+            if roster is not None:
+                for member in getattr(roster, "members", ()) or ():
+                    if not getattr(member, "connected", True):
+                        continue
+                    hero = int(getattr(member, "hero", 0) or 0)
+                    if not hero and getattr(member, "is_me", False):
+                        hero = int(self.player_addr or 0)
+                    if hero:
+                        roster_heroes.add(hero)
+                grouped = len(roster_heroes) >= 2
+                watched = roster_heroes
+                if not grouped:
+                    # Some roster rows can have an unreadable hero pointer.
+                    # Fall back to the heroes actually loaded in this instance
+                    # rather than misclassifying a visible party as solo.
+                    watched = set(heroes)
+                    grouped = len(watched) >= 2
+            else:
+                watched = set(heroes)
+                grouped = len(watched) >= 2
+
+            if not grouped:
+                watched = {int(self.player_addr or 0)} & set(heroes)
+            alive: set[int] = set()
+            present: set[int] = set()
+            for addr in watched & set(heroes):
+                try:
+                    hp = attributes.health(self.hl, addr)
+                except ProcError:
+                    continue
+                if hp is None:
+                    continue
+                present.add(addr)
+                if hp > 0:
+                    alive.add(addr)
+            return grouped, alive, present
+        except Exception:
+            return None
+
     HARD_LEVEL = 25     # Hard mode scales every dungeon to this level (cap)
 
     def boss_level(self) -> int | None:
@@ -848,8 +1107,8 @@ class LiveModel:
         return None
 
     def dungeon_difficulty(self) -> int | None:
-        """0=Normal, 1=Hard from GameLayer.config, or None outside an instance.
-        Primary difficulty source; independent of enemy levels."""
+        """0=Normal, 1=Hard, 2=Heroic from GameLayer.config, or None outside
+        an instance. Primary difficulty source; independent of enemy levels."""
         try:
             return self.scene.difficulty(self.player_addr)
         except ProcError:
@@ -878,14 +1137,59 @@ class LiveModel:
         """True inside any dungeon or rift instance (dungeon overlay gate)."""
         return self.is_in_dungeon() or self.is_in_rift()
 
+    def instance_state(self) -> tuple[bool, bool] | None:
+        """`(in_dungeon, in_rift)`, or None when the scene can't be read.
+
+        `is_in_dungeon()` / `is_in_rift()` collapse a failed scene read to
+        False, which is the wrong bias for the overlay visibility loop: a
+        transient failure would un-hide the minimap and entity overlays inside
+        a dungeon and hide the Dungeon HUD. A player who is not located is not
+        in an instance, though - that is knowledge, not a missing read - so it
+        reports (False, False) and only a real read failure is 'unknown'.
+        """
+        try:
+            if self.player_addr is None:
+                return (False, False)
+            if self.scene.gamelayer(self.player_addr) is None:
+                return None
+            return (self.is_in_dungeon(), self.is_in_rift())
+        except Exception:
+            return None
+
     def rift_status(self) -> RiftStatus:
         return self.rift_tracker.get_status()
 
 
-    def detected_mode(self) -> str | None:
+    def dungeon_heroic(self) -> bool:
+        """True when the current dungeon is a HEROIC run (the GameLayer heroic
+        flag — heroic is a layer flag, not a difficulty value)."""
+        try:
+            gl = self.scene.gamelayer(self.player_addr)
+            return bool(gl and self.scene._heroic_flag(gl))
+        except (ProcError, AttributeError):
+            return False
+
+    def dungeon_mode(self) -> str | None:
+        """'normal' | 'hard' | 'heroic' for the current instance, or None
+        outside one / unreadable. Heroic wins over the plain difficulty int:
+        the layer flag (OFF_LAST_HEROIC) first, then difficulty==2 (the boxed
+        config value read 2 on a live heroic run, 2026-09-20) as the fallback
+        when the flag can't be read."""
+        if self.dungeon_heroic():
+            return "heroic"
         diff = self.dungeon_difficulty()
         if diff is not None:
-            return "hard" if diff == 1 else "normal"
+            if diff == 1:
+                return "hard"
+            if diff == 2:
+                return "heroic"
+            return "normal"
+        return None
+
+    def detected_mode(self) -> str | None:
+        mode = self.dungeon_mode()
+        if mode is not None:
+            return mode
         # fallback: enemy-level heuristic (needs a recognized, level-tagged boss)
         bid = self.dungeon_boss
         if not bid:
@@ -957,29 +1261,122 @@ class LiveModel:
             pass
         return None
 
-    def is_game_menu_open(self, include_escape: bool = True) -> bool:
+    def menu_windows(self) -> tuple[bool, bool] | None:
+        """Both menu answers from ONE walk of `ui.GameUI.windows`.
+
+        Returns `(any_open, gameplay_open)`: `any_open` is any open
+        `ui.win.BaseWindow` (the escape menu included) and `gameplay_open` is
+        the same list with `ui.win.EscapeMenu` excluded. Those are the two
+        questions the overlay tick asks per frame - Rule A (escape menu) and
+        Rule B (auto-hide_menus) - and answering them from a single walk means
+        they cannot disagree about the same tick, nor cost two passes over the
+        window list (plus two reflection probes) every 500 ms.
+
+        Returns None when the gate could not be evaluated: the game isn't
+        attached yet, the UI pointer is stale, a read didn't come back (zone
+        swap, game relaunching, freed GameUI), or the list itself doesn't add
+        up - a freed/zeroed array, an entry that isn't a window, an unreadable
+        slot. None of those can support "nothing is open", so none of them
+        answer with it. Callers that need one answer use `menu_state`, a thin
+        wrapper over this.
+        """
         if self.player_addr is None:
-            return True
+            return (True, True)   # character screen: a menu for hiding purposes
         try:
             ui_addr = self.locator.app.ui()
-            if not ui_addr:
-                return False
-            arr_ptr = self.hl.ptr(ui_addr + 0x90)
+        except Exception:
+            return None
+        if not ui_addr:
+            return None
+        # ui.GameUI.windows resolved BY NAME: the 2026-09-11 patch inserted
+        # `stutters` after `fpsGraph`, which pushed `additionalTips` 0x88 ->
+        # 0x90 and `windows` 0x90 -> 0x98. The old hardcoded 0x90 then read the
+        # (normally empty) tips array, so no menu ever registered and the
+        # overlays stayed visible over open menus. OFF_UI_WINDOWS is only the
+        # fallback (0x90 on the Aug-4 build, 0x98 on the Sep-11 build), so a
+        # failed reflection probe alone must not poison the whole read.
+        win_off = None
+        try:
+            ui_tp = self.hl.ptr(ui_addr)
+            if ui_tp:
+                win_off = self.hl.field_offset(ui_tp, "windows")
+        except Exception:
+            win_off = None
+        if win_off is None:
+            win_off = OFF_UI_WINDOWS
+        try:
+            arr_ptr = self.hl.ptr(ui_addr + win_off)
             if not arr_ptr:
-                return False
+                # A live GameUI always owns its windows array (it's built with
+                # the UI), so a null one means we're following a stale pointer -
+                # not that nothing is open.
+                return None
+            if self.hl.ptr(arr_ptr) is None:
+                # Every live HL object carries its hl_type at +0, and so does
+                # this array. A readable-but-null type pointer means the object
+                # was freed and the page zeroed/reused - and a zeroed array
+                # reads length 0, which would otherwise look exactly like a
+                # confidently empty window list.
+                return None
             arr_len = self.hl.i32(arr_ptr + 8)
+            if not 0 <= arr_len <= MAX_UI_WINDOWS:
+                return None
+            if arr_len == 0:
+                return (False, False)
             native_arr = self.hl.ptr(arr_ptr + 0x10)
-            if not native_arr or arr_len <= 0:
-                return False
+            if not native_arr:
+                # Non-empty list with no backing store: inconsistent, so don't
+                # guess either way.
+                return None
+            any_open = False
+            gameplay_open = False
             for i in range(arr_len):
                 item_ptr = self.hl.ptr(native_arr + 0x18 + i * 8)
-                if item_ptr:
-                    if not include_escape and self.hl.class_of(item_ptr) == "ui.win.EscapeMenu":
-                        continue
-                    if self.hl.is_a(item_ptr, "ui.win.BaseWindow"):
-                        return True
+                if not item_ptr:
+                    continue
+                if not self.hl.is_a(item_ptr, "ui.win.BaseWindow"):
+                    continue
+                any_open = True
+                if self.hl.class_of(item_ptr) != "ui.win.EscapeMenu":
+                    gameplay_open = True
+                    break          # both answers are settled
+            if not any_open:
+                # A NON-empty list that yielded no window: an entry that isn't
+                # a `ui.win.BaseWindow`, an unreadable slot, a garbage pointer,
+                # or a backing store that isn't mapped. Any of those means we
+                # are looking at the wrong array (the 0x90-style drift) or at
+                # malformed memory - and then "nothing is open" is a conclusion
+                # this walk can't back, so report unknown instead of a
+                # confident no. (An empty list is the ordinary, trusted case
+                # and was answered above.)
+                return None
+            return (any_open, gameplay_open)
         except Exception:
-            pass
-        return False
+            return None
+
+    def menu_state(self, include_escape: bool = True) -> bool | None:
+        """Tri-state menu gate: is a game menu covering the HUD?
+
+        True  - a `ui.win.BaseWindow` is open (`ui.win.EscapeMenu` included
+                unless `include_escape` is False)
+        False - the UI's window list was read and is empty: we can PROVE the
+                gameplay screen is clear
+        None  - the gate could not be evaluated: the game isn't attached yet,
+                the UI pointer is stale, a read didn't come back (zone swap,
+                game relaunching, freed GameUI), or the window list doesn't add
+                up (see `menu_windows`).
+
+        This is deliberately the ONLY menu API - there is no boolean alias,
+        because None has to reach the caller to be handled. Overlays HOLD their
+        last proven state on None (core.game_state.TickReads) and the mouse
+        recenter requires a definite False, so a boolean that folded None into
+        False would quietly bring back the one bias this tri-state exists to
+        expose (and its mirror image, a menu missed entirely). Ask
+        `menu_windows` when both answers are needed: that walks the list once.
+        """
+        pair = self.menu_windows()
+        if pair is None:
+            return None
+        return pair[0] if include_escape else pair[1]
 
 

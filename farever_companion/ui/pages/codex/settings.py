@@ -5,6 +5,7 @@ import os
 
 from ... import theme
 from ....data import codex
+from ....data import units as udata
 
 
 class CodexSettingsMixin:
@@ -82,7 +83,9 @@ class CodexSettingsMixin:
 
             is_boss = item_data.get("is_boss", False)
             is_elite = item_data.get("is_elite", False)
-            is_spark_pet = is_pet and ("spark" in name.lower() or "spark" in uid.lower())
+            # The one shared Spark predicate — this legend row had its own
+            # spelling test on the drawn name and the raw id.
+            is_spark_pet = is_pet and udata.is_spark_variant(uid)
 
             if is_boss or is_spark_pet:
                 bcol = theme.GOLD

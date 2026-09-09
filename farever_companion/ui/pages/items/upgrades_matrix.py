@@ -74,6 +74,7 @@ def _mono_font(px: int,
 
 def build_upgrades_matrix(ladder: list[dict],
                           level_label: QtWidgets.QWidget | None = None,
+                          stats_control: QtWidgets.QWidget | None = None,
                           show_steps: bool = True,
                           ) -> QtWidgets.QGridLayout:
     """The staircase matrix: one row per stat — each rarity's ladder shows
@@ -82,7 +83,12 @@ def build_upgrades_matrix(ladder: list[dict],
     color), and stacked underline rows per rarity with a nub at each end.
     `level_label`, when given, sits above the matrix's base column.
     `show_steps=False` drops the upgrade-step columns (crafted gear is
-    fixed-level and can't be upgraded)."""
+    fixed-level and can't be upgraded).
+
+    The ladder is gear stats only: the weapon's "Weapon Upgraded" passive
+    lives on the card's ⚡ trait line, which states it once instead of
+    re-listing the same percentages under these step columns.
+    """
     grid = QtWidgets.QGridLayout()
     grid.setHorizontalSpacing(1)
     grid.setVerticalSpacing(2)
@@ -190,15 +196,14 @@ def build_upgrades_matrix(ladder: list[dict],
                 seen.add(v)
                 k += 1
 
-    # Row 0 (top): the stat-name column's own header — a small muted STATS
-    # tag on the same row as the rarity headers, so the label column reads
-    # as a header instead of floating bare above the first value row.
-    sh = QtWidgets.QLabel("STATS")
-    sh.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-    sh.setFont(_mono_font(11, QtGui.QFont.Weight.Bold))
-    sh.setStyleSheet(
-        f"color:{theme.DIM};{mono}font-size:11px;font-weight:700;"
-        "letter-spacing:1px;background:transparent;padding:3px 6px 3px 2px;")
+    # Row 0: the stat-name column header/control.
+    sh = stats_control or QtWidgets.QLabel("STATS")
+    if stats_control is None:
+        sh.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        sh.setFont(_mono_font(11, QtGui.QFont.Weight.Bold))
+        sh.setStyleSheet(
+            f"color:{theme.DIM};{mono}font-size:11px;font-weight:700;"
+            "letter-spacing:1px;background:transparent;padding:3px 6px 3px 2px;")
     grid.addWidget(sh, top, 0)
 
     # Row 0: Rarity Name Headers (clean, no side borders). A header spans its
@@ -337,10 +342,11 @@ def build_upgrades_matrix(ladder: list[dict],
             for k, (i, v) in enumerate(new):
                 c_idx = col_start + k
                 val_cols[(label, v)] = c_idx
-                # the cell text shows the rounded value with the TRUE float
-                # in parens ('4 (3.877)'); the column is sized to its widest
-                # text (the final pass below applies the minimums once every
-                # cell is placed)
+                # the cell text is the shared stat_text() form — the clean
+                # tooltip integer by default, the exact float under the
+                # Exact toggle; the column is sized to its widest text (the
+                # final pass below applies the minimums once every cell is
+                # placed)
                 txt = idata.stat_text(v, lane["raws"][i])
                 _bump(c_idx, txt, theme.MONO_FONT, 13, 4,
                       weight=QtGui.QFont.Weight.Bold)
@@ -452,14 +458,17 @@ def build_upgrades_matrix(ladder: list[dict],
 
 def build_upgrades_matrix_scroll(ladder: list[dict],
                                  level_label: QtWidgets.QWidget | None = None,
+                                 stats_control: QtWidgets.QWidget | None = None,
                                  show_steps: bool = True,
                                  ) -> QtWidgets.QScrollArea:
     """The UPGRADE LADDER matrix wrapped so its cells are never squeezed:
     the grid keeps its content-sized width inside a transparent horizontal
     scroll area, so a narrow pane scrolls sideways instead of clipping the
-    numbers. `show_steps` is forwarded to build_upgrades_matrix.
+    numbers. `show_steps` is forwarded to
+    build_upgrades_matrix.
     """
     grid = build_upgrades_matrix(ladder, level_label=level_label,
+                                 stats_control=stats_control,
                                  show_steps=show_steps)
     host = QtWidgets.QWidget()
     host.setLayout(grid)

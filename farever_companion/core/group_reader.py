@@ -8,12 +8,17 @@ distance, unlike the local scene scan which only sees units near the player.
 
 Two layout facts were confirmed against the live game (2026-09-04):
 
-1. The ``players`` prop does NOT point at a plain HL array. It holds an
+1. The ``players`` prop does NOT point at a plain HL array, and there are TWO
+   wrappers on the way to the elements, not one: an
    ``hxbit.ArrayProxyData`` - the network-synced array proxy - whose own
-   ``array`` field is the real ``hl.types.ArrayDyn`` (proven in bytecode:
+   ``array`` field holds an ``hl.types.ArrayDyn`` (proven in bytecode:
    ``hxbit.ArrayProxyData.get_length`` reads this.field4 as
-   ``hl.types.ArrayDyn``). ``decode`` unwraps it probe-first and never trusts
-   a slot whose pointee is not a class-verified array with a sane length.
+   ``hl.types.ArrayDyn``), which is ITSELF a wrapper whose ``array`` field is
+   the real ``hl.types.ArrayObj``. Both hops are re-verified live
+   2026-10-01: ``proxy.array`` -> ``hl.types.ArrayDyn`` @0x2978C3581D8, whose
+   ``.array`` (@0x8) -> ``hl.types.ArrayObj`` @0x2978C3581C0, length 1.
+   ``decode`` unwraps probe-first and never trusts a slot whose pointee is
+   not a class-verified array with a sane length.
 2. ``st.Group`` declares NO ``leader``/``isSolo`` fields (own fields are
    groupId, players, instanceLobbies, suggestedActivities, nextServerID);
    both are computed getters in the game's bytecode:
@@ -27,7 +32,7 @@ never send an invite itself - the RPC runs inside the game process and the
 companion is read-only by design (no writes/injection; see
 tests/test_readonly_default.py).
 
-Like meterhud.py this is deliberately a *probe-first* reader: every field is
+Like core/inspect.py this is deliberately a *probe-first* reader: every field is
 decoded BY NAME via ``Hl.field_offset`` (super-chain aware, no hardcoded
 per-build offsets) and every pointer is class-verified before it is trusted,
 so a wrong assumption degrades to an empty roster rather than a fabricated
@@ -37,6 +42,7 @@ fallback for builds where that chain does not resolve.
 """
 from __future__ import annotations
 
+import math
 import struct
 import time
 from dataclasses import dataclass, field
@@ -46,6 +52,7 @@ from .damage import (
 )
 from .hl import Hl, is_ptr
 from .proc import Proc, ProcError
+from ..constants import OFF_POS
 
 GROUP_CLASS = "st.Group"
 PLAYER_CLASS = "st.Player"
@@ -65,14 +72,31 @@ _PLAYER_CONN_FIELDS = ("connected", "isConnected", "online")
 # The players prop layout: on the live game it is hxbit.ArrayProxyData (the
 # network proxy), whose OWN field is the real HL array.
 PROXY_CLASS = "hxbit.ArrayProxyData"
-_ARRAY_CLASSES = ("hl.types.ArrayDyn", "hl.types.ArrayObj")
+# The players prop layout, live-verified 2026-10-01 against a POPULATED rift
+# group: TWO wrappers sit between st.Group.players and the elements.
+#
+#   st.Group.players -> hxbit.ArrayProxyData
+#     .array        -> hl.types.ArrayDyn    <- which is ITSELF a wrapper
+#       .array      -> hl.types.ArrayObj    <- the real one: length at +8
+#
+# core/inspect.py has unwrapped the second hop by hand for a while (its
+# `_unwrap_proxy_array` "one more hop" branch and `_array_entries`); this
+# reader is the one that feeds the roster, and it did not.
+_ARRAY_OBJ_CLASS = "hl.types.ArrayObj"
+_DYN_CLASS = "hl.types.ArrayDyn"
+_DYN_ARRAY_FIELDS = ("array",)
 _PROXY_ARRAY_FIELDS = ("array",)
-_PROXY_SCAN_BYTES = 0x80     # bounded slot sweep across the proxy object
+_PROXY_SCAN_BYTES = 0x80     # bounded slot sweep across the wrapper object
 
 # Rate limits: the roster only changes on group joins/leaves, so a ~1 Hz
 # decode is far more than enough and keeps the small scans off the hot path.
 SNAPSHOT_TTL_S = 1.0      # min interval between live decodes
 REMAP_EMPTY_S = 6.0       # while NO group decodes, remap the heap this often
+# ...but that remap is the expensive half of the decode (measured ~2.4 s of heap
+# sweep), and while you are SOLO it can never succeed — so hammering it every 6 s
+# is pure cost. Each consecutive remap that decodes nothing doubles the wait
+# (6 -> 12 -> 24 -> 48 -> cap) and any successful decode resets it to 6 s.
+REMAP_EMPTY_MAX_S = 120.0
 FULL_DERIVE_S = 120.0     # rare full-RW sweep fallback (mirrors meterhud)
 MAX_MEMBERS = 64          # sanity cap for the players array
 
@@ -88,6 +112,16 @@ class GroupMember:
     is_me: bool = False
     connected: bool = True
     is_leader: bool = False
+    # World position read off the hero (ent.GameObject slot OFF_POS). Carries
+    # the member's location at ANY distance, which the local scene scan cannot
+    # do: a member in another zone has no entity here at all. (0.0, 0.0, 0.0)
+    # when the hero is missing or the read fails - see `has_pos`, because a
+    # genuine origin is indistinguishable from an unread one.
+    xyz: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    @property
+    def has_pos(self) -> bool:
+        return self.hero != 0 and any(self.xyz)
 
 
 @dataclass
@@ -130,6 +164,7 @@ class GroupReader:
         self._anchor_addrs: set[int] = set()
         self._scan_ranges: list[tuple[int, int]] = []
         self._last_remap = 0.0
+        self._remap_wait = REMAP_EMPTY_S      # backs off while nothing decodes
         self._last_full_derive = 0.0
         self._snap: GroupSnapshot | None = None
         self._snap_at = 0.0
@@ -203,43 +238,71 @@ class GroupReader:
             return None
         return n if 0 <= n <= MAX_MEMBERS else None
 
-    def _is_array(self, addr: int) -> bool:
-        if not addr:
-            return False
-        try:
-            return self.hl.class_of(addr) in _ARRAY_CLASSES
-        except (ProcError, OSError):
-            return False
+    def _field_ptr(self, addr: int, names: tuple[str, ...]) -> int | None:
+        """The pointer held in the first of `names` this object declares."""
+        tp = self.hl.ptr(addr)
+        if tp is None:
+            return None
+        off = self._first_offset(self.hl, tp, names)
+        if not off:
+            return None
+        return self.hl.ptr(addr + off)
+
+    def _real_array(self, addr: int | None) -> int | None:
+        """An ``hl.types.ArrayObj`` whose length and elements are readable.
+
+        Unwrap the wrapper chain probe-first BY CLASS NAME - proxy, then
+        ArrayDyn - and stop at the first real ArrayObj. Every hop verifies
+        the length, so a wrong pointer degrades to None instead of decoding
+        into fabricated members. Bounded at 3 hops.
+
+        Stopping one hop short is not a small mistake, and that is how the
+        whole roster went unreadable while a group sat there fully populated
+        (live 2026-10-01, a rift party). ``_ARRAY_CLASSES`` used to accept
+        ``hl.types.ArrayDyn`` as "an array", so ``proxy.array`` was handed
+        straight to ``_sane_array_len`` - which read the Dyn wrapper's own
+        ``array`` POINTER as the length. The low half of 0x2978C3581C0 is
+        2352316864, far outside 0..MAX_MEMBERS, so the array was rejected as
+        insane and ``decode`` returned None. Downstream that reads as "you
+        have no party": the Activity Log prints "roster unavailable", the
+        Party page lists nobody, and ``solo_status`` answers UNKNOWN rather
+        than solo - which is the one answer that cannot be acted on.
+        """
+        cur = addr
+        for _ in range(3):
+            if not cur:
+                return None
+            try:
+                cls = self.hl.class_of(cur)
+            except (ProcError, OSError):
+                return None
+            if cls == _ARRAY_OBJ_CLASS:
+                return cur if self._sane_array_len(cur) is not None else None
+            if cls == _DYN_CLASS:
+                cur = self._field_ptr(cur, _DYN_ARRAY_FIELDS)
+                continue
+            if cls == PROXY_CLASS:
+                cur = self._field_ptr(cur, _PROXY_ARRAY_FIELDS)
+                continue
+            return None
+        return None
 
     def _players_array(self, players_slot_addr: int) -> int | None:
         """The real roster array behind a group's ``players`` prop slot.
 
-        The prop may be a plain HL array OR an hxbit.ArrayProxyData (the
-        live game's layout) whose own ``array`` field holds the real array
-        (bytecode-proven: ``hxbit.ArrayProxyData.get_length`` reads
-        this.field4 as an ``hl.types.ArrayDyn``). Unwrap probe-first:
-        reflection offset for the proxy's ``array`` field, then a bounded
-        slot sweep of the proxy object for a class-verified array with a
-        sane length. Returns None when nothing verifies - never a pointer
-        that could decode into fabricated members."""
+        The prop may be a plain HL array, an ``hxbit.ArrayProxyData`` (the
+        live game's first wrapper) or that proxy's ``hl.types.ArrayDyn``
+        payload; ``_real_array`` walks the chain by class name. When the
+        declared field does not verify, fall back to a bounded slot sweep of
+        the wrapper object for a class-verified array with a sane length.
+        Returns None when nothing verifies - never a pointer that could
+        decode into fabricated members."""
         obj = self.hl.ptr(players_slot_addr)
         if obj is None:
             return None
-        if self._is_array(obj):
-            return obj if self._sane_array_len(obj) is not None else None
-        try:
-            if self.hl.class_of(obj) != PROXY_CLASS:
-                return None
-        except (ProcError, OSError):
-            return None
-        tp = self.hl.ptr(obj)
-        if tp:
-            off = self._first_offset(self.hl, tp, _PROXY_ARRAY_FIELDS)
-            if off:
-                a = self.hl.ptr(obj + off)
-                if (a and self._is_array(a)
-                        and self._sane_array_len(a) is not None):
-                    return a
+        arr = self._real_array(obj)
+        if arr is not None:
+            return arr
         try:
             raw = self.proc.try_read(obj, _PROXY_SCAN_BYTES)
         except (ProcError, OSError):
@@ -250,11 +313,11 @@ class GroupReader:
                 if not is_ptr(v):
                     continue
                 try:
-                    if (self._is_array(v)
-                            and self._sane_array_len(v) is not None):
-                        return v
+                    a = self._real_array(v)
                 except (ProcError, OSError):
                     continue
+                if a is not None:
+                    return a
         return None
 
     # --- local-player chain (scan-free) ----------------------------------
@@ -332,6 +395,7 @@ class GroupReader:
             h = self.hl.ptr(player_addr + off)
             if h:
                 mem.hero = h
+                mem.xyz = self._read_pos(h)
         off = self._first_offset(self.hl, tp, _PLAYER_UID_FIELDS)
         if off:
             uid = self._string_at(player_addr + off)
@@ -351,6 +415,30 @@ class GroupReader:
         if off:
             mem.connected = self._flag_at(player_addr + off)
         return mem
+
+    def _read_pos(self, hero_addr: int) -> tuple[float, float, float]:
+        """World position off an ``ent.GameObject`` (``OFF_POS``, f64[3]).
+
+        Same slot the scene scan reads (see scene.units), so a far-away
+        member resolves through the same coordinates the map does. A hero
+        outside the local scene is not simulated, so this can be a stale
+        last-known position - good enough to name a zone, which is all the
+        consumer does with it. Returns (0,0,0) on any read failure.
+        """
+        if not hero_addr:
+            return (0.0, 0.0, 0.0)
+        try:
+            raw = self.proc.try_read(hero_addr + OFF_POS, 24)
+        except (ProcError, OSError):
+            return (0.0, 0.0, 0.0)
+        if not raw or len(raw) < 24:
+            return (0.0, 0.0, 0.0)
+        x, y, z = struct.unpack_from("<ddd", raw, 0)
+        # A freed/never-initialised object reads as denormals or wild values;
+        # treat anything outside the playable world as "no position".
+        if not all(map(math.isfinite, (x, y, z))) or max(abs(x), abs(y), abs(z)) > 1e7:
+            return (0.0, 0.0, 0.0)
+        return (x, y, z)
 
     def _mark_leader(self, snap: GroupSnapshot, group_addr: int) -> bool:
         """Tag the member the group's ``leader`` prop points at (a build that
@@ -449,11 +537,17 @@ class GroupReader:
                     out.append(s)
 
         collect()
-        if not out and time.monotonic() - self._last_remap >= REMAP_EMPTY_S:
+        if not out and time.monotonic() - self._last_remap >= self._remap_wait:
             # No live group decoded: the party may have been allocated off
-            # the mapped pages. Remap (bounded, ~1s) before giving up.
+            # the mapped pages. Remap (bounded, but the slow half of the read)
+            # before giving up — and wait twice as long before trying again, so
+            # a solo session stops paying for a sweep that cannot find anything.
             self.refresh_ranges()
             collect()
+            if not out:
+                self._remap_wait = min(self._remap_wait * 2, REMAP_EMPTY_MAX_S)
+        if out:
+            self._remap_wait = REMAP_EMPTY_S      # a group decodes again
         return out
 
     @staticmethod
@@ -474,6 +568,16 @@ class GroupReader:
         if flagged:
             return max(flagged, key=lambda g: len(g.members))
         return max(groups, key=lambda g: len(g.members))
+
+    def last(self) -> GroupSnapshot | None:
+        """The snapshot from the last poll, WITHOUT decoding anything.
+
+        For callers on the UI thread: a decode is a heap sweep measured in
+        seconds (see REMAP_EMPTY_S), so a page that only wants to list the party
+        — best-effort, the live scene being the real source — should read this
+        and let a background thread do the decoding. None until one has run.
+        """
+        return self._snap
 
     # --- public poll -----------------------------------------------------
     def snapshot(self, local_player: int | None = None,

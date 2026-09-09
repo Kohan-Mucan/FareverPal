@@ -11,8 +11,8 @@ import math
 from collections import defaultdict
 
 from .. import theme
+from ...core import game_state
 from ...data import icons, names, units as udata
-from ... import paths
 from ...geo import orbs as geo_orbs
 from .entity_rows import RowSpec
 from .minimap_render import done_marker
@@ -192,17 +192,43 @@ class EntityRenderMixin:
 
                 col_hex = theme.HERO.get(hero_class, theme.TEXT)
                 col = col_hex  # Keep class color even when selected/tracked
+                # My own row: hero_display_name keys on the group roster and
+                # never matches me, so it would fall back to the class label.
+                # Resolve me directly instead (same pattern as the Dungeon
+                # HUD's named renderer).
+                pa = getattr(self.model, "player_addr", 0) or 0
+                is_me = bool(addr and pa and addr == pa)
+                if is_me:
+                    nm = f"{self.model.player_name(pa) or 'You'} (You)"
+                else:
+                    nm = self.model.hero_display_name(e)
                 specs.append(RowSpec(
-                    None, None, col, self.model.hero_display_name(e), col,
+                    None, None, col, nm, col,
                     sub="◈ TRACKING" if tracked else "",
                     value=f"{d:>6.0f}m", bold=tracked, highlight=tracked, outlined=True,
                     ui_icon="player",
                     cb=(lambda k=key: self._select(*k)) if addr is not None else None,
                     key=key))
+            # Members outside the local scene: no live entity, so no distance -
+            # their zone name (from the roster's hero position) is the payload.
+            for nm, cls, zname in getattr(self, "_group_away", None) or []:
+                # hero_class_of already returns the canonical class name
+                # ("Warrior"), so this matches the scene rows' colour key.
+                col = theme.HERO.get((cls or "").lower(), theme.MUTED)
+                specs.append(RowSpec(
+                    None, None, col, nm, col,
+                    sub=zname, sub_color=theme.MUTED,
+                    value="AWAY", value_color=theme.MUTED,
+                    outlined=True, ui_icon="player"))
             self.group_box.fill(specs, isz)
             n_dead = sum(deaths.values())
-            # +1 = you (the rows only list other members)
-            total = len(specs) + 1
+            # The gather step adds me at distance 0 when in-world, so the
+            # row count IS the party size; the old +1 assumed the rows only
+            # list other members and double-counted me when present.
+            pa = getattr(self.model, "player_addr", 0) or 0
+            me_in_list = pa and any(
+                getattr(e, "addr", 0) == pa for e, _d in self._group_members)
+            total = len(specs) + (0 if me_in_list else 1)
             hdr = f"PLAYERS · {total}" + (f" · ☠{n_dead}" if n_dead else "")
             self.group_box.header.set_text(hdr)
             tag = ""
@@ -222,7 +248,8 @@ class EntityRenderMixin:
             n_new = 0
             for e, d in self._comps:
                 unit_id = e.unit_id
-                display_name = names.unit_name(unit_id) or names.humanize(unit_id)
+                # unit_name humanizes an id no sheet names on its own
+                display_name = names.unit_name(unit_id)
 
                 missing = self._owned is not None and unit_id not in self._owned
                 n_new += missing
@@ -230,7 +257,10 @@ class EntityRenderMixin:
                 sel = addr is not None and ("comp", addr) == self._sel
                 # Badge follows the selected row — not the tracker's closest-mob lock
                 tracked = sel and self._is_tracked("unit", unit_id)
-                is_spark = "spark" in display_name.lower()
+                # The one shared Spark predicate — this row used to spell the rule
+                # itself ("spark" in the display name), so a companion the id
+                # named but the label didn't still went unmarked here.
+                is_spark = udata.is_spark_variant(unit_id)
 
                 if tracked:
                     col = self.s.hud_accent or theme.ACCENT
@@ -243,8 +273,9 @@ class EntityRenderMixin:
                     "◈ TRACKING" if tracked else "") if b]
                 if tracked:
                     sub_bits.append(unit_id)
+                icon_sheet = icons.map_icon_sheet(unit_id)
                 specs.append(RowSpec(
-                    "collection", unit_id, col,
+                    icon_sheet, unit_id, col,
                     display_name, col,
                     sub="  ·  ".join(sub_bits),
                     value=f"{d:>6.0f}m", bold=missing or tracked or is_spark,
@@ -407,12 +438,13 @@ class EntityRenderMixin:
         if self.s.show_chests:
             self.chest_box.show()
             specs = []
+            done_lower = {str(done_id or "").casefold() for done_id in done_list}
             for c in self._chests:
                 is_recipe = "recipe" in c.chest_id.lower() or (c.loot_table and "recipe" in (c.loot_table or "").lower())
                 kind = "recipe" if is_recipe else "chest"
                 color = theme.CHEST  # Keep gold color even when selected/tracked
 
-                done = c.chest_id in done_list
+                done = str(c.chest_id or "").casefold() in done_lower
                 label = names.chest_label(c.chest_id, c.loot_table)
 
                 cx, cy, cz = c.x, c.y, c.z
@@ -491,9 +523,14 @@ class EntityRenderMixin:
         else:
             self.food_box.hide()
 
-        rift_mode = self._get_rift_mode()
+        # RIFT TIMER card — two gates: the section switch (entity_show_rift,
+        # the Entity HUD's own titlebar button) and the global mode
+        # (show_rift_timer Off / Active / Always). Section off wins outright,
+        # so no game-state read happens for a hidden section.
+        rift_mode = (self._get_rift_mode()
+                     if getattr(self.s, "entity_show_rift", True) else "Off")
 
-        rst = self.model.rift_status() if (self.model is not None and rift_mode != "Off") else None
+        rst = game_state.rift(self.model) if rift_mode != "Off" else None
         if rst and rst.state in ("WARNING", "ACTIVE", "CLOSING", "SCHEDULED"):
             show_card = (rift_mode == "Always") or (rift_mode == "Active" and rst.state in ("WARNING", "ACTIVE", "CLOSING"))
             if show_card:

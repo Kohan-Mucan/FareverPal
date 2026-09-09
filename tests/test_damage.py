@@ -12,9 +12,12 @@ import time
 from farever_companion.constants import (
     OFF_DPS_DISPLAY_DAMAGE, OFF_DPS_RESULT_BASE_SKILL,
     OFF_DPS_RESULT_SERVER_SOURCE, OFF_DPS_RESULT_TARGET, OFF_DPS_RESULT_AMOUNT,
-    OFF_DPS_RESULT_KILL, OFF_DPS_RESULT_CRITICAL, OFF_DPS_SKILL_ID,
+    OFF_DPS_RESULT_KILL, OFF_DPS_RESULT_CRITICAL, OFF_DPS_RESULT_AFFINITY,
+    OFF_DPS_SKILL_ID,
 )
-from farever_companion.core.damage import DamageReader
+from farever_companion.core.damage import (
+    BLIND_RESCUE_MAX_S, BLIND_RESCUE_S, DamageReader,
+)
 from farever_companion.core.hl import Hl
 from tests.fakemem import FakeProc, HeapBuilder
 
@@ -202,6 +205,97 @@ def test_reflection_wins_over_constants_when_both_exist():
     assert len(evs) == 1
     assert abs(evs[0].amount - 555.0) < 1e-6
     assert evs[0].skill == "Fireball"
+
+
+# --- per-hit damage type (affinity) ----------------------------------------
+# `st.skill.DamageResult.affinity` is the game's own per-hit damage type. It is
+# optional data: reflective name first, constant second, and anything that does
+# not look like one identifier token reads as untagged -- the hit always counts.
+
+def test_clean_affinity_is_a_shape_test_not_a_vocabulary():
+    """Real schools pass (including ones no weapon sheet names); junk, a nulled
+    field and non-strings all degrade to untagged."""
+    from farever_companion.core.damage_events import clean_affinity
+
+    for good in ("Physical", "Magic", "Raw", "Chaos", "Fire", "Light",
+                 "threshold"):
+        assert clean_affinity(good) == good
+    assert clean_affinity("  Fire  ") == "Fire"     # trimmed, not rejected
+    for bad in ("", "   ", "x", "<null>", "instStretch:y", "Holy Fire",
+                "Fire2", "F\u00edre", "x" * 40, None, 0, b"Fire", ["Fire"]):
+        assert clean_affinity(bad) == "", bad
+
+
+def test_affinity_reads_a_reflected_field_that_moved():
+    """A build that parks `affinity` away from OFF_DPS_RESULT_AFFINITY must
+    still decode it -- reflection wins over the constant."""
+    proc = FakeProc()
+    b = HeapBuilder(proc)
+    hero = b.make_instance(HERO, size=0x100)
+    foe = b.make_instance(FOE, size=0x100)
+    b.make_type(BSKILL, fields={"kind": 8})
+    b.make_type(RES, fields={
+        "baseSkill": 8, "serverSource": 0x28, "target": 0x30,
+        "affinity": 0x40,                      # NOT the constant 0x38
+        "amount": 0x50, "kill": 0x60, "critical": 0x61,
+    })
+    b.make_type(DISP, fields={"dmg": 8})
+
+    bskill = b.make_instance(BSKILL, size=0x80)
+    proc.put_u64(bskill + 8, b.make_string("Dagger_Base_Attack"))
+    res = b.make_instance(RES, size=0x100)
+    proc.put_u64(res + 8, bskill)
+    proc.put_u64(res + 0x28, hero)
+    proc.put_u64(res + 0x30, foe)
+    proc.put_u64(res + 0x40, b.make_string("Fire"))
+    proc.put_f64(res + 0x50, 777.0)
+    disp = b.make_instance(DISP, size=0x40)
+    proc.put_u64(disp + 8, res)
+
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    evs = r.poll()
+    assert len(evs) == 1
+    assert abs(evs[0].amount - 777.0) < 1e-6
+    assert evs[0].affinity == "Fire"
+
+
+def test_affinity_falls_back_to_the_constant_offset_and_is_optional():
+    """Without a field table the constant is the only way in; a nulled field
+    leaves the hit untagged instead of dropping it."""
+    proc, b, addrs = _world()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    assert len(r.poll()) == 1
+    assert r.poll() == []                       # same number: deduped, not lost
+    assert r._diag["ok"] == 0
+
+    proc.put_u64(addrs["res"] + OFF_DPS_RESULT_AFFINITY,
+                 b.make_string("Physical"))
+    proc.put_f64(addrs["res"] + OFF_DPS_RESULT_AMOUNT, 1235.5)   # force a change
+    r.refresh_ranges()
+    evs = r.poll()
+    assert len(evs) == 1
+    assert evs[0].affinity == "Physical"
+
+
+def test_recycled_slot_junk_never_becomes_a_damage_type():
+    """The floaty pool recycles, so a dead slot can resolve a real String that is
+    not a damage type (``instStretch:y`` was observed live) or a non-String
+    pointer. Both must come out untagged with the hit intact."""
+    for planted in (None, "instStretch:y", "<null>", "x" * 40):
+        proc, b, addrs = _world()
+        ptr = b.make_string(planted) if planted is not None else addrs["hero"]
+        proc.put_u64(addrs["res"] + OFF_DPS_RESULT_AFFINITY, ptr)
+        r = _reader(proc)
+        assert r.find_type() is not None
+        r.refresh_ranges()
+        evs = r.poll()
+        assert len(evs) == 1, planted
+        assert abs(evs[0].amount - 1234.5) < 1e-6, planted
+        assert evs[0].affinity == "", planted
 
 
 # --- stale-build diagnostics ------------------------------------------------
@@ -483,3 +577,287 @@ def test_skill_name_lenient_fallback_when_no_verified_string():
     evs = r.poll()
     assert len(evs) == 1
     assert evs[0].skill == "OldStyleName"
+
+
+# --- a moved display pool (instance entry) must not pin the reader ----------
+# Option 3 hunts the display pool in small committed PAGE_READWRITE regions.
+# An instance can allocate that pool in a larger arena, and the objects of the
+# PREVIOUS pool keep answering the small hunt - so the wide fallback never ran
+# and a stale anchor set kept the ranges pointed at dead pages: no events, no
+# session, nothing saved, while the same reader worked in the open world.
+# A cold reader (nothing decoded for a while) now sweeps wide and REMEMBERS the
+# regions it found the pool in.
+
+BIG_BASE = 0x40000000
+BIG_SIZE = 0x3000000          # 48 MiB: past MAX_RW_REGION, so not "small"
+ALT_BASE = 0x50000000
+ALT_SIZE = 0x3000000          # a second big region for the one-shot test
+
+
+def _moved_pool():
+    """The small-region pool (now dead) plus a live pool in a big RW region."""
+    proc, b, addrs = _world()
+    proc.add_region(BIG_BASE, BIG_SIZE, writable=True, prot=0x04)
+    bskill = proc.u64(addrs["res"] + OFF_DPS_RESULT_BASE_SKILL)
+    new_res = BIG_BASE + 0x1000
+    new_disp = BIG_BASE + 0x8000
+    proc.put_u64(new_res, b.types[RES])                     # result header
+    proc.put_f64(new_res + OFF_DPS_RESULT_AMOUNT, 500.0)
+    proc.put_u64(new_res + OFF_DPS_RESULT_BASE_SKILL, bskill)
+    proc.put_u64(new_res + OFF_DPS_RESULT_SERVER_SOURCE, addrs["hero"])
+    proc.put_u64(new_res + OFF_DPS_RESULT_TARGET, addrs["foe"])
+    proc.put_u64(new_disp, b.types[DISP])                   # display header
+    proc.put_u64(new_disp + OFF_DPS_DISPLAY_DAMAGE, new_res)
+    return proc, b, addrs, new_disp
+
+
+def test_a_moved_pool_is_re_anchored_once_the_reader_goes_cold():
+    proc, b, addrs, _new_disp = _moved_pool()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()                       # warm: small-region pool only
+    assert [round(e.amount) for e in r.poll()] == [1234]
+
+    # the pool moves: the old display decodes nothing, the live one sits in a
+    # region the small window does not cover
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    r._last_ok_at = time.monotonic() - 10.0  # -> cold
+    r._last_full_derive = 0.0                # the 120 s rate gate has elapsed
+    r.refresh_ranges()
+    assert r._extra_ranges == [(BIG_BASE, BIG_SIZE)]
+    assert [round(e.amount) for e in r.poll()] == [500]
+
+
+def test_a_warm_reader_keeps_the_cheap_small_window_hunt():
+    """The wide sweep is the cold path only: while events decode, a small-region
+    hit must not cost seconds of scanning."""
+    proc, b, addrs, _new_disp = _moved_pool()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    assert [round(e.amount) for e in r.poll()] == [1234]
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    r.refresh_ranges()                      # fresh: NOT cold
+    assert r._extra_ranges == []
+    assert r.poll() == []
+
+
+def test_remembered_extra_regions_stay_in_the_steady_state_hunt():
+    """Once the wide sweep has found the pool, later small-window hits must not
+    drop it again (that would go blind 5 s later and re-sweep forever)."""
+    proc, b, addrs, _new_disp = _moved_pool()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    r.poll()
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = 0.0
+    r.refresh_ranges()
+    assert r.poll()                          # pool found, one event
+    r.refresh_ranges()                      # steady state, small hits present
+    assert (BIG_BASE, BIG_SIZE) in r._extra_ranges
+    assert r._scan_ranges
+    assert r._diag["no_res"] >= 1           # still hunting the remembered pool
+    # a fresh number on the relocated display still decodes
+    proc.put_f64(BIG_BASE + 0x1000 + OFF_DPS_RESULT_AMOUNT, 777.0)
+    assert [round(e.amount) for e in r.poll()] == [777]
+
+
+def test_forced_rehunt_bypasses_the_wide_sweep_rate_gate():
+    """A one-shot forced re-hunt (zone change) must win over the 120 s rate gate.
+
+    Live 2026-09-19: a companion restart 2 min before a dungeon entry armed the
+    wide-sweep gate; when the pool moved on zone-in the cold sweep was refused,
+    the reader kept re-mapping dead pages, and the first pull ran ~1 min blind.
+    """
+    proc, b, addrs, new_disp = _moved_pool()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    r.poll()
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    r._last_ok_at = time.monotonic() - 10.0  # cold
+    r._last_full_derive = time.monotonic()   # gate ARMED right now
+    r.refresh_ranges()                       # plain cold sweep: gate refuses
+    assert [round(e.amount) for e in r.poll()] == []   # still blind
+    assert (BIG_BASE, BIG_SIZE) not in r._extra_ranges
+
+    r.force_wide_rehunt("zone enter")        # <- the fix
+    r.refresh_ranges()                       # forced sweep bypasses the gate
+    assert (BIG_BASE, BIG_SIZE) in r._extra_ranges
+    assert [round(e.amount) for e in r.poll()] == [500]
+
+
+def test_forced_rehunt_is_one_shot():
+    """The forced request consumes itself on the next hunt: a subsequent
+    hunt obeys the rate gate again (no sweep-per-derive hammering)."""
+    proc, b, addrs, _new_disp = _moved_pool()
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    r.poll()
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = time.monotonic()
+    r.force_wide_rehunt("zone enter")
+    r.refresh_ranges()                       # forced: re-anchors onto BIG
+    assert (BIG_BASE, BIG_SIZE) in r._extra_ranges
+    assert r._force_wide_until == 0.0        # request consumed
+
+    # A second pool move the small window cannot see, cold again, gate armed:
+    # WITHOUT a new forced request the hunt must NOT wide-sweep (one-shot).
+    proc.add_region(ALT_BASE, ALT_SIZE, writable=True, prot=0x04)
+    bskill = proc.u64(addrs["res"] + OFF_DPS_RESULT_BASE_SKILL)
+    alt_res = ALT_BASE + 0x1000
+    proc.put_u64(alt_res, b.types[RES])
+    proc.put_f64(alt_res + OFF_DPS_RESULT_AMOUNT, 321.0)
+    proc.put_u64(alt_res + OFF_DPS_RESULT_BASE_SKILL, bskill)
+    proc.put_u64(alt_res + OFF_DPS_RESULT_SERVER_SOURCE, addrs["hero"])
+    proc.put_u64(alt_res + OFF_DPS_RESULT_TARGET, addrs["foe"])
+    proc.put_u64(ALT_BASE + 0x8000, b.types[DISP])
+    proc.put_u64(ALT_BASE + 0x8000 + OFF_DPS_DISPLAY_DAMAGE, alt_res)
+    proc.put_u64(BIG_BASE + 0x8000 + OFF_DPS_DISPLAY_DAMAGE, 0)   # BIG pool dead
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = time.monotonic()   # gate re-armed
+    r.refresh_ranges()
+    assert (ALT_BASE, ALT_SIZE) not in r._extra_ranges   # no sweep without a force
+    assert [round(e.amount) for e in r.poll()] == []
+
+    r.force_wide_rehunt("zone enter")        # next zone change forces again
+    r.refresh_ranges()
+    assert (ALT_BASE, ALT_SIZE) in r._extra_ranges
+    assert [round(e.amount) for e in r.poll()] == [321]
+
+
+# --- blind rescue: a cold reader must not wait out the 120 s gate ----------
+# Live 2026-09-19 (Option 3, dungeon): damage taken appeared in ~5 s (the
+# HP-diff estimate, which needs no reader) while outgoing dmg/skills stayed
+# blank for a whole 30 s fight and then decoded in one gush. Cause: the zone-in
+# rescue swept while the new zone's pool did not exist yet (a floaty is only
+# created once something is hit), spent its one-shot on an empty result, and
+# the 120 s maintenance gate then refused every cold re-hunt for the rest of
+# the pull. These pin the two escapes from that blind window.
+def _spawn_zone_pool(proc, b, addrs, amount: float = 500.0):
+    """The new zone's display pool (big RW region), created on the first hit."""
+    proc.add_region(BIG_BASE, BIG_SIZE, writable=True, prot=0x04)
+    bskill = proc.u64(addrs["res"] + OFF_DPS_RESULT_BASE_SKILL)
+    res = BIG_BASE + 0x1000
+    disp = BIG_BASE + 0x8000
+    proc.put_u64(res, b.types[RES])
+    proc.put_f64(res + OFF_DPS_RESULT_AMOUNT, amount)
+    proc.put_u64(res + OFF_DPS_RESULT_BASE_SKILL, bskill)
+    proc.put_u64(res + OFF_DPS_RESULT_SERVER_SOURCE, addrs["hero"])
+    proc.put_u64(res + OFF_DPS_RESULT_TARGET, addrs["foe"])
+    proc.put_u64(disp, b.types[DISP])
+    proc.put_u64(disp + OFF_DPS_DISPLAY_DAMAGE, res)
+    return disp
+
+
+def _zone_changed(proc, addrs):
+    """Warm the reader on the open-world pool, THEN zone: that pool dies and
+    nothing decodes again until the new zone's pool exists."""
+    r = _reader(proc)
+    assert r.find_type() is not None
+    r.refresh_ranges()
+    assert [round(e.amount) for e in r.poll()] == [1234]
+    proc.put_u64(addrs["disp"] + OFF_DPS_DISPLAY_DAMAGE, 0)
+    return r
+
+
+def test_a_zone_change_retries_until_the_new_pool_exists():
+    """An empty zone-in sweep must NOT spend the rescue: a floaty only exists
+    once something is hit, so the pool appears after that first sweep ran."""
+    proc, b, addrs = _world()
+    r = _zone_changed(proc, addrs)
+    r._last_ok_at = time.monotonic() - 10.0     # nothing decoded since the zone
+    r._last_full_derive = time.monotonic()      # attach derive armed the gate
+    r.force_wide_rehunt("zone enter")
+
+    r.refresh_ranges()                          # zone-in: no pool exists yet
+    assert r._last_sweep_hits == 0              # the sweep found nothing...
+    assert r._force_wide_until > 0.0            # ...and was NOT spent
+    assert r.poll() == []
+
+    # The pull starts; the new pool exists. The retry must be due well inside
+    # the 120 s gate (before this fix: 0 sweeps for the entire pull).
+    _spawn_zone_pool(proc, b, addrs)
+    assert r._force_retry_after > time.monotonic() - 60.0
+    r._force_retry_after = 0.0                  # the backed-off retry is due
+    assert r.rescue_sweep_due() is True
+    r.refresh_ranges()
+    assert r._last_sweep_hits > 0
+    assert [round(e.amount) for e in r.poll()] == [500]
+
+
+def test_a_cold_reader_mid_fight_rescues_on_the_short_cadence():
+    """Cold WHILE the tracker reports a live fight: the rescue runs on the
+    blind cadence, not the 120 s maintenance one (same `note_combat` signal
+    that already keeps the derive cadence alive mid-fight)."""
+    proc, b, addrs = _world()
+    r = _zone_changed(proc, addrs)
+    r._last_ok_at = time.monotonic() - 10.0     # cold
+    r._last_full_derive = time.monotonic()      # maintenance gate armed
+    _spawn_zone_pool(proc, b, addrs)
+
+    r.in_combat = True
+    r._last_full_derive = time.monotonic() - (BLIND_RESCUE_S + 1.0)
+    r.refresh_ranges()
+    assert r._last_sweep_hits > 0
+    assert [round(e.amount) for e in r.poll()] == [500]
+
+
+def test_an_idle_cold_reader_still_obeys_the_maintenance_gate():
+    """No fight, no zone change: a merely-cold reader must NOT start sweeping
+    the whole address space every few seconds (standing in town is cold)."""
+    proc, b, addrs = _world()
+    r = _zone_changed(proc, addrs)
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = time.monotonic()
+    r.in_combat = False
+    _spawn_zone_pool(proc, b, addrs)
+
+    r.refresh_ranges()
+    assert r._last_sweep_hits == -1             # no sweep was even attempted
+
+
+def test_the_rescue_backs_off_so_it_cannot_sweep_every_pass():
+    """Repeated empty rescues must widen their interval, capped: a long fight
+    with genuinely stale offsets cannot peg a core."""
+    proc, b, addrs = _world()
+    r = _zone_changed(proc, addrs)
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = time.monotonic()
+    r.force_wide_rehunt("zone enter")
+
+    r.refresh_ranges()                          # empty rescue -> re-armed
+    assert r._last_sweep_hits == 0
+    assert r._blind_rescue_s == BLIND_RESCUE_S
+    assert r.rescue_sweep_due() is False        # backing off, not due yet
+
+    seen = [r._blind_rescue_s]
+    for _ in range(5):
+        r._force_retry_after = 0.0
+        r.refresh_ranges()
+        seen.append(r._blind_rescue_s)
+    assert seen == sorted(seen)                 # monotonically widening
+    assert seen[-1] == BLIND_RESCUE_MAX_S       # and capped
+
+
+def test_a_found_sweep_resets_the_backoff_and_the_arm():
+    proc, b, addrs = _world()
+    r = _zone_changed(proc, addrs)
+    r._last_ok_at = time.monotonic() - 10.0
+    r._last_full_derive = time.monotonic()
+    r.force_wide_rehunt("zone enter")
+    r.refresh_ranges()                          # empty: backed off
+    assert r._blind_rescue_s > 0.0
+    assert r._force_wide_until > 0.0
+
+    _spawn_zone_pool(proc, b, addrs)
+    r._force_retry_after = 0.0
+    r.refresh_ranges()                          # found the pool
+    assert r._last_sweep_hits > 0
+    assert r._blind_rescue_s == 0.0             # backoff cleared
+    assert r._force_wide_until == 0.0           # rescue satisfied
+    assert r.rescue_sweep_due() is False

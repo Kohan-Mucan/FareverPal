@@ -12,7 +12,7 @@ from PySide6 import QtCore, QtWidgets
 from ... import theme
 from ...components import ElideLabel as _ElideLabel, IconTile
 from ....core.dps_tracker import PlayerParse
-from ...skill_row import SkillRow
+from ...skill_row import SkillRow, sub_row_key, sync_subskill_rows
 
 TOP_SKILLS = 5  # fallback per-player skill cap for rows built without a budget
 
@@ -24,16 +24,20 @@ class _PlayerRowWidget(QtWidgets.QFrame):
 
     def __init__(self, name: str, is_me: bool, parent=None,
                  expanded: bool | None = None,
-                 show_all_skills: bool = False):
+                 show_all_skills: bool = False,
+                 skill_type_cell: bool = True):
         super().__init__(parent)
         self.name = name
         self.is_me = is_me
+        # Per-skill damage-type cell: the school name the skill deals (the
+        # DPS Analysis TYPE column), in the school's colour. One cell per row
+        # — see SkillRow's note on why there is no second PD/MD tag beside it.
+        self._skill_type_cell = skill_type_cell
         # User chevron choice (persisted); auto-collapse is tracked separately.
         self.expanded = is_me if expanded is None else expanded
         self._show_all_skills = show_all_skills
         self._accent = theme.ACCENT
         self._rank_idx = 0
-        self._is_top = False
 
         self.setStyleSheet(self._frame_qss())
         self.setCursor(QtCore.Qt.PointingHandCursor)
@@ -65,6 +69,13 @@ class _PlayerRowWidget(QtWidgets.QFrame):
                                     QtWidgets.QSizePolicy.Preferred)
         name_row.addWidget(self.name_lbl, 1)
 
+        # Death indicator: a skull shown while this player is dead/down.
+        self.dead_lbl = QtWidgets.QLabel("☠")
+        self.dead_lbl.setVisible(False)
+        self.dead_lbl.setStyleSheet(
+            f"font-size: 11px; font-weight: 800; color: {theme.DANGER};")
+        name_row.addWidget(self.dead_lbl, 0)
+
         self.cls_lbl = QtWidgets.QLabel("")
         self.cls_lbl.setVisible(False)
         self.cls_lbl.setStyleSheet(
@@ -82,8 +93,8 @@ class _PlayerRowWidget(QtWidgets.QFrame):
         self.total_lbl = QtWidgets.QLabel("0 DPS")
         self.total_lbl.setObjectName("PlayerTotal")
         self.total_lbl.setStyleSheet(
-            f"font-size: 12px; font-weight: 800; color: #ffffff; "
-            f"font-family: 'Consolas', monospace;")
+            "font-size: 12px; font-weight: 800; color: #ffffff; "
+            "font-family: 'Consolas', monospace;")
         self.total_lbl.setMinimumWidth(50)
         self.total_lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         h_lay.addWidget(self.total_lbl)
@@ -153,11 +164,15 @@ class _PlayerRowWidget(QtWidgets.QFrame):
             self.collapseChanged.emit(self.expanded)
         super().mousePressEvent(e)
 
+    def set_dead(self, dead: bool) -> None:
+        """Toggle the skull death indicator for this player."""
+        self.dead_lbl.setVisible(bool(dead))
+
     def update_stats(self, rank_idx: int, player: PlayerParse, duration: float,
                      group_damage: float, group_heals: float, mode: str = "damage",
-                     skill_budget: int | None = None):
+                     skill_budget: int | None = None, dead: bool = False):
         self._rank_idx = rank_idx
-        self._is_top = (rank_idx == 0)
+        self.set_dead(dead)
 
         frame_qss = self._frame_qss()
         if getattr(self, "_last_frame_qss", None) != frame_qss:
@@ -228,8 +243,6 @@ class _PlayerRowWidget(QtWidgets.QFrame):
                 f"font-size: 12px; font-weight: 800; color: {total_color}; "
                 f"font-family: 'Consolas', monospace;")
             self._last_total_color = total_color
-        self.total_lbl.setToolTip(
-            f"{player.name}: {total:,.0f} total · {rate:,.1f}/s · {share:.1f}% group share")
 
         # HUD second line: lifetime total + skill count.
         n_skills = len(player.skills)
@@ -254,6 +267,10 @@ class _PlayerRowWidget(QtWidgets.QFrame):
             cap = skill_budget if skill_budget is not None else TOP_SKILLS
             visible = (skills if self._show_all_skills else skills[:cap])
             active_skills = set()
+            # (key, widget) in display order, parents AND their nested
+            # sub-skill rows. Rebuilt every pass and compared against the
+            # layout, which is how the rows get re-sorted when ranks move.
+            target_keys: list[str] = []
             for sp in visible:
                 active_skills.add(sp.skill_id)
                 if is_heal_mode:
@@ -265,16 +282,42 @@ class _PlayerRowWidget(QtWidgets.QFrame):
                     s_share = sp.share_pct(total_base)
 
                 if sp.skill_id not in self._skill_row_widgets:
-                    row = SkillRow(density="compact", parent=self.skills_box)
-                    row.set_skill(sp.skill_id, sp.name)
+                    row = SkillRow(density="compact", parent=self.skills_box,
+                                   show_type=self._skill_type_cell)
                     self._skill_row_widgets[sp.skill_id] = row
                     self.skills_lay.addWidget(row)
                 else:
                     row = self._skill_row_widgets[sp.skill_id]
                     row.show()
 
+                # A skill's display name can resolve AFTER its row was built (a
+                # pet hit folding into its owner, the skill table finishing its
+                # read), so re-apply the identity whenever it moves. Setting it
+                # only at creation left the overlay showing a stale label while
+                # the Combat page - which rebuilds its rows every render -
+                # showed the resolved one.
+                label = (sp.skill_id, sp.name)
+                if getattr(row, "_skill_label", None) != label:
+                    row.set_skill(sp.skill_id, sp.name)
+                    row._skill_label = label
+
                 row.update(sp, share_pct=s_share, mode=mode)
-                row.set_bar_color(theme.skill_color(sp.skill_id))
+                row.set_share_color(theme.skill_color(sp.skill_id))
+                target_keys.append(sp.skill_id)
+
+                # A skill's OWN derived rows, folded into it above (the bleed
+                # a Bonethrow applies, a passive's status ticks), drawn as
+                # nested rows beneath it. Shared with the Combat page's skill
+                # list so both surfaces group these the same way.
+                sub_keys = sync_subskill_rows(
+                    sp, self._skill_row_widgets,
+                    make_row=lambda _parent: SkillRow(
+                        density="compact", parent=self.skills_box,
+                        show_type=self._skill_type_cell),
+                    mode=mode, total_base=total_base,
+                    color_fn=theme.skill_color)
+                active_skills.update(sub_keys)
+                target_keys.extend(sub_keys)
 
             # Re-sort via re-add ONLY if the current order in the layout doesn't match visible
             curr_widgets = [
@@ -283,9 +326,9 @@ class _PlayerRowWidget(QtWidgets.QFrame):
                 if self.skills_lay.itemAt(i) and self.skills_lay.itemAt(i).widget() != self._more_btn
             ]
             target_widgets = [
-                self._skill_row_widgets[sp.skill_id]
-                for sp in visible
-                if sp.skill_id in self._skill_row_widgets
+                self._skill_row_widgets[k]
+                for k in target_keys
+                if k in self._skill_row_widgets
             ]
             if curr_widgets != target_widgets:
                 for sw in target_widgets:

@@ -36,6 +36,16 @@ class _CombatTimelinePlotter(QtWidgets.QFrame):
         self.hover_x: float | None = None
         self.compare_players: list[str] = []
 
+    def clear(self) -> None:
+        """Clear the plotted encounter without touching the tracker session."""
+        self.session = None
+        self.hover_x = None
+        self.compare_players = []
+        self._last_timeline_len = 0
+        self._last_plot_dur = 0
+        self._last_deaths_len = 0
+        self.update()
+
     def set_compare_players(self, player_names: list[str] | None):
         """Set active compare players for multi-line graph mode."""
         names = [n for n in (player_names or []) if n]

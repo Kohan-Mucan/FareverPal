@@ -5,7 +5,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from .net import (
-    REGIONS, _STATUS_COLORS, _default_hosts_for, _get_flag_pixmap, _label_for_connection,
+    REGIONS, _STATUS_COLORS, _default_hosts_for, _label_for_connection, table_cell,
 )
 from .workers import _ConnectionScanWorker
 
@@ -168,7 +168,7 @@ class ScannerPanelMixin:
         port = port_item.text()
 
         menu = QtWidgets.QMenu(self)
-        menu.addAction(f"Diagnostic Trace", lambda: self._start_trace(ip, "tracert"))
+        menu.addAction("Diagnostic Trace", lambda: self._start_trace(ip, "tracert"))
         menu.addSeparator()
         copy_action = menu.addAction(f"Copy IP ({ip})")
 
@@ -391,20 +391,7 @@ class ScannerPanelMixin:
         row = self._scan_table.rowCount()
         self._scan_table.insertRow(row)
 
-        def cell(txt, color=None, bold=False, icon_code=None):
-            it = QtWidgets.QTableWidgetItem(str(txt))
-            it.setTextAlignment(QtCore.Qt.AlignCenter)
-            if color:
-                it.setForeground(QtGui.QColor(color))
-            if bold:
-                f = it.font()
-                f.setBold(True)
-                it.setFont(f)
-            if icon_code:
-                pm = _get_flag_pixmap(icon_code, 16)
-                if pm:
-                    it.setIcon(QtGui.QIcon(pm))
-            return it
+        cell = table_cell
 
         self._scan_table.setItem(row, 0, cell(str(row + 1), theme.ACCENT, bold=True))
 

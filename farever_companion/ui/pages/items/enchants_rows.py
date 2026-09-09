@@ -1,8 +1,17 @@
-"""The Enchants page's row / table builders — the scrolls, elixir / food,
-gem, conversions and augments tables — split out of enchants.py so that
-module stays under the line budget.
+"""The Enchants page's tables: the scrolls, elixir / food, gem, conversions and
+augments rows, and the Upgrades card's cost table.
+
+This is the Enchants family's ONE shard, beside `enchants.py` (the page and
+the Infusions tab). The line budget measures one file, so the family's tables
+live here - one shard of real size, not a module per table.
+
+`_upgrade_matrix_data` is the single source of the Upgrades table: the
+summary tiles and the per-step matrix both render from it and the tests
+assert on it, so the layout can be restyled without a cost going missing.
 """
 from __future__ import annotations
+
+from functools import lru_cache
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -10,6 +19,7 @@ from ... import theme
 from ... import components as C
 from ....data import icons
 from ....data import items as idata
+from ....data.items import stats as istats
 from . import support
 from .support import GLYPH_DOWN, GLYPH_RIGHT
 
@@ -771,6 +781,10 @@ class EnchantsRowsMixin:
         # not four columns stretched across the card
         return grid
 
+    # the Upgrades card's cost table (_upgrade_matrix_data + the summary tiles
+    # and per-step matrix drawn from it) is further down THIS file, in
+    # EnchantsUpgradesMixin, mixed into EnchantsPageBase with this mixin.
+
     @staticmethod
     def _clear_lay(lay: QtWidgets.QLayout) -> None:
         while lay.count():
@@ -781,3 +795,353 @@ class EnchantsRowsMixin:
                 w.deleteLater()
             elif item.layout() is not None:
                 EnchantsRowsMixin._clear_lay(item.layout())
+
+
+#: Every real figure wears ONE colour. Provenance used to be a second channel
+#: (accent for measured, dim for derived), and at level 20 that painted eight of
+#: the fifteen real cells dim — a number you still have to pay read as weaker
+#: than the one beside it for a reason no one can see (the tab carries no
+#: tooltips, so the colour was the only explanation and it explained nothing).
+#: Measured, interpolated, extrapolated and derived are all on the measured
+#: curve, so they are all the same figure to the player; what each provenance
+#: actually means is in docs/UPGRADE_COSTS.md and in the `source` field of
+#: `upgrade_costs`, not in the paint.
+_FIGURE_COLOR = theme.ACCENT
+
+#: The one exception, kept as a guard rather than something on screen: the
+#: sheet's own `base x level^exp` formula, which is 3-5x off wherever it has
+#: been checked. It cannot appear at any level the tab offers (every offered
+#: level has the anchor rarity measured — see stats.upgrade_cost_levels), but a
+#: placeholder guess must never wear the colour of a reading if that ever
+#: changes.
+_UNVERIFIED_COLOR = theme.TEXT
+
+_MONO = f'font-family:"{theme.MONO_FONT}","Consolas";'
+
+
+@lru_cache(maxsize=1)
+def _material_art() -> dict[str, tuple[str, str]]:
+    """Upgrade-material display name -> (the item id carrying that art, that
+    item's OWN rarity colour).
+
+    The cost table names materials by display name ('Spark Dust', 'Spark
+    Shard', 'Spark Crystal'), so the art is resolved through the item sheet by
+    name: Spark Dust is `UpgradeAll`, Spark Shard `UpgradeRare`, Spark Crystal
+    `UpgradeEpic` in the current data. Resolved rather than restated, so a patch
+    that renames or re-rarifies a material follows instead of leaving a stale id
+    and a stale tint behind here.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for it in idata.items():
+        name = it.get("name") or ""
+        if name:
+            out[name] = (it.get("id") or "", theme.rarity_color(it.get("rarity")))
+    return out
+
+
+class EnchantsUpgradesMixin:
+    """The Gear Upgrades tiles + cost matrix (composed into the enchants page)."""
+
+    def _upgrade_matrix_data(self, cols: list[dict], level: int) -> dict:
+        """The whole Upgrades table as DATA — the tiles and the matrix render
+        from this, and the tests assert on it.
+
+        One cell per (rank, rarity, material), in rank-major order:
+        `{"rank", "rarity", "cap", "material", "short", "count", "text",
+        "source", "live"}`. `text` is the count a step charges, an explicit "0"
+        for a material that step does not charge, and "—" past that rarity's cap
+        (or on a rarity with no live upgrade) — the same three states the old
+        grid drew, so no restyle can hide one.
+        """
+        maxrows = max([c.get("cap") or 0 for c in cols] + [0])
+        steps: dict[tuple[int, str], tuple[dict, str]] = {}
+        roster: list[str] = []
+        for rank in range(1, maxrows + 1):
+            for c in cols:
+                live = bool(c.get("active")) and rank <= (c.get("cap") or 0)
+                costs, source = (istats.upgrade_step_cost(
+                    c["rarity"], rank, level, c.get("name")) if live else ([], ""))
+                by = {m["material"]: m["count"] for m in costs}
+                steps[(rank, c["rarity"])] = (by, source)
+                if live:
+                    for m in costs:
+                        if m["material"] not in roster:
+                            roster.append(m["material"])
+        cells = []
+        for rank in range(1, maxrows + 1):
+            for c in cols:
+                by, source = steps[(rank, c["rarity"])]
+                live = bool(c.get("active")) and rank <= (c.get("cap") or 0)
+                for m in roster:
+                    if not live:
+                        text = "—"
+                    elif m in by:
+                        text = f"{by[m]:g}"
+                    else:
+                        text = "0"
+                    cells.append({
+                        "rank": rank, "rarity": c["rarity"],
+                        "cap": c.get("cap") or 0, "material": m,
+                        "short": m.split()[-1], "count": by.get(m),
+                        "text": text, "source": source, "live": live})
+        return {
+            "level": level, "max_rank": maxrows, "roster": roster, "cells": cells,
+            "columns": [{
+                "rarity": c["rarity"], "cap": c.get("cap") or 0,
+                "item": c.get("item"), "name": c.get("name"),
+                "active": bool(c.get("active")),
+                "color": (theme.rarity_color(c["rarity"]) if c.get("active")
+                          else theme.DIM),
+            } for c in cols],
+        }
+
+    def _upgrade_totals(self, table: dict, rarity: str) -> dict[str, float]:
+        """What one rarity's whole ladder costs in each material, summed from the
+        same cells the matrix prints — so a tile and the grid cannot disagree."""
+        out: dict[str, float] = {}
+        for c in table["cells"]:
+            if c["rarity"] == rarity and c["count"]:
+                out[c["material"]] = out.get(c["material"], 0) + c["count"]
+        return out
+
+    # --- the summary tiles ------------------------------------------------
+    def _build_upgrade_tiles(self, table: dict) -> QtWidgets.QGridLayout:
+        """One summary tile per rarity, sharing the width evenly.
+
+        A tile is a THREE-COLUMN SLOT however many tiles there are: the grid
+        stretches the tiles and then an empty column for every tile that is
+        missing, so a search that narrows the table to one rarity leaves it the
+        width of one tile with the rest of the row empty — instead of one tile
+        stretched across the page with its totals smeared over it.
+        """
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        cols = table["columns"]
+        for ci, col in enumerate(cols):
+            grid.addWidget(self._upgrade_tile(table, col), 0, ci)
+            grid.setColumnStretch(ci, 1)
+        if len(cols) < 3:
+            grid.setColumnStretch(len(cols), 3 - len(cols))
+        return grid
+
+    def _upgrade_tile(self, table: dict, col: dict) -> QtWidgets.QFrame:
+        """A rarity's total bill: name and cap, one line per material with its
+        icon and real total, and how many steps that takes."""
+        rc = col["color"]
+        tot = self._upgrade_totals(table, col["rarity"])
+        tile = QtWidgets.QFrame()
+        tile.setObjectName("UpgradeTile")
+        # 200 keeps three tiles on one row at the window's 1000px minimum (the
+        # content area is ~744 there); there is no maximum — the tiles share
+        # whatever width the page has and their contents flow into it
+        tile.setMinimumWidth(200)
+        tile.setStyleSheet(
+            f"QFrame#UpgradeTile{{background:{theme.PANEL};"
+            f"border:1px solid {theme.BORDER};"
+            f"border-top:2px solid {theme.with_alpha(rc, 160)};"
+            "border-radius:4px;}")
+        v = QtWidgets.QVBoxLayout(tile)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+        head = QtWidgets.QHBoxLayout()
+        head.setSpacing(8)
+        name = QtWidgets.QLabel(col["rarity"].upper())
+        name.setObjectName("Mono")
+        name.setStyleSheet(f"color:{rc};{_MONO}font-size:17px;font-weight:800;"
+                           "letter-spacing:2px;background:transparent;")
+        head.addWidget(name)
+        cap = QtWidgets.QLabel(f"→ +{col['cap']}")
+        cap.setObjectName("Mono")
+        cap.setStyleSheet(f"color:{theme.DIM};{_MONO}font-size:14px;"
+                          "font-weight:700;letter-spacing:1px;"
+                          "background:transparent;")
+        head.addWidget(cap)
+        head.addStretch(1)
+        # the steps footer rides the header line too, but RIGHT-ALIGNED: name
+        # and cap left, `3 steps · at level 25` at the card's right edge
+        steps = QtWidgets.QLabel(f"{col['cap']} steps · at level "
+                                 f"{table['level']}")
+        steps.setObjectName("Mono")
+        steps.setStyleSheet(f"color:{theme.DIM};{_MONO}font-size:11.5px;"
+                            "letter-spacing:.6px;background:transparent;")
+        head.addWidget(steps)
+        v.addLayout(head)
+        # the material totals as THREE COLUMNS, one per material in the
+        # roster: icon over figure over name. Stacked lines left the card
+        # ragged — the figures sat in a fixed 58px column with a name of
+        # varying length after them, so the three equal-width cards read as
+        # three different widths. One column per material ends every card
+        # flush, and it echoes the ladder's three icon-headed columns right
+        # underneath, so the card row and the ladder row are the same table at
+        # two zoom levels. A rarity that never charges a material (Rare has no
+        # Spark Crystal) keeps its column with a dim 0 rather than dropping
+        # out, so the three cards stay the same shape.
+        mats = QtWidgets.QHBoxLayout()
+        mats.setContentsMargins(0, 0, 0, 0)
+        mats.setSpacing(6)
+        for m in table["roster"]:
+            iid, mcol = _material_art().get(m, ("", theme.ACCENT))
+            n = tot.get(m, 0)
+            cell = QtWidgets.QVBoxLayout()
+            cell.setContentsMargins(0, 0, 0, 0)
+            cell.setSpacing(3)
+            if iid:
+                icon = C.IconTile(30)
+                icon.set("item", iid, mcol)
+                centred = QtWidgets.QHBoxLayout()
+                centred.setContentsMargins(0, 0, 0, 0)
+                centred.addStretch(1)
+                centred.addWidget(icon, 0)
+                centred.addStretch(1)
+                cell.addLayout(centred)
+            count = QtWidgets.QLabel(f"{n:g}")
+            count.setObjectName("Mono")
+            count.setAlignment(QtCore.Qt.AlignCenter)
+            count.setStyleSheet(
+                f"color:{mcol if n else theme.DIM};{_MONO}font-size:20px;"
+                "font-weight:800;background:transparent;")
+            cell.addWidget(count)
+            label = QtWidgets.QLabel(m)
+            label.setAlignment(QtCore.Qt.AlignCenter)
+            label.setStyleSheet(f"color:{theme.MUTED};font-size:11.5px;"
+                                "background:transparent;")
+            cell.addWidget(label)
+            mats.addLayout(cell, 1)
+        v.addLayout(mats)
+        return tile
+
+    # --- the per-step ladders ---------------------------------------------
+    def _build_upgrade_matrix(self, table: dict) -> QtWidgets.QGridLayout:
+        """The per-step ladders: one per rarity, aligned under its tile.
+
+        Same grid as the tile row — three slots, the same 12px gaps, a lone
+        ladder keeping a third of the row. Each ladder is an OUTLINED table: a
+        plain 1px border around the rows (no header, no top rule, no card of
+        its own — the tile above already shows the rarity's name and frame).
+        """
+        cols = table["columns"]
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)          # the tiles' own spacing
+        grid.setVerticalSpacing(12)
+        for ci, col in enumerate(cols):
+            grid.addWidget(self._upgrade_ladder(table, col), 0, ci)
+            grid.setColumnStretch(ci, 1)
+        if len(cols) < 3:
+            # a lone ladder keeps the three-slot layout, the way a lone tile
+            # does: the ladder itself is stretched to ONE, the empty slots to
+            # (3 - n) each, so the lone one takes a third of the row and the
+            # rest stays empty instead of the ladder smearing across the page
+            for ci in range(3):
+                grid.setColumnStretch(ci, 1 if ci < len(cols)
+                                      else 3 - len(cols))
+        return grid
+
+    def _upgrade_ladder(self, table: dict, col: dict) -> QtWidgets.QWidget:
+        """One rarity's ladder as an OUTLINED table: a plain 1px border around
+        the rows — the tile above carries the card chrome (name, cap, top
+        rule), so the ladder keeps only its outline and its contents."""
+        rc = col["color"]
+        roster = table["roster"]
+        box = QtWidgets.QFrame()
+        box.setObjectName("UpgradeLadderBox")
+        box.setStyleSheet(
+            f"QFrame#UpgradeLadderBox{{background:transparent;"
+            f"border:1px solid {theme.BORDER};border-radius:4px;}}")
+        grid = QtWidgets.QGridLayout(box)
+        # a small gutter on ALL FOUR sides: with none on the left/right the
+        # row rules ran into the 1px outline and the head icons sat flush
+        # against it, so the frame read as uneven against the tile above —
+        # one side touching, the others not. Symmetric margins give the
+        # outline a clear band to itself on every edge.
+        grid.setContentsMargins(6, 4, 6, 4)
+        grid.setHorizontalSpacing(0)
+        grid.setVerticalSpacing(0)
+        grid.setColumnMinimumWidth(0, 40)      # the +N rail
+        for mi, m in enumerate(roster):
+            grid.addWidget(self._upgrade_material_head(m), 0, 1 + mi)
+            # the material columns share the ladder's width
+            grid.setColumnStretch(1 + mi, 1)
+        for rank in range(1, table["max_rank"] + 1):
+            tag = QtWidgets.QLabel(f"+{rank}")
+            tag.setObjectName("Mono")
+            tag.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            # the rank wears the PROVENANCE accent, like the figure beside it,
+            # not the rarity colour: a purple or orange +N next to blue values
+            # read as a different kind of number, when it is the same table.
+            # The rarity still owns this block — the rules, the outline and
+            # the tile above it say which.
+            tag.setStyleSheet(
+                f"color:{theme.ACCENT};{_MONO}font-size:12px;font-weight:800;"
+                "background:transparent;border-bottom:1px solid "
+                f"{theme.with_alpha(rc, 50) if rank < table['max_rank'] else 'transparent'};"
+                "padding:6px 8px;")
+            grid.addWidget(tag, rank, 0)
+            by_short = {c["short"]: c for c in table["cells"]
+                        if c["rank"] == rank and c["rarity"] == col["rarity"]}
+            for mi, m in enumerate(roster):
+                grid.addWidget(
+                    self._upgrade_cell(by_short[m.split()[-1]],
+                                       col["color"], table["level"],
+                                       rank < table["max_rank"]),
+                    rank, 1 + mi)
+        return box
+
+    @staticmethod
+    def _upgrade_material_head(name: str) -> QtWidgets.QLabel:
+        """One material's column heading: its real game icon ALONE. The name is
+        NOT repeated here — the tile columns directly above print it under the
+        same icon, so a tooltip would only restate what is on screen. The band
+        is the panel's own background; a 1px rule closes it.
+        """
+        iid, mcol = _material_art().get(name, ("", theme.ACCENT))
+        head = QtWidgets.QLabel()
+        head.setObjectName("Mono")
+        head.setAlignment(QtCore.Qt.AlignCenter)
+        if iid:
+            # the icon rides the label's own rich-text document, the same way
+            # _slot_badge embeds glyphs: one cell, no nested widget. 32px — the
+            # icon IS the column header, so it reads at a glance.
+            url = f"icon://{iid}"
+            tile = C.IconTile(32)
+            tile.set("item", iid, mcol)
+            head.setTextFormat(QtCore.Qt.RichText)
+            head.setText(f'<img src="{url}">')
+            doc = head.findChild(QtGui.QTextDocument)
+            if doc is not None:
+                doc.addResource(QtGui.QTextDocument.ImageResource,
+                                QtCore.QUrl(url), tile.pixmap())
+        head.setStyleSheet(
+            "background:transparent;"
+            f"border-bottom:1px solid {theme.BORDER};padding:5px 10px;")
+        return head
+
+    def _upgrade_cell(self, c: dict, rail: str, level: int,
+                      rule: bool = True) -> QtWidgets.QLabel:
+        """One cost cell: the number on the panel's own background, closed by a
+        faint rule in the rarity colour (the last rank omits it, so the ladder
+        ends clean). Every real figure is the SAME accent whatever its
+        provenance — measured, interpolated and derived alike, because they are
+        all amounts the player pays. Only the two non-prices are dim: an
+        uncharged 0 and a past-cap —, neither of which is a figure.
+
+        No tooltip, by design: nothing in this tab has one, so the colour
+        carries no provenance story at all (see _FIGURE_COLOR).
+        """
+        cell = QtWidgets.QLabel(c["text"])
+        cell.setObjectName("Mono")
+        cell.setAlignment(QtCore.Qt.AlignCenter)
+        if not c["live"] or not c["count"]:
+            fg = theme.DIM
+        elif c["source"] == istats.UNVERIFIED:
+            fg = _UNVERIFIED_COLOR
+        else:
+            fg = _FIGURE_COLOR
+        cell.setStyleSheet(
+            f"color:{fg};{_MONO}font-size:15px;font-weight:800;"
+            "background:transparent;border-bottom:1px solid "
+            f"{theme.with_alpha(rail, 50) if rule else 'transparent'};"
+            "padding:6px 14px;")
+        return cell

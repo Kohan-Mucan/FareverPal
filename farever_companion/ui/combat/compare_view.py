@@ -2,15 +2,21 @@
 
 Computes DPS deltas, damage shares, crit differentials, and renders an aligned
 side-by-side skill comparison matrix comparing Player A and Player B skill by skill.
+
+Under that matrix sits one more table of the same shape: the damage-by-type
+split for the same two players (``_CmpTypeTable``). It is the same
+``affinity_view`` breakdown the Combat rail draws as a bar, so a fight that
+shows a type split on the rail shows it here too - including an archived fight,
+which reaches this file as an ordinary ``CombatSession``.
 """
 from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
 
-from .. import theme
-from .. import components as C
-from ..skill_row import _skill_icon
-from ...core.dps_tracker import CombatSession
+from .. import affinity_view, theme
+from ..memory_reclaimer import _forget_attrs
+from ..skill_row import _skill_icon, tagged_skill_name
+from ...core.dps_tracker import CombatSession, own_row
 from .player_card import _ranked_skill_total
 
 
@@ -42,24 +48,192 @@ def _get_combo_player_name(cb) -> str:
     return txt.split(" (")[0].strip()
 
 
+# --- damage by type, side by side -------------------------------------------
+
+def _cmp_value_label(color: str) -> QtWidgets.QLabel:
+    lbl = QtWidgets.QLabel("")
+    lbl.setMinimumWidth(58)
+    lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    lbl.setStyleSheet(
+        f"font-size: 11px; font-family: monospace; font-weight: 800; color: {color};")
+    return lbl
+
+
+def _cmp_share_bar(color: str) -> QtWidgets.QProgressBar:
+    bar = QtWidgets.QProgressBar()
+    bar.setFixedWidth(44)
+    bar.setFixedHeight(5)
+    bar.setTextVisible(False)
+    bar.setRange(0, 100)
+    bar.setStyleSheet(
+        f"QProgressBar {{ background: {theme.SURFACE}; border: none; border-radius: 2px; }}"
+        f"QProgressBar::chunk {{ background: {color}; border-radius: 2px; }}")
+    return bar
+
+
+def _cmp_pct_label() -> QtWidgets.QLabel:
+    lbl = QtWidgets.QLabel("")
+    lbl.setFixedWidth(38)
+    lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+    lbl.setStyleSheet(f"font-size: 10.5px; font-family: monospace; color: {theme.DIM};")
+    return lbl
+
+
+def _fmt_amount(v: float) -> str:
+    return f"{v / 1_000_000:.2f}M" if v >= 1_000_000 else f"{v:,.0f}"
+
+
+class _CmpTypeTable(QtWidgets.QWidget):
+    """A-vs-B damage-by-type rows, on the compare matrix's own columns.
+
+    Built from the same cells as a matrix row - amount, 44 px share bar and
+    percent per side with a centred delta between them - and given the same
+    column shapes, so it reads as another section of that table rather than a
+    chart bolted underneath it.
+
+    `set_rows` is called with the pair the matrix is showing, so the two always
+    describe the same fight.
+
+    The shares come from ``affinity_view.compare_type_rows``: each side's
+    percentage is against its OWN total, so the two columns stay comparable
+    instead of both being renormalized to their tagged damage. A type only one
+    side dealt keeps its row with ``--`` on the other side, because that is the
+    fact worth seeing.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: list = []
+        self._cells: list[tuple] = []
+        lay = QtWidgets.QGridLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setHorizontalSpacing(6)
+        lay.setVerticalSpacing(2)
+        # Mirrors cp_cmp_rows_lay (combat_compare._build_compare_container) so a
+        # type row sits under a skill row instead of drifting from it.
+        for col in (1, 2, 7):
+            lay.setColumnStretch(col, 1)
+        self._lay = lay
+
+    def rows(self) -> list:
+        """The comparison rows currently rendered (for tests)."""
+        return list(self._data)
+
+    def set_rows(self, rows: list, name_a: str = "A", name_b: str = "B") -> None:
+        """Render ``rows``, reusing the existing cells, and hide when empty."""
+        self._data = list(rows)
+        for i, row in enumerate(self._data):
+            if i >= len(self._cells):
+                self._cells.append(self._build_row(i))
+            self._fill_row(self._cells[i], row, name_a, name_b)
+        for j in range(len(self._data), len(self._cells)):
+            for cell in self._cells[j]:
+                cell.hide()
+        # Explicit in BOTH directions: a container shown again must not
+        # resurrect a table whose data is gone (the stale-widget trap that hid
+        # a badge behind an isVisible() guard in components._badge once).
+        self.setVisible(bool(self._data))
+
+    def _build_row(self, i: int) -> tuple:
+        # Col 0 is the matrix's 22 px icon cell and col 1 its 210 px skill
+        # label, so both are reserved here: a blank icon box and the same max
+        # width. Letting the type name span the two columns instead let its own
+        # TEXT width decide where the boundaries fell, which is exactly what a
+        # second grid must not do if it is meant to line up with the first.
+        icon = QtWidgets.QLabel("")
+        icon.setFixedSize(22, 22)
+        self._lay.addWidget(icon, i, 0)
+        name = QtWidgets.QLabel("")
+        name.setMaximumWidth(210)
+        self._lay.addWidget(name, i, 1)
+        a_val = _cmp_value_label(theme.ACCENT_LIGHT)
+        self._lay.addWidget(a_val, i, 2)
+        a_bar = _cmp_share_bar(theme.ACCENT)
+        self._lay.addWidget(a_bar, i, 3)
+        a_pct = _cmp_pct_label()
+        self._lay.addWidget(a_pct, i, 4)
+        delta = QtWidgets.QLabel("")
+        delta.setFixedWidth(64)
+        delta.setAlignment(QtCore.Qt.AlignCenter)
+        delta.setStyleSheet("font-size: 11px; font-family: monospace; font-weight: 800;")
+        self._lay.addWidget(delta, i, 5, 1, 2)
+        b_val = _cmp_value_label(theme.TEXT)
+        self._lay.addWidget(b_val, i, 7)
+        b_bar = _cmp_share_bar(theme.GOLD)
+        self._lay.addWidget(b_bar, i, 8)
+        b_pct = _cmp_pct_label()
+        self._lay.addWidget(b_pct, i, 9)
+        return (icon, name, a_val, a_bar, a_pct, delta, b_val, b_bar, b_pct)
+
+    def _fill_row(self, cells: tuple, row, name_a: str, name_b: str) -> None:
+        _icon, name, a_val, a_bar, a_pct, delta, b_val, b_bar, b_pct = cells
+        colour = row.color if row.tagged else theme.MUTED
+        name.setText(row.label)
+        name.setStyleSheet(f"font-size: 12px; font-weight: 800; color: {colour};")
+        name.setToolTip(affinity_view.compare_type_tooltip(row, name_a, name_b))
+
+        for val, bar, pct, amount, share in (
+                (a_val, a_bar, a_pct, row.a_amount, row.a_pct),
+                (b_val, b_bar, b_pct, row.b_amount, row.b_pct)):
+            if amount > 0:
+                val.setText(_fmt_amount(amount))
+                bar.setValue(int(share))
+                pct.setText(f"{share:.0f}%")
+                val.setToolTip(f"{amount:,.0f} ({share:.1f}%)")
+            else:
+                val.setText("--")
+                bar.setValue(0)
+                pct.setText("0%")
+                val.setToolTip("")
+
+        d = row.delta()
+        delta.setText(f"{d / 1_000_000:+.2f}M" if abs(d) >= 1_000_000 else f"{d:+,.0f}")
+        d_col = theme.GOOD if d >= 0 else theme.DANGER
+        delta.setStyleSheet(
+            f"font-size: 11px; font-family: monospace; font-weight: 800; color: {d_col};")
+        for cell in cells:
+            cell.show()
+
+
+def _refresh_type_compare(page_obj, pa, pb) -> None:
+    """Fill, or hide, the A-vs-B damage-by-type table.
+
+    ``pa``/``pb`` may be None: the compare view bails before it has two players
+    to compare, and the table must not keep the previous pair's rows on screen
+    behind an early return. A page without the box (an older build, or a test
+    stub) is left alone rather than raising.
+    """
+    box = getattr(page_obj, "cp_cmp_type_box", None)
+    table = getattr(page_obj, "cp_cmp_type_table", None)
+    if box is None or table is None or not _alive(table):
+        return
+    rows = affinity_view.compare_type_rows(pa, pb)
+    table.set_rows(rows, getattr(pa, "name", "") or "A",
+                   getattr(pb, "name", "") or "B")
+    box.setVisible(bool(rows))
+
+
 def refresh_rail_compare(page_obj, session: CombatSession, duration: float, metric: str) -> None:
     """Refresh compare tab with perfectly aligned skill-by-skill comparison matrix."""
     # Auto-prefer boss_session if available so compare tab evaluates damage dealt specifically to the boss
     tracker = getattr(page_obj, "_get_active_tracker", lambda: None)()
     if tracker and hasattr(tracker, "boss_session") and tracker.boss_session:
-        if tracker.boss_session.players and tracker.boss_session.total_damage > 0:
+        if tracker.boss_session.players and tracker.boss_session.group_damage > 0:
             session = tracker.boss_session
             duration = max(1.0, session.duration)
 
-    players = list(session.players.values())
+    players = session.active_players()   # dummy: no chip-damage-only rows
     if len(players) < 2:
         if hasattr(page_obj, "cp_cmp_insight"):
             page_obj.cp_cmp_insight.setText("Need at least 2 players in combat to compare.")
         if hasattr(page_obj, "cp_plotter") and hasattr(page_obj.cp_plotter, "set_compare_players"):
             page_obj.cp_plotter.set_compare_players([])
+        # No pair to compare, so no type table either - and the previous one
+        # must go, not linger behind the early return.
+        _refresh_type_compare(page_obj, None, None)
         return
 
-    me = next((x for x in players if x.is_me), None) or session.players.get(getattr(page_obj, "_cp_selected_player", ""))
+    me = own_row(session) or session.players.get(getattr(page_obj, "_cp_selected_player", ""))
     me_class = me.hero_class if (me and me.hero_class) else ""
 
     same_class_only = bool(getattr(page_obj, "cp_cmp_same_class_cb", None) and page_obj.cp_cmp_same_class_cb.isChecked())
@@ -128,6 +302,7 @@ def refresh_rail_compare(page_obj, session: CombatSession, duration: float, metr
     pA = session.players.get(page_obj._cp_compare_a)
     pB = session.players.get(page_obj._cp_compare_b)
     if not pA or not pB:
+        _refresh_type_compare(page_obj, None, None)
         return
 
     # Collect active comparison players + sync the plotter FIRST: this must run
@@ -289,11 +464,7 @@ def refresh_rail_compare(page_obj, session: CombatSession, duration: float, metr
     # the header whenever either cached ref is dead.
     if not (_alive(getattr(page_obj, "_cp_cmp_hdr_a", None))
             and _alive(getattr(page_obj, "_cp_cmp_hdr_b", None))):
-        for _attr in ("_cp_cmp_hdr_a", "_cp_cmp_hdr_b"):
-            try:
-                delattr(page_obj, _attr)
-            except AttributeError:
-                pass
+        _forget_attrs(page_obj, ("_cp_cmp_hdr_a", "_cp_cmp_hdr_b"))
         hdr_base = (
             f"background: {theme.PANEL_LOW}; color: {theme.DIM}; "
             f"font-size: 10.5px; font-weight: 800; letter-spacing: 0.5px; padding: 4px 6px;"
@@ -441,8 +612,14 @@ def refresh_rail_compare(page_obj, session: CombatSession, duration: float, metr
             l_ico.setScaledContents(True)
             l_ico.setAlignment(QtCore.Qt.AlignCenter)
 
-        l_sk.setText(_short(display_name, 22))
-        l_sk.setToolTip(f"{display_name} (ID: {skill_id})")
+        # The tag belongs on the main skill list, not only in the row tooltip
+        # or the hover popup: this is the one place two players' skills are
+        # ranked against each other, so "(Item proc)" / "(Passive)" is what
+        # explains why a proc outranks a rotation skill. Capped by
+        # tagged_skill_name so the tag survives the 22-char ceiling.
+        tagged = tagged_skill_name(skill_id, display_name, 26)
+        l_sk.setText(tagged)
+        l_sk.setToolTip(f"{tagged_skill_name(skill_id, display_name)} (ID: {skill_id})")
 
         # Update Player A side
         if sA and sA.total > 0:
@@ -489,6 +666,9 @@ def refresh_rail_compare(page_obj, session: CombatSession, duration: float, metr
     for j in range(len(sorted_keys[:25]), len(page_obj._cp_cmp_row_widgets)):
         for cell in page_obj._cp_cmp_row_widgets[j]:
             cell.hide()
+
+    # The type split for the same pair, filled with the matrix it sits under.
+    _refresh_type_compare(page_obj, pA, pB)
 
     lead = pA if delta_dps >= 0 else pB
     lag = pB if delta_dps >= 0 else pA

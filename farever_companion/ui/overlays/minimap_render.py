@@ -128,7 +128,9 @@ def poi_pixmap(cv, kind, label, size, done=False, tracked=False):
         if icons.has_icon(sheet, label):
             is_special = False
             if kind == "companion":
-                is_spark = "spark" in (names.unit_name(label) or "").lower()
+                # the one shared Spark predicate (this dot had its own spelling
+                # test, so it disagreed with the HUD row for the same unit)
+                is_spark = udata.is_spark_variant(label)
                 col = theme.GOLD if is_spark else theme.GOOD
                 is_special = is_spark
             elif kind == "spark_enemy":

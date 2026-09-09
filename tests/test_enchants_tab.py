@@ -14,6 +14,7 @@ from PySide6 import QtCore, QtWidgets  # noqa: E402
 
 from farever_companion import paths  # noqa: E402
 from farever_companion.data import items as idata  # noqa: E402
+from farever_companion.ui import components as C  # noqa: E402
 from farever_companion.ui import theme  # noqa: E402
 from farever_companion.ui.pages.craft.detail import CraftDetailMixin  # noqa: E402
 from farever_companion.ui.pages.items import ItemPageMixin, support  # noqa: E402
@@ -73,9 +74,9 @@ def test_items_page_has_enchants_tab():
     the default (Gear mode)."""
     p = _page()
     assert p._items_mode == "gear"
-    assert p._items_body.currentIndex() == 0
-    # the body stack holds browse + the enchant page + the Farm tab
-    assert p._items_body.count() == 3
+    # the body stack holds one page per tab: Gear + Loadout + Enchants + Farm
+    assert p._items_body.currentWidget() is p._items_browse
+    assert p._items_body.count() == 4
 
 
 def test_enchants_mode_swaps_body_and_renders_database():
@@ -85,7 +86,8 @@ def test_enchants_mode_swaps_body_and_renders_database():
     p = _page()
     p._items_set_mode("Enchants")
     assert p._items_mode == "enchants"
-    assert p._items_body.currentIndex() == 1
+    # by identity, not index: a new tab must not silently repoint this
+    assert p._items_body.currentWidget() is p._items_enchants_scroll
 
     scrolls, gems, convs = p._ench_scrolls, p._ench_gems, p._ench_convs
     assert scrolls and gems and convs
@@ -383,24 +385,42 @@ def _gem_table_rows(p) -> list:
     return rows
 
 
+def _find_grid(lay) -> QtWidgets.QGridLayout | None:
+    """The card body's ONE table, descending into nested layouts.
+
+    Most bodies add the table straight to the card layout (scrolls / gems /
+    conversions / elixirs / food), but some wrap it in a QVBoxLayout - so a
+    direct-children-only lookup misses it. Every card holds at most one table,
+    so the first hit is the whole grid either way. (The Upgrades tab is no
+    longer a table at all: it is read through its own data, see
+    _upgrade_cells.)
+    """
+    for i in range(lay.count()):
+        sub = lay.itemAt(i).layout()
+        if isinstance(sub, QtWidgets.QGridLayout):
+            return sub
+    for i in range(lay.count()):
+        sub = lay.itemAt(i).layout()
+        if sub is not None:
+            got = _find_grid(sub)
+            if got is not None:
+                return got
+    return None
+
+
 def _grid(lay) -> QtWidgets.QGridLayout:
-    """The card body's ONE table — the first QGridLayout child (every
-    card body holds a single table, so this is the whole grid)."""
-    return next(it.layout() for i in range(lay.count())
-                if (it := lay.itemAt(i)).layout() is not None
-                and isinstance(it.layout(), QtWidgets.QGridLayout))
+    """The card body's ONE table - raises when the card holds none."""
+    got = _find_grid(lay)
+    assert got is not None, "no QGridLayout in this card body"
+    return got
 
 
 def _grid_rows(lay) -> int:
-    """Row count in a card body that's ONE table (the augments card has no
+    """Row count of a card body that's ONE table (the augments card has no
     column-header row, and neither do elixirs / food / the scrolls table)
-    — the first QGridLayout's row count."""
-    for i in range(lay.count()):
-        it = lay.itemAt(i)
-        if (it.layout() is not None
-                and isinstance(it.layout(), QtWidgets.QGridLayout)):
-            return it.layout().rowCount()
-    return 0
+    - 0 when the body holds no table at all (an empty 'no rows match' card)."""
+    got = _find_grid(lay)
+    return got.rowCount() if got is not None else 0
 
 
 def _row_name(grid: QtWidgets.QGridLayout, r: int) -> str:
@@ -792,7 +812,8 @@ def test_category_tabs_switch_one_full_width_group():
     assert p._ench_gems_card.isVisible()
     assert not p._ench_scrolls_card.isVisible()
     assert list(tabs._btns) == ["Gems", "Augments", "Conversions",
-                                "Elixirs", "Food", "Scrolls"]
+                                "Elixirs", "Food", "Scrolls", "Infusions",
+                                "Upgrades"]
     # the card titles carry what the rows share — the scrolls' 30M
     # duration, the job names (only Alchemists craft elixirs, only
     # Cooks the dishes) — and no count tags (every row is visible). The
@@ -810,8 +831,10 @@ def test_category_tabs_switch_one_full_width_group():
     # each tab shows only its card, full width
     for key, card in (("Gems", p._ench_gems_card),
                       ("Conversions", p._ench_convs_card),
+                      ("Upgrades", p._ench_upgrades_card),
                       ("Elixirs", p._ench_elixirs_card),
                       ("Food", p._ench_foods_card),
+                      ("Infusions", p._ench_infusions_card),
                       ("Augments", p._ench_augments_card)):
         tabs._btns[key].click()
         assert card.isVisible(), key
@@ -819,8 +842,10 @@ def test_category_tabs_switch_one_full_width_group():
         assert sum(c.isVisible() for c in (p._ench_scrolls_card,
                                            p._ench_gems_card,
                                            p._ench_convs_card,
+                                           p._ench_upgrades_card,
                                            p._ench_elixirs_card,
                                            p._ench_foods_card,
+                                           p._ench_infusions_card,
                                            p._ench_augments_card)) == 1, key
     # a stat filter narrows the consumables in place — no jump off
     tabs._btns["Food"].click()
@@ -834,18 +859,374 @@ def test_category_tabs_switch_one_full_width_group():
     assert _grid_rows(p._ench_foods_lay) == 24
 
 
+def _upgrade_cells(p):
+    """{(rank, rarity, material short): text} for every cell of the Upgrades
+    table, read from the page's OWN data rather than from widget geometry.
+
+    The cards are drawn from `_ench_upgrade_table`, so asserting here pins the
+    NUMBERS however a card is laid out. The old helper walked grid coordinates,
+    which meant any restyle broke the test even when every figure was right.
+    """
+    table = p._ench_upgrade_table
+    assert table is not None, "no upgrade table was built"
+    return {(c["rank"], c["rarity"], c["short"]): c["text"]
+            for c in table["cells"]}
+
+
+def _upgrade_grids(p) -> list:
+    """The Upgrades card body's two grids: the summary tiles, then the
+    per-step matrix.
+
+    Walks the layout tree rather than findChildren: a refilter reparents and
+    deleteLater()s the old widgets, and in a headless run those linger
+    findChildren-visible (see tests/qt_helpers.drain_deleted).
+    """
+    out: list = []
+
+    def walk(lay) -> None:
+        for i in range(lay.count()):
+            it = lay.itemAt(i)
+            sub = it.layout()
+            if sub is None and it.widget() is not None:
+                sub = it.widget().layout()      # a wrapper with its own layout
+            if isinstance(sub, QtWidgets.QGridLayout):
+                out.append(sub)
+            elif sub is not None:
+                walk(sub)
+    walk(p._ench_upgrades_lay)
+    return out
+
+
+def _tiles(grid) -> list:
+    """The summary tiles in the tile grid, in column order."""
+    return [grid.itemAt(i).widget() for i in range(grid.count())
+            if grid.itemAt(i).widget() is not None
+            and grid.itemAt(i).widget().objectName() == "UpgradeTile"]
+
+
+def _cell(grid, row: int, col: int) -> str:
+    """One matrix cell's text (empty when the position holds no widget)."""
+    it = grid.itemAtPosition(row, col)
+    w = it.widget() if it is not None else None
+    return w.text() if isinstance(w, QtWidgets.QLabel) else ""
+
+
+def _cell_widget(grid, row: int, col: int):
+    """One matrix position's widget (None when the position is empty)."""
+    it = grid.itemAtPosition(row, col)
+    return it.widget() if it is not None else None
+
+
+def test_upgrades_tab_totals_over_matrix():
+    """The Upgrades tab is three summary tiles over one per-step matrix.
+
+    Each tile names its rarity and cap and carries that rarity's real
+    per-material totals (summed from the same cells the matrix prints); the
+    matrix below spans one column group per rarity with the material icons over
+    their columns. The `+N` is a row header INSIDE the grid — zero horizontal
+    spacing and the same row band as the cells beside it — so it reads as part
+    of the table. Every figure is asserted through the page's data.
+
+    The numbers themselves are unchanged from the old grid: an uncharged
+    material still reads an explicit 0 and a past-cap rank '—'.
+    """
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Upgrades"].click()
+    assert p._ench_upgrades_card.isVisible()
+    assert p._ench_upgrade_type == "Weapon"
+    assert _counts(p)["UPGRADES"] == 3
+    # nothing in here is width-bounded any more — no capped block, no tile with
+    # a maximum: the tab fills the page and scales there (the geometry that
+    # backs that is test_upgrades_tab_fills_the_width)
+    assert not [w for w in p._ench_upgrades_card.findChildren(QtWidgets.QWidget)
+                if w.objectName() == "UpgradeBlock"]
+    grids = _upgrade_grids(p)
+    assert len(grids) == 2                  # tiles, then the matrix
+    tiles = _tiles(grids[0])
+    assert len(tiles) == 3
+    tile_text = [[lb.text() for lb in t.findChildren(QtWidgets.QLabel)]
+                 for t in tiles]
+    # each tile: the rarity, its cap, its real totals, and how many steps —
+    # and the material lines follow the ROSTER in order, a material the rarity
+    # never charges shown as a dim 0 (Rare has no Spark Crystal), so the three
+    # tiles' lines line up row for row instead of Rare's card ending early
+    assert "RARE" in tile_text[0] and "→ +3" in tile_text[0]
+    assert "341" in tile_text[0] and "57" in tile_text[0]
+    assert "0" in tile_text[0]
+    assert tile_text[0].index("341") < tile_text[0].index("57") < tile_text[0].index("0")
+    assert "EPIC" in tile_text[1] and "→ +4" in tile_text[1]
+    assert "714" in tile_text[1] and "144" in tile_text[1] and "3" in tile_text[1]
+    assert "LEGENDARY" in tile_text[2] and "→ +5" in tile_text[2]
+    assert "1221" in tile_text[2] and "274" in tile_text[2] and "18" in tile_text[2]
+    # every tile shows the material art, not just a coloured number
+    assert all(t.findChildren(C.IconTile) for t in tiles)
+    # ...as THREE COLUMNS, one per material, each an icon over a figure over a
+    # name — stacked lines left the card ragged (a fixed-width figure column
+    # with a name of varying length after it), so three equal-width cards read
+    # as three different widths. The columns are sub-layouts of ONE row, each
+    # with equal stretch, which is what makes every card end flush.
+    for t in tiles:
+        rows = [t.layout().itemAt(i).layout() for i in range(t.layout().count())]
+        mats = next(r for r in rows if isinstance(r, QtWidgets.QHBoxLayout)
+                    and r is not t.layout().itemAt(0).layout())
+        assert mats.count() == 3
+        assert all(mats.itemAt(i).layout() is not None for i in range(3))
+        assert all(mats.stretch(i) == 1 for i in range(3))
+        # the figure sits ABOVE the name inside its column
+        for i in range(3):
+            cell = mats.itemAt(i).layout()
+            labels = [cell.itemAt(j).widget() for j in range(cell.count())]
+            counts = [lb for lb in labels
+                      if isinstance(lb, QtWidgets.QLabel)
+                      and lb.alignment() & QtCore.Qt.AlignHCenter]
+            assert counts and counts[0].text()
+    # the totals ARE the matrix's cells summed (level = the bundled max)
+    table = p._ench_upgrade_table
+    assert table["level"] == (idata.gear_scaling().get("max_level") or 25)
+    assert [round(sum(c["count"] or 0 for c in table["cells"]
+                      if c["rarity"] == r)) for r in
+            ("Rare", "Epic", "Legendary")] == [398, 861, 1513]
+    # the matrix: one OUTLINED LADDER per rarity, aligned under its tile — a
+    # plain 1px border around the rows (no card chrome: the tile above carries
+    # the name, cap and top rule). The ladders sit in their own grid, three
+    # across, sharing the width.
+    mx = grids[1]
+    assert mx.columnCount() == 3
+    ladders = [mx.itemAtPosition(0, c).widget() for c in range(3)]
+    assert all(w.objectName() == "UpgradeLadderBox" for w in ladders)
+    assert (f"border:1px solid {theme.BORDER}"
+            in ladders[0].styleSheet())          # the outline, and nothing else
+    assert "border-top:2px" not in ladders[0].styleSheet()
+    inner = ladders[0].layout()
+    assert isinstance(inner, QtWidgets.QGridLayout)
+    # ...and a gutter inside it on ALL FOUR sides: with none left/right the row
+    # rules ran into the outline and the head icons sat flush against it, so
+    # the frame read as uneven against the tile above
+    m = inner.contentsMargins()
+    assert m.left() == m.right() and m.top() == m.bottom()
+    assert m.left() > 0 and m.top() > 0
+    # inside: ranks in the rarity's colour on the page background, icon-only
+    # heads with the name on the tooltip, faint rarity rules between rows
+    assert [_cell(inner, r, 0) for r in range(1, 6)] == [
+        "+1", "+2", "+3", "+4", "+5"]
+    rank = _cell_widget(inner, 1, 0)
+    # the rank wears the SAME accent as the figure beside it, not the rarity
+    # colour: a purple or orange +N among blue values read as a different kind
+    # of number, when it is the same table. The rarity owns the rules, the
+    # outline and the tile above — not the digits.
+    assert f"color:{theme.ACCENT}" in rank.styleSheet()
+    assert theme.rarity_color("Rare") not in rank.styleSheet()
+    assert "background:transparent" in rank.styleSheet()
+    assert _cell_widget(inner, 0, 1).text() == '<img src="icon://UpgradeAll">'
+    # ...and NO tooltip anywhere in the card, the rest of the Items page's rule:
+    # the heads only repeat the names the tile columns already print, and the
+    # cells' provenance explanation belongs in docs/UPGRADE_COSTS.md, not behind
+    # a hover. Colour is the whole trust signal.
+    tippy = [w for w in p._ench_upgrades_card.findChildren(QtWidgets.QWidget)
+             if w.toolTip()]
+    assert tippy == [], [w.toolTip() for w in tippy]
+    # the cells carry the figures: Rare +1 Dust measured (accent), Epic +2 Dust
+    # derived from Rare x the rarity multiplier, Rare +4 '—' past the cap
+    assert _cell(inner, 1, 1) == "53"
+    assert theme.ACCENT in _cell_widget(inner, 1, 1).styleSheet()
+    assert ("border-bottom:1px solid "
+            f"{theme.with_alpha(theme.rarity_color('Rare'), 50)}"
+            in _cell_widget(inner, 1, 1).styleSheet())
+    epic_inner = ladders[1].layout()
+    assert _cell(epic_inner, 2, 1) == "136"
+    # Epic +2 at 25 is DERIVED (Rare's 112 x 1.2117) and still wears the same
+    # accent as the measured cells beside it: a derived figure is an amount you
+    # pay, and with no tooltips in the tab a dim number was a lesser number for
+    # a reason the reader could not see.
+    assert theme.ACCENT in _cell_widget(epic_inner, 2, 1).styleSheet()
+    assert theme.DIM not in _cell_widget(epic_inner, 2, 1).styleSheet()
+    assert _cell(inner, 4, 1) == "—"
+    assert theme.DIM in _cell_widget(inner, 4, 1).styleSheet()
+    cells = _upgrade_cells(p)
+    # every material in its own cell: Rare +2 = Dust 112 + Shard 18,
+    # Epic +4 = Dust 300 + Shard 75 + Crystal 3, Legendary +5 = Dust 434
+    # + Shard 115 + Crystal 15 (measured level-25 costs, not the formula)
+    assert cells[(2, "Rare", "Dust")] == "112"
+    assert cells[(2, "Rare", "Shard")] == "18"
+    assert cells[(4, "Epic", "Dust")] == "300"
+    assert cells[(4, "Epic", "Shard")] == "75"
+    assert cells[(4, "Epic", "Crystal")] == "3"
+    assert cells[(5, "Legendary", "Dust")] == "434"
+    assert cells[(5, "Legendary", "Shard")] == "115"
+    assert cells[(5, "Legendary", "Crystal")] == "15"
+    assert cells[(1, "Rare", "Dust")] == "53"
+    # an uncharged material reads an explicit 0, never a missing cell:
+    # Crystal costs nothing until Epic +4, Shard nothing at +1
+    assert cells[(1, "Rare", "Crystal")] == "0"
+    assert cells[(2, "Rare", "Crystal")] == "0"
+    assert cells[(3, "Epic", "Crystal")] == "0"
+    assert cells[(1, "Legendary", "Shard")] == "0"
+    # ...and that 0 reads DIM, like the past-cap —: neither is a price, so
+    # neither may sit in the accent channel among the figures that are
+    assert theme.DIM in _cell_widget(inner, 1, 2).styleSheet()  # Rare +1 Shard
+    assert theme.ACCENT not in _cell_widget(inner, 1, 2).styleSheet()
+    assert theme.DIM in _cell_widget(inner, 1, 3).styleSheet()  # Rare +1 Crystal
+    assert theme.DIM in _cell_widget(inner, 4, 1).styleSheet()  # past-cap —
+    # past-the-cap ranks read '—': Rare has no +4/+5, Epic no +5
+    assert cells[(4, "Rare", "Dust")] == "—"
+    assert cells[(5, "Rare", "Dust")] == "—"
+    assert cells[(5, "Epic", "Dust")] == "—"
+    # ARMOR is hidden: its upgrades are not in the game yet, so the gear
+    # row carries only the Weapon chip and the table stays on weapons
+    assert "Armor" not in p._ench_upgrade_btns
+    assert p._ench_upgrade_type == "Weapon"
+    # the search narrows the rarities (shard = Rare only)
+    p._ench_search.setText("shard")
+    assert _counts(p)["UPGRADES"] == 1
+    shcells = _upgrade_cells(p)
+    assert shcells[(2, "Rare", "Shard")] == "18"
+    assert {r for (_, r, _) in shcells} == {"Rare"}
+    grids = _upgrade_grids(p)
+    assert len(_tiles(grids[0])) == 1
+    # the material roster follows the LIVE columns: with only Rare left nothing
+    # charges a Spark Crystal, so the group is two columns wide, not three
+    assert p._ench_upgrade_table["roster"] == ["Spark Dust", "Spark Shard"]
+    # the narrowed table keeps the panels' three-slot layout: one ladder panel
+    # plus two empty stretch columns, the same way the tile row behaves
+    assert grids[1].columnCount() == 3
+    p._ench_search.setText("")
+    assert _counts(p)["UPGRADES"] == 3
+    assert len(_tiles(_upgrade_grids(p)[0])) == 3
+    assert p._ench_upgrade_table["roster"] == ["Spark Dust", "Spark Shard",
+                                               "Spark Crystal"]
+    # nothing matches -> the table is gone and the card says so
+    p._ench_search.setText("no-such-material")
+    assert p._ench_upgrade_table is None
+    assert _upgrade_grids(p) == []
+    assert any("No upgrade material matches" in lb.text()
+               for lb in p._ench_upgrades_card.findChildren(QtWidgets.QLabel))
+
+
+def test_upgrades_tab_offers_the_measured_levels_only():
+    """The LV chips are the levels the costs were MEASURED at, not a schedule.
+
+    The tab used to offer `max_level` and `max_level + 5` — a level the game
+    has no tier for yet, priced by extending the measured curve. Offering a
+    level nothing was read at is exactly the thing the provenance chain exists
+    to avoid, so the chips read `stats.upgrade_cost_levels()`: the anchor
+    rarity's own measured levels, capped at the game's max (20 and 25), with
+    the highest as the default. Measure Rare at a new level in
+    `_MEASURED_UPGRADES` and the chip appears with no change here.
+    """
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Upgrades"].click()
+    levels = idata.upgrade_cost_levels()
+    assert levels == sorted(set(levels)) and levels
+    assert max(levels) <= (idata.gear_scaling().get("max_level") or 25)
+    assert [b.text() for b in p._ench_upgrade_lvl_btns.values()] == [
+        f"LV {lv}" for lv in levels]
+    # the tab opens on the highest offered level — the cap the game allows
+    assert p._ench_upgrade_level == max(levels)
+    assert p._ench_upgrade_table["level"] == max(levels)
+
+
+def test_upgrades_tab_reprices_at_the_other_measured_level():
+    """Clicking the lower chip really re-reads the table at that level, and
+    the figures are the ones measured there — 20 is a full Rare reading, so
+    Rare's column is exact and Epic/Legendary derive from it."""
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Upgrades"].click()
+    low = min(idata.upgrade_cost_levels())
+    p._ench_upgrade_lvl_btns[low].click()
+    assert p._ench_upgrade_level == low
+    assert p._ench_upgrade_table["level"] == low
+    cells = _upgrade_cells(p)
+    # the measured level-20 rows, not the level-25 ones scaled down
+    assert cells[(1, "Rare", "Dust")] == "41"
+    assert cells[(2, "Rare", "Dust")] == "87"
+    assert cells[(2, "Rare", "Shard")] == "14"
+    assert cells[(3, "Rare", "Shard")] == "30"
+    # nothing on an offered level is a guess: every live cell is measured,
+    # interpolated or derived (never the sheet's unverified formula)
+    live = [c for c in p._ench_upgrade_table["cells"] if c["live"]]
+    assert {c["source"] for c in live} <= {"measured", "interpolated", "derived"}
+    # ...and NONE of them is painted dim for it. Level 20 is where this bites:
+    # Epic +1/+2 and all five Legendary steps are derived there, so a
+    # provenance-coloured tab showed eight of its fifteen real figures dim.
+    for c in live:
+        if not c["count"]:
+            continue        # an uncharged 0 is dim by design — it is not a price
+        style = p._upgrade_cell(c, theme.rarity_color(c["rarity"]),
+                                low, True).styleSheet()
+        assert theme.DIM not in style, (c["rarity"], c["rank"], c["source"])
+    # and the tile above the ladder carries the new level in its footer
+    tile = _tiles(_upgrade_grids(p)[0])[0]
+    assert f"at level {low}" in " ".join(
+        lb.text() for lb in tile.findChildren(QtWidgets.QLabel))
+
+
+def test_upgrades_tab_fills_the_width():
+    """The tab FILLS the page it is given, and scales as the page grows.
+
+    Both growth channels, measured on live geometry — the half a stylesheet
+    assertion cannot see:
+
+      * the tiles share the whole row, so a wider page widens every tile (and
+        their material lines flow into it, see _TileFlow);
+      * the matrix's material columns share the width evenly, so the table ends
+        flush with the card's edge instead of leaving a dead band at the right
+        (what the old 1150px body did).
+    """
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Upgrades"].click()
+    # the page has a minimum width of its own, so measure the narrow case at a
+    # window that is still at or below it rather than at "the default"
+    p.resize(1200, 900)
+    for _ in range(4):
+        QtWidgets.QApplication.processEvents()
+    tgrid, mx = _upgrade_grids(p)
+    # ints, not the widgets: the same QWidget reports the NEW width after the
+    # window grows, so a held reference would compare a number with itself
+    card0 = p._ench_upgrades_card.width()
+    tile0 = _tiles(tgrid)[0].width()
+    # the ladders are bare layouts now — measure the ladder GRID's extent
+    def ladder_width(g):
+        xs = [g.cellRect(0, c).x() for c in range(g.columnCount())]
+        return xs[-1] - xs[0] + g.cellRect(0, g.columnCount() - 1).width()
+    ladder0 = ladder_width(mx)
+    p.resize(3200, 900)
+    for _ in range(4):
+        QtWidgets.QApplication.processEvents()
+    assert p._ench_upgrades_card.width() > card0     # the page did get wider
+    tile = _tiles(tgrid)[0]
+    assert tile.width() > tile0                      # the tiles share the row
+    assert ladder_width(mx) > ladder0                # and the ladders share it
+    # nothing is left hanging at the right: the row ends at the card's edge
+    rect = mx.cellRect(0, mx.columnCount() - 1)
+    assert rect.x() + rect.width() >= p._ench_upgrades_card.width() - 24
+    # a search that leaves ONE rarity keeps the ladders' three-slot layout (the
+    # grid carries empty stretch columns), so the lone ladder stays ladder-sized
+    p._ench_search.setText("shard")
+    for _ in range(4):
+        QtWidgets.QApplication.processEvents()
+    solo = _upgrade_grids(p)
+    assert len(solo) == 2
+    assert (solo[1].itemAtPosition(0, 0).widget().objectName()
+            == "UpgradeLadderBox")
+
+
 def test_refilter_keeps_card_headers_alive():
     """Re-filtering clears only the card row bodies, never the
-    SectionHeader — after deferred deletes flush (sendPostedEvents, the
+    SectionHeader — after deferred deletes flush (see qt_helpers, the
     way the main event loop does), a refilter and a direct set_tag still
     work. The old code cleared the whole card layout, so the header's tag
     label was deleteLater'd and died on the next refilter (RuntimeError:
     C++ object already deleted)."""
+    from tests.qt_helpers import drain_deleted
+
     p = _page()
     p._items_set_mode("Enchants")
     p._ench_search.setText("vitality")
-    QtWidgets.QApplication.sendPostedEvents(
-        None, QtCore.QEvent.DeferredDelete)
+    drain_deleted()
     p._ench_search.setText("")
     assert _counts(p)["SCROLLS"] == 9
     # a direct set_tag would raise if the refilter had deleted the header
@@ -876,11 +1257,11 @@ def test_craft_open_in_items_routes_enchant_outputs():
     p._craft_open_in_items("AttunedCutBeryl")
     assert p._nav == "gear"
     assert p._items_mode == "enchants"
-    assert p._items_body.currentIndex() == 1
+    assert p._items_body.currentWidget() is p._items_enchants_scroll
     # a normal gear output still opens on the Gear tab, selected
     p._craft_open_in_items("Axe_Boomerang")
     assert p._items_mode == "gear"
-    assert p._items_body.currentIndex() == 0
+    assert p._items_body.currentWidget() is p._items_browse
     assert p._items_list.currentItem().data(support.ID_ROLE) \
         == "Axe_Boomerang"
 
@@ -904,10 +1285,10 @@ def test_leaving_enchants_restores_browse_mode():
     rebuild for the mode (Gear is the only browse tab now)."""
     p = _page()
     p._items_set_mode("Enchants")
-    assert p._items_body.currentIndex() == 1
+    assert p._items_body.currentWidget() is p._items_enchants_scroll
     p._items_set_mode("Gear")
     assert p._items_mode == "gear"
-    assert p._items_body.currentIndex() == 0
+    assert p._items_body.currentWidget() is p._items_browse
 
 
 def test_corrupted_scrolls_show_signed_trade():
@@ -1278,3 +1659,497 @@ def test_craft_lists_order_highest_level_first():
     levels = [lvl[n] for n in names]
     assert levels == sorted(levels, reverse=True), names
     assert names == sorted(names, key=str.lower), names
+
+
+def _infusion_chips(p) -> dict:
+    """The faction chips by faction name."""
+    return p._ench_infusion_chips
+
+
+def _row_text(p) -> str:
+    """Every label in the card's row area, joined — row assertions read the
+    tier prose through this (a tier's tag and body are separate labels)."""
+    return "\n".join(lb.text() for lb in p._ench_infusion_rows.findChildren(
+        QtWidgets.QLabel) if lb.text())
+
+
+def _infusion_pills(p) -> list:
+    """The pattern names, in row order (the card's MORE / LESS link is
+    a button in there too, so it is filtered out)."""
+    return [b.text() for b in p._ench_infusion_rows.findChildren(
+        QtWidgets.QPushButton)
+        if b.text() and not b.text().startswith(("MORE", "LESS"))]
+
+
+def test_infusions_tab_lists_heroic_patterns():
+    """The Infusions tab is the Infusion System's card: ONE chip row — the
+    factions, one at a time, no all-factions state (the role chips were
+    removed: the faction pick is mandatory, so a role could only narrow that
+    one faction's three rows) — then that faction's patterns as full-width
+    rows: the pattern named in its role color, the granted skill, and
+    the (2)/(4)/(6) tiers the in-game InfusionUI skill panel shows. The card
+    also has to stay narrow: its minimum width is what used to make the tab
+    scroll sideways."""
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    assert p._ench_infusions_card.isVisible()
+    pool = p._ench_infusions
+    # Nightling is the 2026 patch's Demon faction: the pool derives straight
+    # from the item sheet, so it appears on its own (no code change needed)
+    assert {(x["faction"], x["role"]) for x in pool} == {
+        (f, r) for f in ("Bee", "Kobold", "Manfish", "Crimson", "Nightling")
+        for r in ("DPS", "Tank", "Support")}
+    # wiring rides the pool, so the next faction can't break this test
+    assert len(pool) == len({x["item"] for x in pool})
+    # the faction chips, in the Dungeons tab's order (heroic_infusions()
+    # sorts alphabetically, so this pins the DISPLAY order), exactly one lit
+    chips = _infusion_chips(p)
+    assert list(chips) == ["Bee", "Kobold", "Manfish", "Crimson",
+                           "Nightling"], list(chips)
+    assert [c.isChecked() for c in chips.values()].count(True) == 1
+    assert not any("filter" in c.text().lower() for c in chips.values())
+    # there is no role chooser any more: the roles survive as the row ORDER
+    # (DPS → Tank → Support) and as the pill colors, not as a filter
+    assert not hasattr(p, "_ench_infusion_role")
+    # ...and no SectionHeader either: the tab strip reading "Infusions" was
+    # already the section name, so the card opens straight on the chips
+    # (SectionHeader is a container, so this counts its own label children)
+    assert not [lb for lb in p._ench_infusions_card.findChildren(QtWidgets.QLabel)
+                if lb.text().strip().upper().startswith("INFUSION PATTERNS")]
+    # it opens on Bee: that faction's three patterns as rows, each naming
+    # itself on a role-colored pill (DPS → Tank → Support)
+    assert p._ench_infusion_fac == "Bee"
+    assert _infusion_pills(p) == ["BEE DPS", "BEE TANK", "BEE SUPPORT"]
+    # each pattern is one card (the app's row treatment), not a striped table
+    # line — one lit frame per row, in the card body
+    assert len([w for w in p._ench_infusion_rows.findChildren(
+        QtWidgets.QFrame, "Card") if w.property("item_id")]) == 3
+    body = _row_text(p)
+    for want in ("Hive Venom", "Resine Armor", "Nectar Balls",
+                 "(2) Set :", "(4) Set :", "(6) Set :"):
+        assert want in body, want
+    # the heroic source rides each row's HEADER line (the boss whose *_LT2
+    # table guarantees the drop, and that boss's dungeon). The full-width
+    # rewrite dropped it and this test then asserted its absence; it is back
+    # up on the title line rather than under the tiers — one short fact about
+    # the whole pattern, beside the name that opens its Drops From card
+    by_id = {pat["item"]: pat for pat in p._ench_infusions}
+    for iid in ("InfusionPattern_Bee_DPS", "InfusionPattern_Bee_Tank",
+                "InfusionPattern_Bee_Support"):
+        card = next(c for c in p._ench_infusion_rows.findChildren(
+            QtWidgets.QFrame, "Card") if c.property("item_id") == iid)
+        pat = by_id[iid]
+        want = f"{pat['unlock_boss'] or pat['boss']} — {pat['dungeon']}"
+        hlay = card.layout().itemAt(0).widget().layout()
+        src_lbl = hlay.itemAt(hlay.count() - 1).widget()   # the line's end
+        assert isinstance(src_lbl, QtWidgets.QLabel), iid
+        assert src_lbl.text() == want, (iid, src_lbl.text())
+        assert theme.DIM in src_lbl.styleSheet(), src_lbl.styleSheet()
+        # and it is on the title line, not down in the tier block
+        cell = card.layout().itemAt(1).widget()
+        assert src_lbl not in cell.findChildren(QtWidgets.QLabel), iid
+    # the frames carry no tooltip: the source is text on the line, not
+    # something hidden behind a hover
+    assert not any(c.toolTip() for c in p._ench_infusion_rows.findChildren(
+        QtWidgets.QFrame, "Card") if c.property("item_id"))
+    # each tier prints ONCE per row: the (4) affix used to render both beside
+    # the skill and as the ladder's (4), which read as a duplicate row
+    for tag in ("(2) Set :", "(4) Set :", "(6) Set :"):
+        assert body.count(tag) == 3, tag
+    assert body.count("+2.5% Magic Mastery") == 1
+    # every pill is a link into that pattern's item card (the crucible
+    # recipe, whose guaranteed heroic boss rides Drops From)
+    seen = []
+    p._items_show_id = seen.append
+    p._ench_infusion_rows.findChildren(QtWidgets.QPushButton)[0].click()
+    assert seen == ["InfusionPattern_Bee_DPS"]
+    # the chips are a radio: picking Kobold swaps the rows
+    chips["Kobold"].click()
+    assert p._ench_infusion_fac == "Kobold"
+    assert _infusion_pills(p) == ["KOBOLD DPS", "KOBOLD TANK",
+                                  "KOBOLD SUPPORT"]
+    assert "Pestilential Aura" in _row_text(p)
+    # exactly one chip is PAINTED as selected: the old sweep blocked the
+    # chip's toggled signal, so the previously lit chip kept the selected
+    # fill while the new one lit up — two looked chosen at once
+    plain = C.FilterChip("x", checked=False, color=theme.GOLD).styleSheet()
+    lit = C.FilterChip("x", checked=True, color=theme.GOLD).styleSheet()
+    assert plain != lit                    # the assertion has to bite
+    for fac, chip in chips.items():
+        assert chip.styleSheet() == (lit if fac == "Kobold" else plain), fac
+    chips["Kobold"].click()
+    assert chips["Kobold"].isChecked() and p._ench_infusion_fac == "Kobold"
+    # ...and the lit chip cannot be un-picked: those rows need a faction, so
+    # the click is a no-op rather than a blank card
+    assert all(c.styleSheet() == (lit if f == "Kobold" else plain)
+               for f, c in chips.items())
+    assert _infusion_pills(p) == ["KOBOLD DPS", "KOBOLD TANK",
+                                 "KOBOLD SUPPORT"]
+    # a search that empties the picked faction moves the pick on its own
+    # rather than leaving an empty card under a hidden chip
+    p._ench_search.setText("hive venom")
+    assert p._ench_infusion_fac == "Bee"
+    assert _infusion_pills(p) == ["BEE DPS"]
+    p._ench_search.setText("")
+    assert p._ench_infusion_fac == "Bee"
+    # the rows stay narrow enough not to force the tab sideways: the card's
+    # own minimum is well under a 960px viewport (it was 1097 with the
+    # faction columns + side pane)
+    assert p._ench_infusions_card.minimumSizeHint().width() < 900
+    # Crimson's patterns have no scanned heroic table yet, and nothing on
+    # the card claims otherwise: three ordinary rows, no source note
+    chips["Crimson"].click()
+    crimson = [c for c in p._ench_infusion_rows.findChildren(
+        QtWidgets.QFrame, "Card") if c.property("item_id")]
+    assert len(crimson) == 3
+    body = _row_text(p)
+    assert "Unlock:" not in body and "scan yet" not in body
+
+
+def test_infusion_row_title_line_carries_the_name_and_the_skill():
+    """The row is ONE block: the pattern's name sits inline at the head of
+    the granted skill (both on the card's title line) and the (2)/(4)/(6)
+    ladder runs full width under it. It used to be two columns — a fixed
+    identity column beside the tier block — which spent ~150px per row on a
+    name at most 120px wide and boxed the prose into a column narrower than
+    the card.
+
+    The names also share one width: inline names of different widths would
+    start each card's skill at its own indent.
+    """
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    # Manfish, whose three pills are the most different in length (DPS vs
+    # SUPPORT), so a shared width is a real claim here and not a coincidence
+    _infusion_chips(p)["Manfish"].click()
+    cards = [c for c in p._ench_infusion_rows.findChildren(
+        QtWidgets.QFrame, "Card") if c.property("item_id")]
+    assert len(cards) == 3
+    skills = {"MANFISH DPS": "Overwhelming Tides",
+              "MANFISH TANK": "Life-giving Spring",
+              "MANFISH SUPPORT": "Empowered Chain Heal"}
+    pills = []
+    for card in cards:
+        title = card.layout().itemAt(0).widget()      # the title line
+        btn = title.findChildren(QtWidgets.QPushButton)
+        assert len(btn) == 1, [b.text() for b in btn]  # exactly the pill
+        pills.append(btn[0])
+        skill = skills[btn[0].text()]
+        # the skill rides the SAME line, and the ladder does not: the tiers
+        # are the card's second block, below the title
+        title_text = " ".join(lb.text() for lb in title.findChildren(
+            QtWidgets.QLabel) if lb.text())
+        assert skill in title_text, (skill, title_text)
+        # the ladder is the card's second block, not part of the title line
+        assert "(2) Set :" not in title_text, title_text
+    # one shared pill width, so every skill name starts at the same x
+    widths = {b.width() for b in pills}
+    assert len(widths) == 1, sorted(widths)
+    # ...and the pill is still the link into that row's item card
+    seen = []
+    p._items_show_id = seen.append
+    pills[1].click()
+    assert seen == ["InfusionPattern_Manfish_Tank"]
+
+
+def test_infusion_row_cards_are_leveled():
+    """The row cards share one height. Each card sizes to its own content, so
+    a (6) rank sentence that wrapped to a second line left its card a line
+    taller than its neighbours and the column's bottom edge went ragged; the
+    host pins every card to the tallest one's natural height, and re-levels
+    rather than ratcheting (a card that stops being the tall one has to give
+    the extra height back).
+
+    The tall card is BUILT here instead of borrowed from Manfish: the ladder
+    shrank so three rows clear the fold (see _TIER_PX), and at 13px even
+    Manfish's (6) sentences fit on one line at every width the card takes —
+    its rows measure identically, so the old precondition (natural heights
+    differ) silently stopped biting. What is under test is the mechanism:
+    one taller row, and the host levels its neighbours up to it."""
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    _infusion_chips(p)["Manfish"].click()
+    app = QtWidgets.QApplication.instance()
+    for _ in range(4):
+        app.processEvents()
+
+    host = p._ench_infusion_rows
+    host.level()                    # deterministic: don't wait on the timer
+    cards = host.cards()
+    assert len(cards) == 3
+
+    def natural():
+        return [c.layout().heightForWidth(c.width()) + 2 * c.frameWidth()
+                for c in cards]
+
+    def settle():
+        for _ in range(6):
+            app.processEvents()
+        host.layout().activate()
+
+    # one row's (6) rank sentence runs long enough to wrap past the card's
+    # width, which is what makes its card taller than the other two
+    taller = cards[0]
+    body = [lb for lb in reversed(taller.findChildren(QtWidgets.QLabel))
+            if lb.wordWrap()][0]
+    original = body.text()
+    body.setText(original + " rank text" * 30)
+    taller.layout().invalidate()
+    settle()
+
+    assert len(set(natural())) > 1, natural()   # the assertion has to bite
+    host.level()
+    settle()
+    heights = [c.height() for c in cards]
+    assert len(set(heights)) == 1, heights
+    assert heights[0] >= max(natural()), (heights, natural())
+
+    # ratchet-free: with the long sentence gone the level comes back down
+    # instead of pinning the taller value it was given a moment ago
+    body.setText(original)
+    taller.layout().invalidate()
+    settle()
+    host.level()
+    settle()
+    relaxed = [c.height() for c in cards]
+    assert len(set(relaxed)) == 1, relaxed
+    assert relaxed[0] < heights[0], (relaxed, heights)
+    assert relaxed[0] >= max(natural()), (relaxed, natural())
+
+
+def test_infusion_row_names_are_plain_text_not_buttons(monkeypatch):
+    """The row's link buttons (the pattern name and the MORE / LESS link)
+    read as plain text — no chip, no box, no hand cursor — while still being
+    the click that opens the pattern's item card.
+
+    Both are QPushButtons, so two things had to go: the states (the app sheet
+    owns `QPushButton:hover`'s PANEL_HI fill and `QPushButton:pressed`'s
+    bright ACCENT_DIM one for every button, and Qt only takes a state back
+    where the widget's own sheet NAMES it, so an unnamed state grew the name
+    a fill and flashed a brighter box on click) and the cursor. The cursor
+    was the last tell: probing the running app showed a hand over a line of
+    words that has nothing to point at, so the name declares no fill, no
+    border, no hover of its own — type in the role color is the whole
+    rendering — and neither link sets a cursor.
+
+    The MORE / LESS link only renders when a tier is CLIPPED to the two-line
+    preview (`if clipped or expanded`), and at the real app font the infusion
+    sentences FIT their two-line budget — so the link was font-metric
+    dependent: it appeared only under the wide fallback font and vanished once
+    test_party_inspect had called theme.apply() and permanently registered the
+    real font. Pin the preview width so the trim is forced and the link is
+    under test whatever the ambient font."""
+    from farever_companion.ui.pages.items import enchants as inf
+    monkeypatch.setattr(inf, "_TIER_PREVIEW_W", 40)   # force the two-line trim
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    btns = p._ench_infusion_rows.findChildren(QtWidgets.QPushButton)
+    pill = next(b for b in btns if b.text() == "BEE DPS")
+    more = next(b for b in btns if b.text().startswith(("MORE", "LESS")))
+    for b in (pill, more):
+        css = b.styleSheet()
+        # ONE rule holds the resting look across the states the app sheet
+        # would otherwise fill, so hover/press can only change the text
+        assert ("QPushButton, QPushButton:hover, QPushButton:pressed"
+                in css), css
+        assert b.isFlat(), b.text()
+        assert b.focusPolicy() == QtCore.Qt.NoFocus, b.text()
+        # nothing on the row turns the pointer into a hand...
+        assert b.cursor().shape() != QtCore.Qt.PointingHandCursor, b.text()
+    # ...nor does any ancestor (the row host, the card, the scroll area): a
+    # hand inherited from a container would look exactly the same
+    for anc in (pill.parentWidget(), more.parentWidget()):
+        while anc is not None:
+            assert anc.cursor().shape() != QtCore.Qt.PointingHandCursor, anc
+            anc = anc.parentWidget()
+    # the name is TEXT in its own role color (DPS is the danger red) and
+    # nothing else: no fill behind it, no border around it, and no state rule
+    # of its own — everything it paints, it paints at rest
+    css = pill.styleSheet()
+    # ONE declaration block, and nothing after it: any rule that named a
+    # state on its own would be a state the name repaints under
+    assert css.count("{") == 1 and css.count("}") == 1, css
+    assert f"color:{theme.DANGER}" in css, css
+    assert "background:transparent" in css and "border:0" in css, css
+    # ...while the MORE link is text too, and keeps the app's link hover
+    # colour (its only cue, since it has no box either)
+    assert f"QPushButton:hover{{color:{theme.ACCENT_LIGHT};}}" in \
+        more.styleSheet(), more.styleSheet()
+
+
+def test_infusion_tier_tags_are_one_uniform_color():
+    """The (2)/(4)/(6) tags share one label color — a gold (4) tag made the
+    label read as part of the affix — while the BODIES carry the ladder: the
+    (4) body, the only tier carrying numbers, is the app's plain text color,
+    the (2) prose is MUTED, and the (6) rank text — the set's pinnacle — is
+    GOLD, matching the skill header's own gold accents."""
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    labels = [lb for lb in p._ench_infusion_rows.findChildren(
+        QtWidgets.QLabel) if lb.text() in ("(2) Set :", "(4) Set :", "(6) Set :")]
+    assert len(labels) == 9            # three tags x the three Bee rows
+    styles = {lb.styleSheet() for lb in labels}
+    assert len(styles) == 1, styles    # one color for all three tags
+    tag_style = styles.pop()
+    assert theme.DIM in tag_style and theme.GOLD not in tag_style
+    # the TAGS are never gold (the skill header's own gold is inline HTML in
+    # its rich text, so it never shows up in a stylesheet — and the (2)/(4)
+    # bodies do not wear a hue either; only the (6) bodies do, possibly
+    # elided to the two-line preview)
+    rows = p._ench_infusion_rows.findChildren(QtWidgets.QLabel)
+    plain = [lb.text() for lb in rows
+             if not lb.text().startswith("<")
+             and theme.GOLD in lb.styleSheet()]
+    assert plain, "no (6) body picked up the gold"
+    lower_tiers = {lb.text() for lb in rows
+                   if not lb.text().startswith("<")
+                   and (f"color:{theme.MUTED};" in lb.styleSheet()
+                        or f"color:{theme.TEXT};" in lb.styleSheet())}
+    assert not (set(plain) & lower_tiers), (plain, lower_tiers)
+    # the (4) bodies wear the plain text color — the brightest line, the only
+    # tier with numbers in it — while (2) is MUTED and (6) is GOLD
+    bright = sorted(lb.text() for lb in p._ench_infusion_rows.findChildren(
+        QtWidgets.QLabel) if not lb.text().startswith("<")
+        and f"color:{theme.TEXT};" in lb.styleSheet())
+    assert bright == ["+2.5% Armor", "+2.5% Critical Chance",
+                      "+2.5% Magic Mastery"], bright
+
+
+def test_infusion_text_is_reading_sized_on_both_surfaces():
+    """The crucible's tiers print on TWO surfaces — the Infusions ladder and
+    the item card's granted-skill box — and both carry reading text (whole
+    sentences, not labels), so they are sized in step rather than as two
+    unrelated magic numbers.
+
+    The ladder's size is capped by the FOLD, not by taste, and this test used
+    to demand >= 16px for readability: the ladder then pushed a three-row
+    faction 187px past the default window's fold (1180x740 opens the tab with
+    641px of room and needed 645), so the tab scrolled and its three pattern
+    boxes read as mostly empty cards. Re-measured at that window: 15px still
+    scrolls 16px, 14px and 13px land on 0 — hence the ceiling the module
+    carries, which is what this pins instead of a reading-size floor. The
+    item card has no fold to clear, so its box stays a notch above."""
+    from farever_companion.ui.pages.items import detail as detail_mod
+    from farever_companion.ui.pages.items import enchants as inf_mod
+
+    assert inf_mod._TIER_PX <= inf_mod._TIER_FOLD_PX   # clears the fold
+    assert abs(inf_mod._TIER_PX - detail_mod._INFUSION_PX) <= 1
+    assert inf_mod._SKILL_PX > inf_mod._TIER_PX   # the title stays on top
+
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    body = next(lb for lb in p._ench_infusion_rows.findChildren(
+        QtWidgets.QLabel) if lb.text().startswith("+2.5%"))
+    assert f"font-size:{inf_mod._TIER_PX}px" in body.styleSheet(), \
+        body.styleSheet()
+
+    # the item card's own box, on the same pattern
+    p._items_set_mode("Items")
+    p._items_show_id("InfusionPattern_Bee_Support")
+    box = next(lb for lb in p._items_detail.findChildren(QtWidgets.QLabel)
+               if "GRANTED SKILL" in lb.text())
+    assert f"font-size: {detail_mod._INFUSION_PX}px" in box.styleSheet(), \
+        box.styleSheet()
+
+
+def test_infusions_search_narrows_by_boss_faction_role():
+    """The search reads the pattern rows too — boss, faction, role, and
+    the granted skill (incl. its ultimate) — and the filtered total rides
+    _ench_counts like every other card."""
+    p = _page()
+    p._items_set_mode("Enchants")
+    p._ench_tabs._btns["Infusions"].click()
+    n_all = len(p._ench_infusions)
+    assert _counts(p)["INFUSIONS"] == n_all
+    p._ench_search.setText("ratsar")
+    assert _counts(p)["INFUSIONS"] == 1
+    p._ench_search.setText("bee")
+    assert _counts(p)["INFUSIONS"] == 3      # Bee rows only; Kobold is not 'bee'
+    p._ench_search.setText("tank")
+    assert _counts(p)["INFUSIONS"] == 5      # one Tank per faction
+    # the granted skill is searchable: its name and its ultimate
+    p._ench_search.setText("hive venom")
+    assert _counts(p)["INFUSIONS"] == 1
+    p._ench_search.setText("empowered")
+    assert _counts(p)["INFUSIONS"] == 1
+    p._ench_search.setText("")
+    assert _counts(p)["INFUSIONS"] == n_all
+
+
+def test_heroic_infusion_pool_maps_bosses_to_dungeons():
+    """The data-layer pool: every pattern carries the heroic boss whose
+    *_LT2 table guarantees it, that boss's dungeon, and the skill the
+    infusion grants once applied (the Infusion_<Faction>_<Role> skill
+    row; ultimate when the sheet names one)."""
+    pool = {x["item"]: x for x in idata.heroic_infusions()}
+    # 15 = the four launch factions x DPS/Tank/Support, plus the 2026 patch's
+    # Nightling (Demon) trio — the pool derives from the item sheet, so the
+    # count grows with the sheet by design
+    assert len(pool) == 15
+    assert {(x["faction"], x["role"]) for x in pool.values()} == {
+        (f, r) for f in ("Bee", "Kobold", "Manfish", "Crimson", "Nightling")
+        for r in ("DPS", "Tank", "Support")}
+    assert pool["InfusionPattern_Bee_DPS"]["boss"] == "Gatsbee"
+    assert pool["InfusionPattern_Kobold_Tank"]["boss"] == "Ratsar"
+    assert pool["InfusionPattern_Manfish_Support"]["boss"] == "Nepsilon"
+    assert pool["InfusionPattern_Bee_DPS"]["dungeon"] == "Bee Hive"
+    # Crimson's heroic dungeons resolved with the refreshed scan, so the four
+    # launch factions all map; Nightling's (the new Demon dungeon is not in
+    # the scan yet) honestly carries '' — the designed fallback for an
+    # unresolved boss (re-scan after the new patch data)
+    unresolved = {"Nightling"}
+    mapped = [x for x in pool.values() if x["faction"] not in unresolved]
+    assert all(x["dungeon"] for x in mapped)
+    assert all(x["boss"] == "" and x["dungeon"] == ""
+               for x in pool.values() if x["faction"] in unresolved)
+    # the granted skills — every pattern resolves one, unresolved rows
+    # would come back '' (an id echoed as a name must not render)
+    assert all(x["skill"] for x in pool.values())
+    assert pool["InfusionPattern_Bee_DPS"]["skill"] == "Hive Venom"
+    assert pool["InfusionPattern_Kobold_Tank"]["skill"] == "Pestilential Aura"
+    assert pool["InfusionPattern_Manfish_Tank"]["skill"] == "Life-giving Spring"
+    # ultimates only where the sheet names them
+    assert pool["InfusionPattern_Bee_Support"]["ultimate"] == "Honey Shot"
+    assert pool["InfusionPattern_Manfish_Support"]["ultimate"] == \
+        "Empowered Chain Heal"
+    assert pool["InfusionPattern_Bee_DPS"]["ultimate"] == ""
+
+
+def test_heroic_infusion_pool_carries_the_crucible_set_data():
+    """The crucible's own data (from the in-game InfusionUI dump): the
+    unlock text names the boss by its DISPLAY name ('Defeat Heroic Lady
+    Bee' — Mokshi's dungeon persona, not the unit id), and each pattern's
+    set tiers derive from the granted skill's sheet rows: (2) the base
+    description, (4) the threshold-gated stat affixes, (6) the rank
+    description — the same three texts the crucible's skill panel shows."""
+    pool = {x["item"]: x for x in idata.heroic_infusions()}
+    # display-name unlock bosses (Bee faction: the dungeons' boss_name,
+    # which differ from the unit ids the scan records)
+    assert pool["InfusionPattern_Bee_Support"]["unlock_boss"] == "Lady Bee"
+    assert pool["InfusionPattern_Bee_Tank"]["unlock_boss"] == \
+        "Queen Honeyzabeth"
+    assert pool["InfusionPattern_Kobold_DPS"]["unlock_boss"] == \
+        "Munster Chuck"
+    assert pool["InfusionPattern_Kobold_Tank"]["unlock_boss"] == \
+        "King Ratsar"
+    assert pool["InfusionPattern_Manfish_DPS"]["unlock_boss"] == \
+        "Sponge Blob"
+    assert pool["InfusionPattern_Manfish_Tank"]["unlock_boss"] == \
+        "Crabgantua"
+    # set tiers: (2) base desc, (4) stat affixes, (6) rank desc — all 9
+    assert all(x["set2"] for x in pool.values())
+    assert all(x["set6"] for x in pool.values())
+    assert pool["InfusionPattern_Kobold_DPS"]["set4"] == \
+        ["+2.5% Critical Chance"]
+    assert pool["InfusionPattern_Kobold_Tank"]["set4"] == \
+        ["+2.5% Armor", "+2.5% Vitality"]
+    assert pool["InfusionPattern_Manfish_DPS"]["set4"] == \
+        ["+2.5% Armor Penetration", "+2.5% Spell Penetration"]
+    assert pool["InfusionPattern_Bee_DPS"]["set4"] == \
+        ["+2.5% Magic Mastery"]

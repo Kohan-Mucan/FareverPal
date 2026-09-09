@@ -9,13 +9,19 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
+# This package's own directory, derived from this file - the one place the
+# package name would otherwise have to be written down. The compiled data
+# folder hangs off it (`data_root`), and so does the repo root this package
+# sits in (`project_root`), so renaming the package moves both.
+PACKAGE_DIR = Path(__file__).resolve().parent
+
 @lru_cache(maxsize=1)
 def data_root() -> Path:
     """Directory that contains the consolidated data script."""
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         return Path(meipass)
-    return project_root() / "farever_companion" / "data"
+    return PACKAGE_DIR / "data"
 
 def sheets_dir() -> Path:
     """Directory for raw JSON sheets (lootTable, unit, etc)."""
@@ -128,10 +134,10 @@ def gatherable_locs_path() -> Path:
 @lru_cache(maxsize=1)
 def project_root() -> Path:
     """This project's own root (FareverPal/), for caches and config defaults."""
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "run.py").exists() and (parent / "farever_companion").exists():
+    for parent in PACKAGE_DIR.parents:
+        if (parent / "run.py").exists() and (parent / PACKAGE_DIR.name).exists():
             return parent
-    return Path(__file__).resolve().parent.parent
+    return PACKAGE_DIR.parent
 
 def cache_dir() -> Path:
     d = project_root() / "cache"

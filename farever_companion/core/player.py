@@ -238,8 +238,12 @@ class PlayerLocator:
             return bool(st["in_combat"])
         return None
 
-    def combat_state(self) -> dict | None:
-        """Game-authoritative combat snapshot for the local hero.
+    def combat_state(self, hero_addr: int | None = None) -> dict | None:
+        """Game-authoritative combat snapshot for a hero.
+
+        With no argument this reads the local hero. A supplied hero address is
+        used for whole-group pre-combat checks; it is still validated by the
+        same reflection and bounds checks below.
 
         Returns a dict with ``in_combat`` (bool), ``combat_id`` (int),
         ``combat_start`` / ``combat_end`` (float engine seconds, 0.0 when
@@ -250,7 +254,7 @@ class PlayerLocator:
         the runtime can't resolve. Consumed by the DPS tracker as an
         AUXILIARY encounter signal - never the primary fight boundary.
         """
-        hero = self.live_address()
+        hero = hero_addr or self.live_address()
         if not hero:
             return None
         try:
@@ -258,13 +262,18 @@ class PlayerLocator:
         except ProcError:
             return None
 
+        # Movement/hero fields are consumed by DPS tracking and diagnostics.
+        resolved: dict[str, tuple[int | None, bool]] = {}
+
         def _off(name: str, fallback: int | None) -> int | None:
             try:
                 o = self.hl.field_offset(hero_type, name)
                 if o is not None:
+                    resolved[name] = (o, True)
                     return o
             except ProcError:
                 pass
+            resolved[name] = (fallback, False)
             return fallback
 
         off_in = _off("isInCombat", OFF_HERO_ISCOMBAT)
@@ -288,9 +297,10 @@ class PlayerLocator:
             pass
         return st
 
-    def player_profile(self) -> str | None:
+
+    def player_profile(self, hero_addr: int | None = None) -> str | None:
         """Find the unique name_hash key of the current character using reflection."""
-        hero = self.live_address()
+        hero = hero_addr if hero_addr is not None else self.live_address()
         if not hero:
             return None
         hero_type = self.hl.u64(hero)

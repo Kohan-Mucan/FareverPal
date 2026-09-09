@@ -1,58 +1,79 @@
 """DPS tracking engine: multi-segment combat tracking fed by real damage events.
 
 HP is polled for display/segmentation only, never to fabricate numbers.
-The pure data model lives in ``core/dps_data.py``; this module owns the
-per-tick update loop, name resolution, pet attribution, boss segmentation,
-and opt-in history/arrival persistence.
+
+This module is the tracker's state and facade: consumers hold a ``DpsTracker``
+and the per-concern implementations live beside it -- ``dps_tracker_tick.py``
+(the per-tick update loop), ``dps_tracker_events.py`` (event application),
+``dps_tracker_lifecycle.py`` (fight end / wipe / death),
+``dps_tracker_attribution.py`` / ``dps_tracker_history.py``, and
+``dps_dummy.py`` (everything the training-dummy test needs). The names other
+modules consume through this facade are re-exported here -- ``__all__`` is that
+list, and it is what keeps the re-exports from reading as unused imports.
 """
 
 from __future__ import annotations
 
-import copy
-import json
-import logging
-import math
+import threading
 import time
-from collections import deque
-from functools import lru_cache
 from pathlib import Path
 
-from ..data import names, units as udata
-from ..persist import atomic_write_json
+from ..data import names
+from .damage_events import clean_wire_name
+from .dps_dummy import DpsTrackerDummy
+from .dps_tracker_tick import DpsTrackerTick
+from .dps_tracker_attribution import (
+    _GENERIC_PLAYER_LABELS,
+    _in_instance,
+    _read_roster,
+    same_player_name,
+    DpsTrackerAttribution,
+    own_row,
+    solo_only_view,
+    solo_status,
+    view_totals,
+)
+from .dps_tracker_history import (
+    DpsTrackerHistory,
+    HISTORY_KIND_TOKENS,
+)
+from .dps_tracker_lifecycle import DpsTrackerLifecycle
+from .dps_tracker_events import (
+    EVENT_DROPPED,
+    EVENT_UNRESOLVED,
+    DpsTrackerEvents,
+)
 from .dps_data import (
-    BOSS_GONE_IDLE_S,
     BOSS_IDLE_AUX_S,
-    BOSS_KILL_GRACE_S,
     GAME_COMBAT_END_CONFIRM_S,
     GAME_COMBAT_POLL_S,
-    GROUP_ROSTER_TTL_S,
-    K_DAMAGE,
-    K_HEAL,
-    K_SHIELD,
-    PET_PROBE_S,
     PARTY_RETRY_S,
-    OWNED_ITEM_PROC_SKILLS,
-    _slug_profile,
     _roster_change_key,
     _roster_line,
-    _session_from_dict,
-    _session_to_dict,
     CombatSession,
     DamageEvent,
     HitEvent,
+    _PET_SUFFIX,
+    PackSplit,
     PlayerParse,
     SkillParse,
+    TargetParse,
     read_history_file,
+    top_skill_weapon,
     weapon_families_used,
     weapon_family_of,
+    weapon_for_skill,
     weapons_used,
     hero_cls_to_class,
     infer_class_from_skill,
     log,
 )
 
-# Backward-compatible re-exports: every symbol that was importable from
-# farever_companion.core.dps_tracker before the split still resolves here.
+# The facade's re-export list. pyflakes honours `__all__`, so an entry here is
+# what marks a deliberate re-export as used rather than accusing it; the
+# hygiene suite resolves every entry back to this module. A name belongs here
+# only when something consumes it through dps_tracker -- everything else is
+# importable from the module that defines it (dps_data, attribution, ...).
 __all__ = [
     "DpsTracker",
     "solo_status",
@@ -61,128 +82,79 @@ __all__ = [
     "SkillParse",
     "HitEvent",
     "DamageEvent",
+    "PackSplit",
+    "TargetParse",
+    "top_skill_weapon",
     "weapon_families_used",
     "weapon_family_of",
+    "weapon_for_skill",
     "weapons_used",
     "read_history_file",
     "infer_class_from_skill",
     "hero_cls_to_class",
     "GAME_COMBAT_END_CONFIRM_S",
     "BOSS_IDLE_AUX_S",
+    "HISTORY_KIND_TOKENS",
+    "own_row",
+    "solo_only_view",
+    "view_totals",
+    "game_combat_settled",
 ]
 
 
 CO_COMBAT_WINDOW_S = 10.0   # a player this fresh counts as fighting alongside you
 
 
-# A boss that vanishes from the unit scan for less than this long is treated
-# as scan flicker (rift arenas can carry a second boss-tagged entity, and a
-# boss can drop out of the scan for a single poll). The meter keeps its pinned
-# target instead of hopping between boss entities every tick; only after the
-# pinned boss has stayed gone past this window does the tracker re-target.
-BOSS_RELATCH_GRACE_S = 1.5
+def game_combat_settled(st) -> bool:
+    """True when the game has recorded that the encounter it was tracking is
+    CLOSED, whether or not ``isInCombat`` has caught up yet.
 
+    ``isInCombat`` is a boolean the client clears on its own schedule, not a
+    fight boundary. A rift boss kill, a wipe, a zone change or a disconnect
+    can all leave it set for a while after ``combatEndTime`` was stamped, and
+    anything that runs a clock off that boolean as a LEVEL - the meter's
+    armed clock, the IN COMBAT badge - then keeps counting a fight that ended
+    minutes ago, with nothing behind the number.
 
-# Damage events can name a unit by its RAW internal id (the bridge/DLL, e.g.
-# "DemonSuperElite") while the unit scan stores the resolved display name
-# ("Nightking Maat Demon"). Everything written onto a session must use ONE
-# spelling, or the Top DPS crown label alternates between the two every tick.
-@lru_cache(maxsize=8192)
-def _canonical_unit_display(name: str) -> str:
-    """The display spelling a scene scan would store for this raw unit id.
-
-    Id-shaped tokens are resolved exactly like the scan's readable name:
-    the unit tables first ("DemonSuperElite" -> "Nightking Maat Demon",
-    "TrainingDummy" -> "Training Dummy"), else the humanized label. Names
-    that are already display text (spaces/emblems/slashes) and non-unit
-    literals pass through untouched, so hero names are never rewritten.
+    ``combat_end > combat_start > 0`` is the game saying "this encounter is
+    closed". It cannot be true while a fight is live (the field reads 0.0
+    then), so it is a safe end-confirm and not a timeout: a slow first decode
+    mid-fight is unaffected. Read defensively - a reader that cannot resolve
+    the field reports 0.0, which is the open case.
     """
-    if not name:
-        return name
-    stripped = name.replace("👑 ", "").replace("🎯 ", "").strip()
-    # ids never contain spaces/slashes; anything else is already display text
-    if not stripped or " " in stripped or "/" in stripped or "\\" in stripped:
-        return name
-    resolved = names.unit_name(stripped)
-    return resolved if resolved != stripped else name
-
-
-def _read_roster(model):
-    """The model's current group roster (None when unattached/undecodable).
-
-    Prefers the live ``group_roster()`` read (the game reader rate-limits
-    itself to ~1 Hz so every consumer in a tick shares one snapshot) and
-    falls back to a plain ``roster`` attribute for fakes/tests.
-    """
-    if model is None:
-        return None
-    try:
-        fn = getattr(model, "group_roster", None)
-        if callable(fn):
-            return fn()
-    except Exception:
-        pass
-    try:
-        return getattr(model, "roster", None)
-    except Exception:
-        return None
-
-
-def _in_instance(model) -> bool:
-    """True when the player is inside a dungeon/rift instance.
-
-    Accepts both the real model's ``is_in_dungeon_or_rift()`` read and the
-    plain ``is_dungeon``/``is_rift`` flags fakes/tests set.
-    """
-    try:
-        fn = getattr(model, "is_in_dungeon_or_rift", None)
-        if callable(fn):
-            return bool(fn())
-    except Exception:
-        pass
-    try:
-        return bool(getattr(model, "is_dungeon", False)
-                    or getattr(model, "is_rift", False))
-    except Exception:
+    if not st:
         return False
-
-
-def solo_status(model, tracker=None) -> bool | None:
-    """True = player is solo (no other party members); False = grouped with
-    party members (or inside a dungeon/rift, where everyone always shows);
-    None = unknown (unattached or not loaded into game).
-
-    - Inside a dungeon/rift instance -> False (always show all members).
-    - A decoded party roster with other members means grouped -> False.
-    - An empty/self-only group or no roster while in open world means solo -> True.
-    - No attached model -> None (unknown).
-    """
-    if model is None:
-        return None
-    pa = getattr(model, "player_addr", 0)
-    if not pa and not getattr(model, "is_attached", False):
-        return None
-    if _in_instance(model):
+    try:
+        start = float(st.get("combat_start") or 0.0)
+        end = float(st.get("combat_end") or 0.0)
+    except (AttributeError, TypeError, ValueError):
         return False
-    roster = _read_roster(model)
-    if roster is not None:
-        members = list(getattr(roster, "members", []) or [])
-        other_members = [m for m in members if not getattr(m, "is_me", False)]
-        if other_members:
-            return False
-    return True
+    return start > 0.0 and end > start
 
 
-class DpsTracker:
+# After a zone enter/exit, ignore the game's combat window this long: a
+# transition is not a fight, so the timer must not start on zone-in (see
+# DpsTrackerTick._watch_zone_edge). The other tick constants live in dps_data
+# with the rest of the engine's tunables.
+ZONE_ARM_SETTLE_S = 3.0
+
+
+class DpsTracker(DpsTrackerDummy, DpsTrackerTick):
     """Multi-segment combat tracking fed by real damage events.
 
     HP is display/segmentation only. With no reader nothing is recorded;
     the meter shows its empty state rather than fabricated numbers.
     """
 
-    def __init__(self, model, max_dist: float = 400.0):
+    def __init__(self, model):
         self.model = model
-        self.max_dist: float = max_dist
+        # Domain coordinators preserve the long-standing DpsTracker facade
+        # while the large implementation is migrated out in safe, testable
+        # slices. They never touch capture or native DLL code.
+        self._history_component = DpsTrackerHistory(self)
+        self.lifecycle = DpsTrackerLifecycle(self)
+        self.events = DpsTrackerEvents(self)
+        self.attribution = DpsTrackerAttribution(self)
 
         self.overall_session = CombatSession("Overall Run", kind="overall")
         self.trash_session = CombatSession("Trash Mobs", kind="trash")
@@ -195,6 +167,11 @@ class DpsTracker:
         self.segment_view: str = "auto"  # "auto", "boss", "boss_adds", "trash", "dummy", "overall"
         self.in_boss_fight: bool = False
         self.in_dummy_fight: bool = False
+        # Whether a training dummy may be engaged at all — the meter's Stop Test
+        # latch. A dummy is the one fight with no natural end, so its end signal
+        # has to be the user's; core/dps_dummy.py owns that rule (and every other
+        # dummy-specific one) and this is the state it works on.
+        self.dummy_test_armed: bool = True
 
         # Encounter Fight History (archived finished sessions)
         self.history: list[CombatSession] = []
@@ -215,9 +192,43 @@ class DpsTracker:
         self._foe_names: dict[int, str] = {}
         self._foe_raw_ids: dict[int, str] = {}   # addr -> raw unit id (kill-uid matching)
         self._src_cursor: int = 0
-        self._boss_kill_pending: float = 0.0
+        self._boss_kill_pending: float = 0.0        # wall clock of a "killed" flag
         self._boss_last_seen: float = 0.0
         self._boss_missing_at: float = 0.0   # wall clock the pinned boss went absent
+        # Boss-corpse suppression: addr + deadline (monotonic) of the boss that
+        # JUST ended, so the despawning corpse can't instantly re-engage
+        # (timer pinning at 00:00.0 on an empty board).
+        self._ended_boss_addr: int | None = None
+        self._ended_boss_deadline: float = 0.0
+        # The boss the current instance DECLARES (data/dungeons.py), refreshed
+        # each scene scan and read by the event router so a hit on it is
+        # recognised as boss damage even when `units.is_boss` has never heard
+        # of the id. None outside a resolvable instance.
+        self._declared_boss: str | None = None
+        # Whether the currently seen "boss" is only the ENGINE's word for it
+        # (see `_scan_foes`). Uncertain claims do not split the fight.
+        self._boss_claim_uncertain: bool = False
+        # Wall time of the last zone enter/exit: the fight clock ignores the
+        # game's combat window for ZONE_ARM_SETTLE_S after it (a transition is
+        # not a fight -- see DpsTrackerTick._watch_zone_edge).
+        self._zone_edge_at: float = 0.0
+        # The zone-in auto-reset's debounce HOLD: the monotonic stamp of the
+        # enter edge, kept across ticks until the window elapses (or the zone
+        # read leaves the instance). See DpsTrackerTick._watch_zone_edge.
+        self._instance_edge_at: float = 0.0
+        # Start of the current OUTSIDE streak (monotonic, 0 = inside). The
+        # debounce has to hold on this side too, or one tick that reads
+        # "outside" mid-dungeon (activity slot cleared between packs, an area
+        # transition, a failed read) is indistinguishable from a real exit and
+        # re-arms the zone-in reset, which then wipes the run's own damage.
+        self._outside_since: float = 0.0
+        # Start of the current INSIDE->OUTSIDE streak (monotonic, 0 = not
+        # leaving). The fight-clock drop on a zone EXIT is debounced the same
+        # way the zone-in meter reset is: stamped only on the transition
+        # itself, held across ticks, and the clock drops once the window has
+        # elapsed -- so a one-tick "outside" flicker mid-dungeon cannot reset
+        # the timer mid-fight (live 2026-10-02). See DpsTrackerTick.
+        self._exit_since: float = 0.0
 
         # Game combat state (auxiliary to idle heuristics; see _poll_combat_state).
         self.combat_state: dict | None = None
@@ -236,6 +247,9 @@ class DpsTracker:
         self._owned_proc_sources: dict[int, int] = {}
         # addr -> Party_XXXX row; folds into the owner once the owner is learned.
         self._fallback_rows: dict[int, str] = {}
+        # Proxy attribution warnings are transition-only: one per unresolved
+        # source/target until it resolves, not one per hit.
+        self._proxy_unresolved_logged: set[tuple[str, str, str]] = set()
         self._pet_probe_at: dict[int, float] = {}    # last probe time per addr
         self._party_retry_at: dict[int, float] = {}  # last name retry per addr
         self._roster_ts: float = 0.0                 # last st.Group roster seed
@@ -246,16 +260,161 @@ class DpsTracker:
         # the display path reads this cache instead of polling the game.
         self.last_roster = None
         self.log_line = None                         # Callable[[str], None] | None
+        # Zone edge-detect: reset the meter when zoning into a dungeon/rift.
+        # None until the first update so attaching while already inside an
+        # instance doesn't spuriously wipe an already-empty tracker.
+        self._in_instance_prev: bool | None = None
+        # This tick's instance answer, kept for the dummy gate: a training
+        # dummy is an OPEN-WORLD bench (core/dps_dummy.dummy_zone_ok), and the
+        # scene scan and the event drain have to read the same per-tick fact or
+        # one of them would report a dummy the other refuses. False until the
+        # first tick, which is the open-world answer the rest of the dummy
+        # feature already assumes.
+        self._instance_now = False
+        # Open-world solo combat-flag edge (True -> False pauses; None until
+        # the first read so a stale flag can never pause).
+        self._ow_in_combat_prev: bool | None = None
+        # Live per-hero HP from the last unit scan, keyed by the display name
+        # used on rows (so the overlay can flag dead players). Empty until the
+        # first scene scan. Value is (hp, is_me).
+        self.last_hero_status: dict[str, tuple[float, bool]] = {}
+        # Nearest live training dummy (addr, name, hp, distance in metres) from
+        # the last scene scan, None when the scan held none. The Top DPS
+        # overlay's visibility gate reads this between scans (a dummy in range
+        # keeps the meter on screen even in the open world) and so does the
+        # meter's own empty state — see dummy_within().
+        self.dummy_near: tuple[int, str, float, float] | None = None
+        # Every live dummy inside the radius, nearest first, from the same scan
+        # pass. The split lists the whole yard (core/dps_dummy.py,
+        # `dummy_split_targets`) so a cluster shows every dummy, not just the
+        # ones the decoded damage happened to name.
+        self.dummy_cluster: list[tuple[int, str, float, float]] = []
+        # Split diagnostics (Activity Log): the distinct decoded hit-target
+        # addresses seen in the live test, and the last cluster address set
+        # logged. `_dummy_diag_addrs` is cleared per test (core/dps_dummy.py,
+        # `_engage_dummy`); both are transition-only so a run logs a handful of
+        # lines rather than one per hit / per scan.
+        self._dummy_diag_addrs: set[int] = set()
+        self._dummy_diag_cluster_key: tuple | None = None
+        # The dummy test's own radius in metres (0 = no cap), mirroring the
+        # `dps_dummy_range` setting. The 1 Hz drain pushes the live setting onto
+        # the tracker; everything dummy-side reads it through
+        # `dummy_in_range()` (core/dps_dummy.py) so the engagement gate, the
+        # auto-show rule and the auto-end can never disagree about which dummies
+        # count. The default matches the setting's default, so a tracker that
+        # has never seen a settings push still behaves.
+        self.dummy_range: float = 5.0
+        # How close the player must get to the boss before the accumulated
+        # trash run is closed out, in metres (0 = never). Mirrors
+        # `dps_boss_clear_range` and is pushed by the same 1 Hz drain. The
+        # default matches the setting's default, so a tracker that has never
+        # seen a settings push still behaves.
+        self.boss_clear_range: float = 30.0
+        # FREE TEST: a dummy run that leaves no record. Not archived to Fight
+        # History, not written to the day sheet, and - the part that actually
+        # matters - not promoted to the personal best or queued as the next
+        # run's reference, so a lucky practice run cannot quietly become the
+        # number every later comparison is measured against.
+        self.dummy_free: bool = False
+        # Distance from the player to the boss the scan picked, and 0.0 when
+        # no live boss is in the snapshot. Written by the scan beside
+        # `dummy_near` so the close-out rule never has to walk the scene again.
+        self.boss_near_d: float = 0.0
+        # The test's target length in seconds (0 = free-running), mirroring the
+        # `dps_dummy_target` setting and pushed by the same 1 Hz drain. A dummy
+        # fight is the one encounter nothing in the scene ever concludes, so a
+        # measured test needs an end it can reach on its own — otherwise every
+        # run is a different length and the DPS figures are not comparable. See
+        # `dummy_clock` / `_dummy_target_due` in core/dps_dummy.py; the default
+        # matches the setting's, so a tracker that never sees a settings push
+        # still behaves.
+        self.dummy_target_s: float = 60.0
+        # How long a RUNNING test may go with no hit before the tracker ends it
+        # itself and re-arms, in seconds (0 = off), mirroring `dps_dummy_rearm`
+        # and pushed by the same drain. A dummy keeps the client "in combat" at
+        # any range inside its yard, so without this a test ran until the player
+        # walked ~30 m out. See core/dps_dummy.py, `_track_dummy_target`.
+        self.dummy_rearm_s: float = 5.0
+        # Incoming damage (as a % of the test's own) above which a run is
+        # flagged as not a clean measurement, mirroring the
+        # `dps_dummy_taken_pct` setting the 1 Hz drain pushes. The default
+        # matches the setting's, so a tracker that never sees a settings push
+        # still behaves — see DUMMY_TAKEN_WARN_PCT in core/dps_dummy.py.
+        self.dummy_taken_limit_pct: float = 5.0
+        # Latched when a test ends BECAUSE it spent its target length, and
+        # cleared by the next engagement (and by reset). The finished session's
+        # own duration is stamped from its last event, so it can read a few
+        # hundredths under the target that ended it — see DummyClock.reached.
+        self.dummy_target_reached: bool = False
+        # The dummy a FINISHED test belongs to, plus the two facts a later hit
+        # needs to start the next one (see dps_dummy._watch_dummy_reengage):
+        # when the run ended, and whether the player ended it BY HAND (Stop
+        # Test — never auto-re-armed, only Start Test undoes that one).
+        self._dummy_finished_addr: int = 0
+        self._dummy_finished_at: float = 0.0
+        self._dummy_stopped_by_hand: bool = False
+        # Set when a dummy test ends ITSELF (a lull, or the dummy leaving the
+        # radius) rather than by the player's Stop: the finished run's board is
+        # then handed back to the open-world view instead of holding it
+        # (core/dps_dummy.py, `_release_dummy_board`).
+        self._dummy_board_released: bool = False
+        # A finished dummy test holds the client's own IN COMBAT down until the
+        # game drops the flag or a real swing lands (see `suppress_game_combat`):
+        # a training yard keeps isInCombat set at any range inside it.
+        self._dummy_combat_suppressed: bool = False
+        # When the last scan first stopped seeing a dummy inside that radius
+        # (monotonic, 0 = a dummy is in range right now). The grace is what ends
+        # an abandoned test — see dps_dummy._track_dummy_target.
+        self._dummy_missing_at: float = 0.0
+        # The remembered test the live one is measured against, and the finished
+        # test waiting to be written to disk. Both live here (not in the
+        # session) so a new test compares against the PREVIOUS one instead of
+        # against its own first second. The settings side is carried by the 1 Hz
+        # drain — see core/dps_dummy.py's baseline section.
+        self.dummy_baseline: dict | None = None
+        self.dummy_baseline_pending: dict | None = None
+        # The profile's best-ever dummy test, and the new record waiting to be
+        # written. Both follow the baseline's pattern (core owns the rule, the
+        # 1 Hz drain carries the value) but with the opposite lifetime: the
+        # reference is replaced by every run, this is only ever beaten — see
+        # `capture_dummy_reference` in core/dps_dummy.py.
+        self.dummy_best: dict | None = None
+        self.dummy_best_pending: dict | None = None
 
-        # Hero-HP damage-taken FALLBACK: diffed only during reader lulls, never mixed with authoritative events.
-        self._hero_hp: dict[int, float] = {}
-        self._foe_hp: dict[int, tuple[float, str]] = {}   # addr -> (last_hp, unit_id)
+        # Foe max-HP snapshots for the real-event path (target_max on rows).
+        # Cleared at fight/mode boundaries (reset_foe_max_hp): a recycled foe
+        # addr must not inherit the previous occupant's max.
         self._foe_max_hp: dict[int, float] = {}
-        self._incoming_tick: set[int] = set()
+        # Non-blocking guard serializing update() across the drain worker and
+        # the overlay's timer thread (see update()).
+        self._update_lock = threading.Lock()
+        self._death_prev_hp: dict[int, float] = {}
+        # Wipe marker: monotonic timestamp of the last LOCAL death, set by
+        # on_local_death BEFORE any early return, and deliberately never
+        # cleared by reset() (which on_local_death itself calls). The speedrun
+        # overlay baselines this at run start: an advance means the player
+        # died mid-run. A direct HP poll can't do this job — on death the
+        # hero's attributes object can go unreadable (None reads forever),
+        # which is exactly how a wipe used to slip past the timer.
+        self.last_local_death_m: float = 0.0
+        # After a wipe, suppress stale boss/bridge events until the game has
+        # reported a live respawn outside combat. Otherwise the corpse and the
+        # carried-over combat flag immediately re-engage the same boss and the
+        # HUD timer starts running again after reset().
+        self._death_rearm_wait: bool = False
+        self._pa_absent_since: float = 0.0   # monotonic start of the current
+                                             # local-hero absence streak (0 = present)
+        self._pa_last_alive_hp: float = 0.0  # last seen-alive HP (the vanish
+                                             # edge's own baseline — the HP
+                                             # watcher below overwrites its
+                                             # prev map every tick, so vanish
+                                             # keeps a private one)
         self._last_events_ts: float = 0.0
-        self.hp_est_lull_s: float = 3.0
-        self.hp_est_allowed: bool = False    # user toggle: HP-diff fallback on/off (off by default)
-        self._hp_diff_enabled: bool = True   # set False when real events are flowing
+        # Wall time of the last LOGGED capture failure, keyed by operation.
+        # The drain runs every tick, so a broken reader must not write a log
+        # line per tick (see DpsTrackerTick._log_capture_failure).
+        self._capture_fail_at: dict[str, float] = {}
+        self.auto_reset_zone: bool = True    # user toggle: auto-reset meter on rift/dungeon entry
 
         # Character change detection state
         self._last_local_hero_addr: int | None = None
@@ -269,117 +428,132 @@ class DpsTracker:
         m = self.model
         return getattr(m, "damage", None) if m is not None else None
 
-    @property
-    def session(self) -> CombatSession:
-        if self.segment_view == "boss":
+    def session_for(self, segment: str = "auto") -> CombatSession:
+        """The session a display surface should show for ``segment``.
+
+        Segment selection belongs to the CONSUMER, not to the tracker: the
+        Combat & DPS page's segment picker and the Top DPS overlay's own view
+        must not move each other's numbers. The page therefore asks for its
+        segment through this method instead of writing ``segment_view``.
+
+        ``segment_view`` stays the tracker's shared default (what the overlay
+        shows): "auto" picks the fight that is actually running.
+        """
+        if segment == "boss":
             return self.boss_session
-        elif self.segment_view == "boss_adds":
+        if segment == "boss_adds":
             return self.boss_adds_session
-        elif self.segment_view == "trash":
+        if segment == "trash":
             return self.trash_session
-        elif self.segment_view == "dummy":
+        if segment == "dummy":
             return self.dummy_session
-        elif self.segment_view == "overall":
+        if segment == "overall":
             return self.overall_session
 
-        if self.in_dummy_fight or self.dummy_session.group_damage > 0:
+        # "auto" - and anything unrecognised, including the page's
+        # "past_fights" (which is a list view, not a segment).
+        # Boss must be checked BEFORE dummy: stale dummy_session.group_damage
+        # from a previous fight would shadow the live boss otherwise.
+        if self.in_boss_fight:
+            # The fight is live: show the boss board — unless every hit so
+            # far landed on adds. A latched boss flag with an empty boss
+            # session (trash wave before the pull) must not blank BOTH
+            # surfaces; live 2026-09-19 dungeon run archived 6341 damage
+            # under Boss Adds while the meter pinned the empty boss view
+            # and Top DPS + the Combat page showed nothing until a reset.
+            if self.boss_session.group_damage > 0:
+                return self.boss_session
+            if self.boss_adds_session.group_damage > 0:
+                return self.boss_adds_session
+            return self.boss_session
+        if self.dummy_owns_board():
             return self.dummy_session
-        if self.in_boss_fight or self.boss_session.group_damage > 0:
+        if self.boss_session.group_damage > 0:
             return self.boss_session
         if self.trash_session.group_damage > 0:
             return self.trash_session
         return self.overall_session
 
-    def active_session(self) -> CombatSession:
-        """Convenience method returning the active combat session."""
-        return self.session
+    @property
+    def session(self) -> CombatSession:
+        """The shared default view. Consumers with their own picker use
+        :meth:`session_for` so they can't retarget this one."""
+        return self.session_for(self.segment_view)
 
-    def archive_current_encounter(self, reason: str = "Encounter Finished"):
-        """Archives the current combat session(s) into the Fight History."""
-        sessions: list[CombatSession] = []
-        if self.in_dummy_fight or self.dummy_session.group_damage > 0:
-            sessions.append(self.dummy_session)
-        elif self.in_boss_fight or self.boss_session.group_damage > 0:
-            sessions.append(self.boss_session)
-            # Adds hit DURING the boss fight ride along as their own segment
-            if self.boss_adds_session.group_damage > 0:
-                sessions.append(self.boss_adds_session)
-        elif self.trash_session.group_damage > 0:
-            sessions.append(self.trash_session)
-        for sess in sessions:
-            if sess and sess.group_damage > 0:
-                archived = copy.deepcopy(sess)
-                archived.pause()
-                archived.name = f"{sess.name} ({reason})" if reason else sess.name
-                # Avoid duplicate archive of identical timestamp
-                if not self.history or self.history[-1].start_time != archived.start_time:
-                    self.history.append(archived)
-                    # Keep up to 25 past fights
-                    if len(self.history) > 25:
-                        self.history.pop(0)
-                    self._persist_history()
 
     # --- fight-history persistence (opt-in) -------------------------------#
+    def archive_current_encounter(self, reason: str = "Encounter Finished",
+                                     boss_name: str = ""):
+        return self._history_component.archive_current_encounter(reason, boss_name)
+
     def set_history_path(self, path: str | Path | None) -> None:
-        """Enable on-disk fight history at one explicit path (tests/tools)."""
-        self._history_path = Path(path) if path else None
-        self._history_dir = None
-        if self._history_path is not None:
-            try:
-                self.load_history()
-            except Exception:
-                pass
+        return self._history_component.set_path(path)
 
     def set_history_dir(self, path: str | Path | None) -> None:
-        """Enable per-profile fight history under a directory (off by default)."""
-        self._history_path = None
-        self._history_dir = Path(path) if path else None
-        self._active_profile = None
-        if self._history_dir is not None:
-            try:
-                self.load_history()
-            except Exception:
-                pass
-
-    def _resolve_history_file(self) -> Path | None:
-        """Current on-disk file (None when persistence is disabled)."""
-        if self._history_path is not None:
-            return self._history_path
-        if self._history_dir is None:
-            return None
-        prof = self._active_profile
-        if prof:
-            return self._history_dir / f"dps_history_{_slug_profile(prof)}.json"
-        return self._history_dir / "dps_history.json"
-
-    def _persist_history(self) -> None:
-        """Write archived fights to the current file (no-op unless enabled)."""
-        path = self._resolve_history_file()
-        if not path:
-            return
-        try:
-            atomic_write_json(path, {"history": [_session_to_dict(s)
-                                                 for s in self.history]})
-        except OSError:
-            pass
+        return self._history_component.set_dir(path)
 
     def load_history(self) -> None:
-        """Read archived fights from the current profile's file."""
-        path = self._resolve_history_file()
-        if not path or not path.exists():
-            return
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        loaded = []
-        for d in (data.get("history") or []):
-            try:
-                loaded.append(_session_from_dict(d))
-            except Exception:
-                continue
-        if loaded:
-            self.history = loaded[-25:]   # still capped at 25 past fights
+        return self._history_component.load()
+
+
+
+
+    # --- day/kind fight-history files ------------------------------------#
+
+
+
+
+
+
+    # History implementation lives in DpsTrackerHistory. These compatibility
+    # names intentionally remain on the facade for existing callers.
+
+
+
+    def _resolve_history_file(self) -> Path | None:
+        return self._history_component.resolve_file()
+
+
+
+    def _persist_history(self) -> None:
+        return self._history_component.persist()
+
+    def prune_history_older_than(self, days: float,
+                                 directory=None) -> dict:
+        """Delete archived fights older than `days` from the log dir.
+
+        The user-triggered "Clear Old Logs" (Settings > DPS keeps the window in
+        `dps_log_keep_days`, 0 = keep everything). Lives here so the UI has one
+        call and the rule stays with the layout it deletes.
+        """
+        return self._history_component.prune_older_than(days, directory)
+
+    def _history_load(self) -> None:
+        return self._history_component.load()
+
+    def on_local_death(self, name: str = "You") -> None:
+        return self.lifecycle.on_local_death(name)
+
+    def _watch_hero_deaths(self, pa, heroes, hero_hp_now):
+        return self.lifecycle.watch_hero_deaths(pa, heroes, hero_hp_now)
+
+    def _watch_local_vanish(self, pa, hero_hp_now, in_instance_now, now_wall):
+        return self.lifecycle.watch_local_vanish(pa, hero_hp_now, in_instance_now, now_wall)
+
+    def _end_boss_fight(self, reason: str):
+        return self.lifecycle.end_boss_fight(reason)
+
+    def _end_dummy_fight(self, reason: str):
+        return self.lifecycle.end_dummy_fight(reason)
+
+    def _fold_party_row(self, old_name: str, owner_name: str, pet_skills: bool = False):
+        return self.attribution._fold_party_row(old_name, owner_name, pet_skills)
+
+    def _map_pet_source(self, src, pa, heroes, now):
+        return self.attribution._map_pet_source(src, pa, heroes, now)
+
+    def _own_proc_source(self, src, skill_raw, pa):
+        return self.attribution._own_proc_source(src, skill_raw, pa)
 
     def reset(self, reason: str = "Manual Reset"):
         # Archive before wipe if there was data
@@ -390,16 +564,40 @@ class DpsTracker:
         self.trash_session.reset()
         self.boss_session.reset()
         self.boss_adds_session.reset()
+        # A test the player Reset away from was still a test: keep it as the next
+        # one's reference, the same way Stop Test does. Captured before the wipe
+        # below, and the drain writes it (core/dps_dummy.py owns the rule).
+        if self.in_dummy_fight and self.dummy_session.group_damage > 0.0:
+            self.capture_dummy_reference()
         self.dummy_session.reset()
         self.in_boss_fight = False
         self.in_dummy_fight = False
+        # A fresh meter is an armed meter: Reset means "start over", so a test
+        # stopped with the meter's Stop Test button starts again here rather than
+        # leaving the tracker permanently deaf to the dummy in front of it
+        # (core/dps_dummy.py owns the latch and its rules).
+        self.dummy_test_armed = True
         self._hero_name_cache.clear()
         self._hero_pointers.clear()
         self._foe_names.clear()
         self._foe_raw_ids.clear()
+        self.dummy_near = None
+        self.dummy_cluster = []
+        self._dummy_diag_addrs = set()
+        self._dummy_diag_cluster_key = None
+        self._dummy_missing_at = 0.0
+        self.dummy_target_reached = False      # reset clears the finished run's latch
+        self._dummy_finished_addr = 0
+        self._dummy_finished_at = 0.0
+        self._dummy_stopped_by_hand = False
+        self._dummy_board_released = False
+        self._dummy_combat_suppressed = False
         self._boss_kill_pending = 0.0
         self._boss_last_seen = 0.0
         self._boss_missing_at = 0.0
+        self._ended_boss_addr = None
+        self._ended_boss_deadline = 0.0
+        self._declared_boss = None
         self.combat_state = None
         self._combat_id = None
         self._combat_was_in = None
@@ -411,87 +609,179 @@ class DpsTracker:
         self._pet_last_seen.clear()
         self._owned_proc_sources.clear()
         self._fallback_rows.clear()
+        self._proxy_unresolved_logged.clear()
         self._pet_probe_at.clear()
         self._party_retry_at.clear()
         self._roster_ts = 0.0    # re-seed the st.Group roster on the next tick
         self._last_roster_key = None   # ...and log the new group fresh
         self.last_roster = None
         self._hero_classes.clear()
-        self._hero_hp.clear()
-        self._foe_hp.clear()
         self._foe_max_hp.clear()
-        self._incoming_tick.clear()
+        self._death_prev_hp = {}
+        self._pa_absent_since = 0.0
+        self._pa_last_alive_hp = 0.0
+        self._ow_in_combat_prev = None
         self._last_events_ts = 0.0
+        self.last_hero_status = {}
 
-    def reset_hp_baselines(self, reason: str = "capture mode changed") -> None:
-        """Drop cached foe/hero HP snapshots so HP-diff re-baselines cleanly.
+    def reset_foe_max_hp(self, reason: str = "fight boundary") -> None:
+        """Drop cached foe max-HP snapshots (fight/mode boundary).
 
-        Called when the DPS capture mode switches (e.g. proxy -> memory) and
-        when a combat encounter ends (boss defeated, trash lull, boss engage):
-        baselines recorded under the old source/fight are stale for the next
-        fight, so without this the first HP drop would look like a respawn
-        jump and get skipped (or damage from before the switch would be
-        double-counted).
+        Called when an encounter ends (boss defeated, trash lull, boss/dummy
+        engage), on capture-mode switch and on attach: snapshots recorded
+        under the old fight/source are stale for the next one.
         """
-        self._foe_hp.clear()
         self._foe_max_hp.clear()
-        self._hero_hp.clear()
-        self._incoming_tick.clear()
         if callable(self.log_line):
             try:
-                self.log_line(f"Top DPS: HP-diff baselines reset ({reason})")
+                self.log_line(f"Top DPS: foe max-HP reset ({reason})")
             except Exception:
                 pass
 
-    def set_hp_est_allowed(self, allowed: bool) -> None:
-        """Live-toggle the HP-diff fallback so both surfaces reflect it now.
+    def _reader_rehunt(self, why: str) -> None:
+        """Ask the capture source to re-derive its scan cluster immediately.
 
-        Re-baselines the HP snapshots either way; when turning the fallback
-        OFF it also strips already-recorded ``(HP)`` estimate rows from the
-        live sessions, so the Top DPS meter and the Combat page never keep
-        showing estimated damage the user just switched off. Archived fight
-        history is untouched. No-op when the value doesn't change.
+        Zone changes relocate the display pool; without the forced re-hunt the
+        memory reader can spend up to its wide-sweep rate gate (120 s) polling
+        pages that no longer hold displays. No-op for bridge modes and fakes
+        that don't implement it.
         """
-        allowed = bool(allowed)
-        if allowed == self.hp_est_allowed:
+        src = self.source
+        if src is None:
             return
-        self.hp_est_allowed = allowed
-        self.reset_hp_baselines(reason="HP-diff toggle")
-        if not allowed:
-            self.clear_hp_estimates()
-
-    def clear_hp_estimates(self) -> None:
-        """Strip recorded ``HP diff (est.)`` rows from the LIVE sessions.
-
-        Unwinds the estimate skill's damage/hit contributions from every
-        player parse and drops its entries from the recent-events feed.
-        The per-second burst timeline keeps its recorded shape (estimates
-        were folded into the same buckets as real damage, so they cannot
-        be separated after the fact); rows, totals and chips are corrected.
-        Archived history (and the on-disk files) keep what they recorded.
-        """
-        for sess in (self.overall_session, self.trash_session,
-                     self.boss_session, self.boss_adds_session):
-            for p in sess.players.values():
-                sp = p.skills.pop("(HP)", None)
-                if sp is None:
-                    continue
-                p.total_damage = max(0.0, p.total_damage - sp.damage)
-                p.hit_count = max(0, p.hit_count - sp.hit_count)
-            kept = [h for h in sess.hits if h.skill_id != "(HP)"]
-            if len(kept) != len(sess.hits):
-                sess.hits.clear()
-                sess.hits.extend(kept)
+        fn = getattr(src, "force_wide_rehunt", None)
+        if callable(fn):
+            try:
+                fn(why)
+            except Exception:
+                pass
+        try:
+            src.recalibrate()
+        except Exception:
+            pass
 
     # --- name resolution --------------------------------------------------#
+    def _match_me(self, name: str, pa: int) -> str | None:
+        """Resolved ``X (You)`` when `name` is the local hero's own name.
+
+        The bridge resolves real caster names but its isMe record can be
+        stale (player offsets drift), so your own hits arrive flagged
+        is_me=False under your bare name — and the solo filter then hides
+        the whole parse. Names are unique per server, so an exact match
+        (with or without the " (You)" suffix) is unambiguously you.
+        """
+        if not name or not pa:
+            return None
+        try:
+            me = self._resolve_hero_name(pa, True)
+        except Exception:
+            return None
+        if not me:
+            return None
+        if same_player_name(name, me):
+            return me
+        return None
+
+    def _name_is_known_other(self, name: str, pa: int) -> bool:
+        """True when `name` is a player this tracker has POSITIVELY
+        identified as somebody other than the local player.
+
+        The evidence is whatever the companion already read off the game: the
+        live/stale ``st.Group`` roster, every hero a real name was put on
+        (``_hero_pointers`` / ``_hero_name_cache``), and any row already
+        recorded under that name that is not a "me" row. Deliberately never a
+        guess: an unknown or placeholder name answers False, so callers can
+        treat True as proof and keep the old behaviour everywhere else."""
+        bare = (name or "").strip()
+        if not bare or bare in _GENERIC_PLAYER_LABELS or bare.startswith("Party_"):
+            return False
+        if not pa:
+            return False
+        try:
+            if self._match_me(bare, pa) is not None:
+                return False          # that IS us (any spelling)
+        except Exception:
+            return False
+        roster = None
+        try:
+            roster = _read_roster(self.model)
+        except Exception:
+            roster = None
+        if roster is None:
+            # group_roster() answers None while its rate-limited live decode
+            # refreshes; _seed_group_roster cached the last real one.
+            roster = getattr(self, "last_roster", None)
+        for mem in list(getattr(roster, "members", []) or []):
+            if getattr(mem, "is_me", False):
+                continue
+            if same_player_name(getattr(mem, "name", "") or "", bare):
+                return True
+        for entry in self._hero_pointers.values():
+            if not entry:
+                continue
+            n, me = entry[0], entry[1]
+            if me or not n or str(n).startswith("Party_"):
+                continue
+            if same_player_name(n, bare):
+                return True
+        for n in self._hero_name_cache.values():
+            if n and not str(n).startswith("Party_") and same_player_name(n, bare):
+                return True
+        for sess in (self.overall_session, self.trash_session, self.boss_session,
+                     self.boss_adds_session, self.dummy_session):
+            try:
+                row = (getattr(sess, "players", None) or {}).get(bare)
+            except Exception:
+                row = None
+            if row is not None and not getattr(row, "is_me", False):
+                return True
+        return False
+
+    def _flag_loses_to_a_known_ally(self, ev, raw_caster: str, pa: int) -> bool:
+        """True when an event's `me` flag must not decide the caster: the wire
+        carries the real name of a player we know is NOT us.
+
+        The bridge answers "is this caster the local player?" from one byte it
+        reads off a pointer chain, and that record has drifted before -- the
+        night it did, the injector flagged EVERY hero as isMe and the meter,
+        the page, the rail and the roster all agreed on the same stranger
+        (`dps_data.own_row`). A character name carries no such risk: names are
+        unique per server and the party is known from the st.Group roster, so
+        a name identified as another player is stronger evidence than the
+        byte. (Live 2026-10-01, a rift party: the meter showed every pull as
+        the local row alone; the archive that stays behind holds the other
+        shape of the same leak -- `Sirux is_me=True` beside `Kohan (You)`.)
+
+        Never fires for your own name in any spelling, and never for a name we
+        cannot place: an unflagged stranger stays the flag's to decide."""
+        if not getattr(ev, "is_me", False):
+            return False
+        return self._name_is_known_other(raw_caster, pa)
+
     def _resolve_hero_name(self, hero_addr: int, is_me: bool) -> str:
         if is_me:
             try:
-                name = self.model.player_name(hero_addr)
+                name = str(self.model.player_name(hero_addr) or "").strip()
                 if name:
-                    return f"{name} (You)"
+                    return (name if same_player_name(name, "You")
+                            else f"{name} (You)")
             except Exception:
                 pass
+            # The live name read came back empty for this tick. Returning
+            # the bare "You" here minted a SECOND local row whenever the
+            # pointer read flaked - the scan registers the row it is given
+            # (`_scan_heroes`), so a flaky read mid-run left "Me (You)" and
+            # "You" both flagged `is_me`. `own_row` picks whichever was
+            # inserted first, so the player's own hits kept landing on the
+            # row the meter does NOT highlight while the named party kept
+            # ticking (live 2026-10-03, a rift's trash pull: "my dmg stopped
+            # being recorded, every other player was still working"). Reuse
+            # the last name the read DID succeed with - the same one the
+            # scene scan already registered the row under.
+            last = getattr(self, "_last_local_hero_name", None)
+            if last:
+                return (last if same_player_name(last, "You")
+                        else f"{last} (You)")
             return "You"
 
         cached = self._hero_name_cache.get(hero_addr)
@@ -518,19 +808,191 @@ class DpsTracker:
         self._hero_name_cache[hero_addr] = name
         return name
 
+    def _is_resolved_player(self, addr: int) -> bool:
+        """True when `addr` already maps to a real (non-placeholder) name.
+
+        Used to keep the owned-proc re-credit off a source we have positively
+        identified as a player: a placeholder (``Party_XXXX``) means
+        unidentified, a real name means the source is not ours to claim. Scene
+        heroes land in `_hero_pointers` on every scene scan, so a scanned ally
+        is covered here.
+        """
+        if not addr:
+            return False
+        pointers = self._hero_pointers.get(addr)
+        if pointers and pointers[0] and not str(pointers[0]).startswith("Party_"):
+            return True
+        cached = self._hero_name_cache.get(addr)
+        return bool(cached) and not str(cached).startswith("Party_")
+
+    def _no_known_rivals(self) -> bool:
+        """No real (non-Party_) player row has ever resolved this session."""
+        for _addr, (n, me) in self._hero_pointers.items():
+            if me or not n or n.startswith("Party_"):
+                continue
+            return False
+        return True
+
+    def _no_other_player(self, pa: int,
+                         heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]]
+                         ) -> bool:
+        """True when the evidence says no OTHER real player is involved, so an
+        unresolvable source can only be the local player's own proc/status
+        damage (the floaty's serverSource is the proc object, not a hero).
+
+        Deliberately NOT ``solo_status()``: that hardwires False inside a
+        dungeon/rift (the "always show everyone" DISPLAY rule) without ever
+        reading the roster, which left the mint guard dead in instances —
+        live 2026-09-18, solo against King Ratsar, the user's own hits minted
+        Party_3258/9280/A0B8 rows into the fight archive. Two solo evidences:
+
+        - the game DECODED an empty roster (ungrouped, anywhere), or
+        - inside an instance with an unreadable roster: the scene scan is
+          instance-wide there, so no other hero on scan + no real player ever
+          resolved means nobody else is in this dungeon. Off-instance an
+          unreadable roster stays False — an out-of-range ally may exist and
+          must keep a fold-able Party_ row (the roster-shredding hazard).
+
+        The scene scan (someone else's hero on scene now) and the cumulative
+        check (a real player name resolved earlier) are backstops in every
+        branch: a genuine party member always leaves one of those behind; a
+        proc object leaves none."""
+        m = self.model
+        roster = _read_roster(m) if m is not None else None
+        # group_roster() can briefly return None while its rate-limited live
+        # read refreshes, even though _seed_group_roster already recorded the
+        # authoritative solo snapshot for this tick/session.
+        if roster is None:
+            roster = getattr(self, "last_roster", None)
+        if roster is not None:
+            members = list(getattr(roster, "members", []) or [])
+            if [mm for mm in members if not getattr(mm, "is_me", False)]:
+                return False
+            # An explicitly decoded empty st.Group is authoritative. Scene
+            # scans can contain non-player Hero-like objects and stale cached
+            # pointers; treating those as party evidence is what remints
+            # Party_XXXX rows for a solo player's proc/status damage.
+            return True
+        # A scene Hero is rival evidence only after it resolves to a real
+        # player. Placeholder Hero-like objects must not turn a proxy's generic
+        # caster into a fabricated Party_XXXX row for a solo player.
+        if pa and any(
+                a != pa and n and not str(n).startswith("Party_")
+                for a, (n, me, *_rest) in heroes.items() if not me):
+            return False
+        if not _in_instance(m):
+            return False
+        return self._no_known_rivals()
+
+    def _credit_nameless_self(self, pa: int, flagged_me: bool) -> str | None:
+        """The local row's name for a hit the bridge flagged as ours but could
+        not name — or None when the flag is all there is to go on and the
+        evidence contradicts it.
+
+        The asymmetry behind live 2026-10-03 (a rift's trash pull: "my dmg
+        stopped being recorded, every other player was still working"): an
+        ally's hit arrives NAMED, so it resolves by name no matter what else
+        is broken, while the local player's own hits arrive flagged `is_me`
+        with the bridge's placeholder name and often no source object either.
+        That path ran into `_resolve_caster`'s no-address rule, which refuses
+        to credit the local row unless the scene proves you are alone, and
+        then into the drop — so your parse vanished while the party's did not.
+
+        `_resolve_caster` must keep refusing that case for OTHER players: the
+        2026-10-01 leak had the injector flag every hero as isMe and folding
+        on the flag alone put the whole party's parse on the local row. That
+        leak is excluded here by construction, twice over: the caller clears
+        `flagged_me` when the wire name is a known rival
+        (`_flag_loses_to_a_known_ally`), and a named caster never reaches
+        this helper at all. What is left is a hit nothing on the wire
+        contradicts. Dropping it loses real damage and explains nothing;
+        crediting the local row is the only answer that can be right.
+        """
+        if not flagged_me:
+            return None
+        try:
+            name = self._resolve_hero_name(pa, True) if pa else ""
+        except Exception:
+            name = ""
+        if name and name != "You":
+            return name
+        # The live name read came back empty for this tick - the same flaky
+        # pointer read that made the event nameless in the first place. The
+        # scene scan names the local row from the last name it DID read
+        # (`_last_local_hero_name`), so falling back to the bare "You" here
+        # mints a SECOND `is_me` row beside the scan's real one. Every surface
+        # that answers "which row is mine" (`dps_data.own_row`) then picks
+        # whichever row was inserted first, and the hit the player just landed
+        # vanishes from the row the meter highlights while the named party
+        # keeps ticking - the exact "my damage stopped being recorded" shape.
+        # Reuse the scan's own name so there is only ever one local row.
+        last = getattr(self, "_last_local_hero_name", None)
+        if last:
+            return last if same_player_name(last, "You") else f"{last} (You)"
+        return name or "You"
+
+    def _roster_decoded_solo(self) -> bool:
+        """True when the game DECODED a roster and it holds nobody but you.
+
+        Different from ``_no_other_player``, which also answers True for the
+        weaker "unreadable roster, but nothing here proves anyone else exists"
+        case. This is the strong form only: a roster object actually arrived
+        and it named no other member, which is the game's own statement that
+        you are ungrouped.
+
+        The distinction is load-bearing in an INSTANCE. A rift's scan is
+        instance-wide, so other players' heroes resolve to real names and land
+        in ``_hero_pointers`` — they are in the same rift, not in your group.
+        Treating those strangers as "a resolved ally" declined solo credit for
+        the player's own nameless hits, which is the live 2026-10-05 rift
+        report (solo, ``[group] 1 member: Bee (you)``, while the bridge log
+        named the other rift players): your own procs went to the drop and the
+        named strangers kept resolving — "my damage stopped recording, everyone
+        else is fine". A decoded solo roster outranks the wide scan; the wide
+        scan only outranks the UNREADABLE case (see `_resolve_caster`).
+        """
+        roster = _read_roster(self.model)
+        if roster is None:
+            roster = getattr(self, "last_roster", None)
+        if roster is None:
+            return False
+        members = list(getattr(roster, "members", []) or [])
+        return not any(not getattr(mem, "is_me", False) for mem in members)
+
     def _resolve_caster(self, src_addr: int, pa: int,
                         heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]]
                         ) -> tuple[str | None, bool]:
         """(caster_name, is_me) for an event's authoritative source object."""
         if not src_addr:
-            # Solo-credit guard: only with no other known hero anywhere (allies may be out of scan range).
-            if len(heroes) == 1 and pa in heroes:
+            # Solo-credit guard: resolve the whole scene, not merely its length.
+            # A loading/attach tick can be empty, while a live instance can also
+            # contain unresolved Hero-like objects beside the player. Neither is
+            # a real rival; a resolved ally still declines solo attribution.
+            _alone = (len(heroes) == 1 and pa in heroes)
+            _solo_scene = bool(pa and self._no_other_player(pa, heroes))
+            if _alone or _solo_scene:
+                # The ``known_others`` backstop exists for an UNREADABLE roster,
+                # where an off-scene ally may exist and must keep a fold-able
+                # Party_ row. It must NOT override a roster that decoded as
+                # solo: an instance-wide scan resolves other players' heroes by
+                # name (they are in the rift, not in your group), and letting
+                # those strangers decline solo credit dropped the player's own
+                # nameless hits while the named strangers kept resolving (live
+                # 2026-10-05). A decoded solo roster is the game's own statement
+                # about group membership, so it wins here.
                 known_others = [
                     n for a, (n, _me) in self._hero_pointers.items()
                     if a != pa and n and not n.startswith("Party_")
                 ]
-                if not known_others:
-                    return heroes[pa][0], True
+                if not known_others or self._roster_decoded_solo():
+                    if pa in heroes:
+                        return heroes[pa][0], True
+                    try:
+                        me_name = self._resolve_hero_name(pa, True)
+                    except Exception:
+                        me_name = ""
+                    if me_name:
+                        return me_name, True
             return None, False
 
         # 1. Direct hero lookup
@@ -572,11 +1034,119 @@ class DpsTracker:
             pass
 
         # 6. Fallback party tag (remembered so a later fold can find the row)
+        # — but NEVER when no other real player is involved: an unresolvable
+        # source is the local player's own proc/status damage (shield orbs,
+        # weapon bleeds — the floaty's serverSource is the proc object, not
+        # the hero), so minting `Party_XXXX` fabricated party members out of
+        # the user's own hits (live 2026-09-16: solo at a dummy, overlay
+        # showed Party_77F8 + Party_8568 doing the user's DPS; again
+        # 2026-09-18 inside King Ratsar as Party_3258/9280/A0B8 — the old
+        # `solo_status() is True` guard was dead IN INSTANCES because
+        # solo_status short-circuits False there before reading the roster).
+        # Same rationale as the src == 0 guard above: nobody else in the
+        # fight, the hit is yours.
+        if self._no_other_player(pa, heroes):
+            me_name = None
+            if pa:
+                try:
+                    me_name = self._resolve_hero_name(pa, True)
+                except Exception:
+                    me_name = None
+            if me_name:
+                return me_name, True
         fallback_name = cached or f"Party_{src_addr & 0xFFFF:04X}"
         self._hero_name_cache[src_addr] = fallback_name
         self._hero_pointers[src_addr] = (fallback_name, False)
         self._fallback_rows[src_addr] = fallback_name
         return fallback_name, False
+
+    def _attribute_caster(self, ev, src: int, pa: int,
+                          heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]]):
+        """Resolve who cast `ev`, and log whatever the proxy could not place.
+
+        The bridge's own flag, the generic-name guard, the address/name
+        resolution and the proxy's unresolved-caster bookkeeping all answer one
+        question - which row this event is credited to - so they live here
+        rather than in both `_events_apply_damage` and `_events_apply_heal`,
+        which rebind `self` to this tracker and differ only in how they name a
+        target the event never named.
+
+        Returns `(caster, is_me, event)`: `event` is None when the caster
+        resolved, else the `EVENT_UNRESOLVED` / `EVENT_DROPPED` sentinel the
+        caller returns unchanged (the once-per-target Activity Log line for
+        each case is emitted here).
+        """
+        raw_caster = clean_wire_name(getattr(ev, "source_name", ""))
+        # The game labels ungrouped rivals with generic names ("Player",
+        # "Hero"); never mint a row under one — fall back to address
+        # resolution (real party names, Party_XXXX that folds later, or a
+        # drop) exactly like the no-name path. "You"/"Player" flagged is_me
+        # still resolves to the local hero's real name below.
+        is_me = bool(getattr(ev, "is_me", False))
+        if is_me and self._flag_loses_to_a_known_ally(ev, raw_caster, pa):
+            # The flag and the name disagree and the name is a player we have
+            # identified as somebody else, so the name wins (`DpsTracker.
+            # _flag_loses_to_a_known_ally` has the live story). This is the
+            # shape that reads as "everyone's damage is me": the injector's
+            # isMe record leaks onto allies while the names on the wire stay
+            # correct, and folding on the flag alone puts the whole party's
+            # parse on the local row.
+            is_me = False
+        # The bridge's own flag, kept across the resolution below: that call
+        # answers (None, False) for a caster it cannot place, which would
+        # otherwise erase the one piece of evidence this event DID carry.
+        flagged_me = bool(is_me)
+        if is_me and (not raw_caster or raw_caster in _GENERIC_PLAYER_LABELS):
+            # "me" with no identity on the wire. The flag is a claim, not a
+            # name, and this used to mean "credit the local player" - true
+            # only when the evidence says nobody else is in the fight. Route
+            # it through the same path every other nameless cast takes:
+            # `_resolve_caster` credits the local row when that evidence holds
+            # (a solo player's own proc damage still lands on them) and the
+            # generic-name guard below counts a drop in the Activity Log
+            # otherwise, which is the honest answer for a caster the bridge
+            # could neither name nor place.
+            caster, is_me = self._resolve_caster(src, pa, heroes)
+        elif is_me:
+            caster = self._resolve_hero_name(pa, True) if pa else None
+            if not caster:
+                caster = raw_caster if raw_caster and raw_caster not in _GENERIC_PLAYER_LABELS else "You"
+        elif raw_caster and raw_caster not in _GENERIC_PLAYER_LABELS:
+            # Bridge names you correctly while its isMe record lies (drifting
+            # player offsets): claim your own bare name as you, or the solo
+            # filter buries your whole parse under a stranger row.
+            me_match = self._match_me(raw_caster, pa)
+            if me_match is not None:
+                caster, is_me = me_match, True
+            else:
+                caster = raw_caster
+        else:
+            caster, is_me = self._resolve_caster(src, pa, heroes)
+        if raw_caster in _GENERIC_PLAYER_LABELS or not raw_caster:
+            if caster is None:
+                # A hit the bridge flagged as OURS, with nothing on the wire to
+                # contradict it, is credited to the local row rather than
+                # dropped (live 2026-10-03: the local player's trash damage
+                # vanished while the named party kept resolving). A named rival
+                # never reaches here - `_flag_loses_to_a_known_ally` cleared the
+                # flag and the name branch above took the caster.
+                self_credit = self._credit_nameless_self(pa, flagged_me)
+                if self_credit:
+                    caster, is_me = self_credit, True
+                    self.events._warn_proxy_unresolved(
+                        ev, raw_caster, "credited to the local row")
+                else:
+                    self.events._warn_proxy_unresolved(
+                        ev, raw_caster, "event dropped")
+                    return None, False, EVENT_UNRESOLVED
+            if caster.startswith("Party_"):
+                self.events._warn_proxy_unresolved(
+                    ev, raw_caster, f"using temporary {caster}")
+            else:
+                self.events._clear_proxy_unresolved(ev, raw_caster)
+        if caster is None:
+            return None, False, EVENT_DROPPED
+        return caster, is_me, None
 
     def _hero_name(self, addr: int, pa: int,
                    heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]]
@@ -635,13 +1205,21 @@ class DpsTracker:
             me_player = m._hero_player_ptr(pa) or 0
         except Exception:
             pass
+        me_name = self._resolve_hero_name(pa, True) if pa else ""
+        party_names: list[str] = []
         for mem in roster.members:
             name = (mem.name or "").strip()
             if not name:
                 continue
-            # A roster alias must never clobber the local "X (You)".
-            if mem.hero == pa or (me_player and mem.player == me_player):
+            # The group reader's explicit local flag is authoritative. Some
+            # game builds also drift the hero/player pointers, so also match
+            # the unique character name; otherwise a stale local roster entry
+            # pre-registers bare "Name" beside the real "Name (You)" row.
+            if (mem.is_me or mem.hero == pa
+                    or (me_player and mem.player == me_player)
+                    or same_player_name(name, me_name)):
                 continue
+            party_names.append(name)
             for addr in (mem.hero, mem.player):
                 if not addr:
                     continue
@@ -680,6 +1258,20 @@ class DpsTracker:
             if cls:
                 self._hero_classes[addr] = cls
 
+        # Dungeon/rift: pre-register the whole party onto the live meter
+        # (trash + overall, 0 stats) so the overlay can auto-load every
+        # member between pulls instead of only active participants. Idle
+        # rows stay invisible in open-world/combat display because the
+        # meter's activity filter drops 0-stat players unless asked.
+        if _in_instance(m) and party_names:
+            names = list(party_names)
+            if me_name and me_name not in ("", "You") and me_name not in names:
+                names.insert(0, me_name)
+            for pname in names:
+                is_me = (pname == me_name)
+                self.trash_session.register_player(pname, is_me=is_me)
+                self.overall_session.register_player(pname, is_me=is_me)
+
     def _sync_known_classes(self) -> None:
         """Write game-known classes onto session rows (truth replaces skill-guess)."""
         if not self._hero_classes:
@@ -705,6 +1297,50 @@ class DpsTracker:
                             p_cand.hero_class = cls
 
     # --- game combat signals (auxiliary) ---------------------------------#
+    def _in_zone_settle(self) -> bool:
+        """True for a short window after a zone enter/exit.
+
+        The game keeps reporting isInCombat across a loading screen, and
+        combatStartTime can be regenerated on arrival, so neither the fight
+        clock nor the armed display may trust the combat fields until the new
+        zone settles (live 2026-09-19: the timer started the moment the user
+        zoned in).
+        """
+        if self._zone_edge_at <= 0.0:
+            return False
+        return (time.time() - self._zone_edge_at) < ZONE_ARM_SETTLE_S
+
+    def armed_fight(self) -> tuple[float, str] | None:
+        """Display clock for a fight whose first hit has NOT decoded yet.
+
+        The meter must read as running for the WHOLE fight, so the timer ticks
+        from COMBAT ENTRY rather than from the first decoded hit: with Option 3
+        the capture can still be blind for the first seconds of a pull (a blind
+        rescue is in flight), and the header then sat at 00:00.0 over a fight
+        that was already happening. Returns ``(elapsed, name)`` while the game
+        reports combat and no session owns the clock, else None.
+
+        No jump when the first hit lands: the session starts from this same
+        `_combat_wall_start_at` anchor (see CombatSession.clock_anchor), so the
+        number the timer already showed is the number it keeps.
+        """
+        if self._death_rearm_wait:
+            return None
+        if self._combat_wall_start_at <= 0.0:
+            return None
+        if self._in_zone_settle():
+            return None                 # zone-in is not a fight
+        st = self.combat_state
+        if not st or not st.get("in_combat"):
+            return None
+        if game_combat_settled(st):
+            return None         # the game stamped combat_end: it is over
+        sess = self.session
+        if sess.state in ("COMBAT", "PAUSED") or sess.group_damage > 0:
+            return None                 # a session owns the clock now
+        return max(0.0, time.time() - self._combat_wall_start_at), \
+            (sess.name or "Fight")
+
     @property
     def game_encounter_elapsed(self) -> float | None:
         """Wall seconds since combatStartTime moved (live encounter timer; None when idle)."""
@@ -746,6 +1382,22 @@ class DpsTracker:
             self._combat_wall_start_at = 0.0
         self._combat_start = start
 
+        # Hand the fight clock to the sessions. The game's combat entry is the
+        # ONLY signal that predates the first DECODED hit, so it is what keeps
+        # capture latency (a blind re-anchor, a throttled tick) out of the
+        # timer: the meter starts counting when combat starts, not when the
+        # damage finally decodes. Cleared the moment the game says combat is
+        # over, so a stale anchor can never seed a later fight.
+        anchor = self._combat_wall_start_at if in_combat else 0.0
+        if anchor > 0.0 and self._in_zone_settle():
+            # A carried-over combat window right after a zone change would
+            # backdate the first pull's clock to the zone-in moment.
+            anchor = 0.0
+        for sess in (self.overall_session, self.trash_session,
+                     self.boss_session, self.boss_adds_session,
+                     self.dummy_session):
+            sess.clock_anchor = anchor
+
         if self._combat_was_in is True and not in_combat:
             self._game_combat_end_at = now
             log.info("[combat] game declares combat over (last id=%s)",
@@ -764,1049 +1416,156 @@ class DpsTracker:
         if cid is not None:
             self._combat_id = cid
 
-    # --- event intake -----------------------------------------------------#
-    def update(self):
-        m = self.model
-        if m is None:
-            return
-
-        src = self.source
-        if src is not None:
-            try:
-                src.ensure_started()
-            except Exception:
-                pass
-
-        pa = getattr(m, "player_addr", None)
-        heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]] = {}
-        hero_hp_now: dict[int, float] = {}
-        current_foes: dict[int, tuple[float, str, bool, float, float, float]] = {}
-        boss_present = None
-        boss_present_d = math.inf   # nearest boss-candidate distance
-        dummy_present = None
-
-        if pa is None:
-            self.last_roster = None    # detached/menu: the group line goes blank
-        else:
-            # Check for character change
-            curr_name = None
-            try:
-                curr_name = m.player_name(pa)
-            except Exception:
-                curr_name = None
-
-            char_changed = False
-            if self._last_local_hero_name is not None and curr_name:
-                if curr_name != self._last_local_hero_name:
-                    char_changed = True
-            elif self._last_local_hero_addr is not None:
-                if self._hero_was_absent and pa != self._last_local_hero_addr:
-                    char_changed = True
-
-            if char_changed:
-                self.reset(f"Character Change: {curr_name or 'New Character'}")
-                if src is not None:
-                    try:
-                        new_cur, _ = src.events_after(0)
-                        self._src_cursor = new_cur
-                    except Exception:
-                        pass
-
-            self._last_local_hero_addr = pa
-            if curr_name:
-                self._last_local_hero_name = curr_name
-            self._hero_was_absent = False
-
-            # Game-authoritative combat signals (auxiliary; slow cadence).
-            self._poll_combat_state(pa)
-
-            # Per-profile history: swap to the new profile's file (reset already archived the old one).
-            if self._history_dir is not None:
-                now = time.time()
-                if now - self._profile_ts >= 2.0:
-                    self._profile_ts = now
-                    try:
-                        prof = m.player_profile()
-                    except Exception:
-                        prof = None
-                    if prof and prof != self._active_profile:
-                        self._active_profile = prof
-                        self.history = []   # old file's fights already persisted
-                        try:
-                            self.load_history()
-                        except Exception:
-                            pass
-
-            # Seed roster names so off-scene members resolve instead of minting Party_XXXX rows.
-            if time.time() - self._roster_ts >= GROUP_ROSTER_TTL_S:
-                self._roster_ts = time.time()
-                self._seed_group_roster(pa)
-
-            pxyz = m.player_xyz()
-
-            units = []
-            try:
-                units = m.units() or []
-            except Exception:
-                units = []
-
-            me_in_scene = False
-            for u in units:
-                addr = getattr(u, "addr", 0)
-                if not addr:
-                    continue
-                if not getattr(u, "is_hero", False):
-                    continue
-                is_me = (addr == pa)
-                if is_me:
-                    me_in_scene = True
-                h_name = self._resolve_hero_name(addr, is_me)
-                xyz = (getattr(u, "x", 0.0), getattr(u, "y", 0.0), getattr(u, "z", 0.0))
-                h_cls = getattr(u, "cls", "ent.Hero") or "ent.Hero"
-                u_id = getattr(u, "unit_id", "") or ""
-                heroes[addr] = (h_name, is_me, xyz, h_cls)
-                hero_hp_now[addr] = float(getattr(u, "hp", 0.0) or 0.0)
-
-                # Authoritative entity class (exact same as Entity HUD)
-                known_cls = getattr(u, "hero_class", "") or hero_cls_to_class(h_cls, u_id)
-                if known_cls:
-                    self._hero_classes[addr] = known_cls
-
-                # Dual-pointer registration: map ent.Hero and st.Player
-                self._hero_pointers[addr] = (h_name, is_me)
-                if m is not None:
-                    p_ptr = m._hero_player_ptr(addr)
-                    if p_ptr:
-                        self._hero_pointers[p_ptr] = (h_name, is_me)
-                        if known_cls:
-                            self._hero_classes[p_ptr] = known_cls
-
-                # Only pre-register the local player so the meter isn't blank;
-                # allies are registered dynamically when combat events arrive for them.
-                if is_me:
-                    me_in_scene = True
-                    self.overall_session.register_player(h_name, is_me=True, hero_class=known_cls)
-                    self.trash_session.register_player(h_name, is_me=True, hero_class=known_cls)
-                    self.boss_session.register_player(h_name, is_me=True, hero_class=known_cls)
-
-            if curr_name and not me_in_scene:
-                # Missing self entity (loads); register under the same display name so the row never duplicates.
-                me_key = self._resolve_hero_name(pa, True)
-                my_cls = self._hero_classes.get(pa, "")
-                self.overall_session.register_player(me_key, is_me=True, hero_class=my_cls)
-                self.trash_session.register_player(me_key, is_me=True, hero_class=my_cls)
-                self.boss_session.register_player(me_key, is_me=True, hero_class=my_cls)
-
-            # Pets: non-hero owner resolving to a live hero; despawned pets linger briefly for in-flight events.
-            now_pet_scan = time.time()
-            learned: list[tuple[int, int]] = []
-            for u in units:
-                addr = getattr(u, "addr", 0)
-                if not addr or getattr(u, "is_hero", False):
-                    continue
-                if not (getattr(u, "is_foe", False)
-                        and getattr(u, "is_player_owned", False)):
-                    continue
-                own = getattr(u, "owner_addr", 0)
-                own_key = own
-                if own and own not in heroes and own != pa:
-                    # Owner may be the st.Player pointer; translate to its hero entity.
-                    want = self._hero_pointers.get(own)
-                    if want:
-                        for h_addr, (h_name, is_me, *_rest) in heroes.items():
-                            if self._hero_pointers.get(h_addr) == want:
-                                own_key = h_addr
-                                break
-                if own_key in heroes or own_key == pa:
-                    if addr not in self._pet_owners:
-                        learned.append((addr, own_key))
-                    self._pet_owners[addr] = own_key
-                    self._pet_last_seen[addr] = now_pet_scan
-            # Late-learned mapping folds the uid fallback row into the owner.
-            for addr, own_key in learned:
-                party = self._fallback_rows.get(addr)
-                if not party:
-                    continue
-                if own_key == pa:
-                    owner_name = self._resolve_hero_name(pa, True)
-                elif own_key in heroes:
-                    owner_name = heroes[own_key][0]
-                else:
-                    continue
-                self._fold_party_row(party, owner_name, pet_skills=True)
-                self._fallback_rows.pop(addr, None)
-            cut = now_pet_scan - 60.0
-            for a in [a for a, ts in self._pet_last_seen.items() if ts < cut]:
-                self._pet_owners.pop(a, None)
-                self._pet_last_seen.pop(a, None)
-                self._fallback_rows.pop(a, None)
-
-            # Foes snapshot: naming/boss display/segmentation only; never diff HP into damage.
-            # The game's own activity system decides "instance" — dungeon/rift
-            # fights are zone-wide so every trash mob is tracked. (The old
-            # getattr(m, "is_dungeon") pair read attributes that never existed
-            # on the model, so the 400m cap silently stayed on in instances
-            # and trash outside it was never recorded.)
-            try:
-                in_instance = bool(m.is_in_dungeon_or_rift())
-            except Exception:
-                in_instance = False
-            effective_dist = 0.0 if in_instance else self.max_dist
-            for u in units:
-                addr = getattr(u, "addr", 0)
-                if not addr or getattr(u, "is_hero", False):
-                    continue
-
-                x, y, z = getattr(u, "x", 0.0), getattr(u, "y", 0.0), getattr(u, "z", 0.0)
-                if effective_dist > 0 and pxyz:
-                    dist = math.dist(pxyz, (x, y, z))
-                    if dist > effective_dist:
-                        continue
-
-                hp = getattr(u, "hp", 0.0) or 0.0
-                raw_id = getattr(u, "unit_id", "") or "TrainingDummy"
-                readable_name = names.unit_name(raw_id) or raw_id
-                is_dummy = udata.is_training_dummy(raw_id)
-                is_boss = (udata.is_boss(raw_id)
-                           or (raw_id.startswith("DemonSuperElite") and "FalseClone" not in raw_id)
-                           or getattr(u, "is_boss", False)
-                           or (m.dungeon_boss and raw_id == m.dungeon_boss)
-                           or "boss" in raw_id.lower()
-                           or (getattr(u, "cls", None) and "boss" in str(u.cls).lower()))
-                if is_boss and not readable_name.startswith("👑 "):
-                    readable_name = f"👑 {readable_name}"
-                if is_dummy and not readable_name.startswith("🎯 "):
-                    readable_name = f"🎯 {readable_name}"
-
-                current_foes[addr] = (hp, readable_name, is_boss, is_dummy, x, y, z)
-                self._foe_names[addr] = readable_name
-                self._foe_raw_ids[addr] = raw_id
-                if is_boss and hp > 0:
-                    # Rift/dungeon scans are instance-wide, so a second
-                    # boss-tagged entity (staged boss, clone, ...) can sit in
-                    # the same snapshot. Prefer the NEAREST one — the boss
-                    # being fought — instead of whichever unit iterates first.
-                    d_b = math.dist(pxyz, (x, y, z)) if pxyz else 0.0
-                    if boss_present is None or d_b < boss_present_d:
-                        boss_present = (addr, readable_name, hp)
-                        boss_present_d = d_b
-                if is_dummy and hp > 0 and dummy_present is None:
-                    dummy_present = (addr, readable_name, hp)
-
-            if len(self._foe_names) > 4096:
-                self._foe_names = {a: n for a, n in self._foe_names.items()
-                                   if a in current_foes}
-                self._foe_raw_ids = {a: r for a, r in self._foe_raw_ids.items()
-                                     if a in current_foes}
-
-        # --- boss engagement (scene-driven, HP only for display) ----------#
-        if boss_present and not self.in_boss_fight:
-            b_addr, b_name, b_hp = boss_present
-            if self.trash_session.group_damage > 0:
-                if self.trash_session.state == "COMBAT":
-                    self.trash_session.pause()
-                self.archive_current_encounter("Trash Mobs Cleared")
-
-            self.in_boss_fight = True
-            self.boss_session.reset()
-            self.boss_adds_session.reset()
-            self.boss_session.target_addr = b_addr
-            self.boss_session.target_name = b_name
-            self.boss_session.target_hp = b_hp
-            self.boss_session.target_max_hp = b_hp
-            self._boss_kill_pending = 0.0
-            self._boss_missing_at = 0.0
-            # Fresh engagement clears stale game-declared end signals.
-            self._game_combat_end_at = 0.0
-            # New encounter: drop HP baselines so the boss fight re-baselines.
-            self.reset_hp_baselines(reason="boss engaged")
-
-            for h_addr, (h_name, is_me, *_) in heroes.items():
-                if is_me:
-                    self.boss_session.register_player(h_name, is_me=is_me)
-
-        # --- dummy engagement (scene-driven, own group like boss) ---#
-        if dummy_present and not self.in_dummy_fight and not self.in_boss_fight:
-            d_addr, d_name, d_hp = dummy_present
-            if self.trash_session.group_damage > 0:
-                if self.trash_session.state == "COMBAT":
-                    self.trash_session.pause()
-                self.archive_current_encounter("Trash Mobs Cleared")
-
-            self.in_dummy_fight = True
-            self.dummy_session.reset()
-            self.dummy_session.target_addr = d_addr
-            self.dummy_session.target_name = d_name
-            self.dummy_session.target_hp = d_hp
-            self.dummy_session.target_max_hp = d_hp
-            self.reset_hp_baselines(reason="dummy engaged")
-            for h_addr, (h_name, is_me, *_) in heroes.items():
-                if is_me:
-                    self.dummy_session.register_player(h_name, is_me=is_me)
-
-        if self.in_dummy_fight and not self.in_boss_fight:
-            foe = current_foes.get(self.dummy_session.target_addr)
-            if foe is None:
-                for f_addr, f_info in current_foes.items():
-                    if f_info[3] and f_info[0] > 0:  # is_dummy and hp > 0
-                        self.dummy_session.target_addr = f_addr
-                        foe = f_info
-                        break
-            if foe is not None:
-                self.dummy_session.target_hp = foe[0]
-                self.dummy_session.target_max_hp = max(self.dummy_session.target_max_hp, foe[0])
-                if foe[1]:
-                    self.dummy_session.target_name = foe[1]
-
-        if self.in_boss_fight:
-            now_b = time.time()
-            foe = current_foes.get(self.boss_session.target_addr)
-            if foe is None:
-                # The pinned boss is missing from this scan. Don't hop to
-                # another boss-tagged entity on a single miss — that made the
-                # meter label alternate between rift bosses every tick.
-                # Re-target only once the pinned boss has stayed gone past
-                # BOSS_RELATCH_GRACE_S (tests can shrink it via
-                # _boss_relatch_grace_s), and then pick the NEAREST remaining
-                # boss (the one being fought / the phase-swapped respawn).
-                # A raw-id tie can't disambiguate — every rift boss shares the
-                # same raw id — so distance is the only stable signal.
-                if self._boss_missing_at <= 0.0:
-                    self._boss_missing_at = now_b
-                grace = getattr(self, "_boss_relatch_grace_s",
-                                BOSS_RELATCH_GRACE_S)
-                if now_b - self._boss_missing_at >= grace:
-                    best = None
-                    best_d = math.inf
-                    for f_addr, f_info in current_foes.items():
-                        if not (f_info[2] and f_info[0] > 0):  # is_boss, alive
-                            continue
-                        d = (math.dist(pxyz, (f_info[4], f_info[5], f_info[6]))
-                             if pxyz else 0.0)
-                        if d < best_d:
-                            best_d, best = d, (f_addr, f_info)
-                    if best is not None:
-                        b_addr, b_info = best
-                        self.boss_session.target_addr = b_addr
-                        self.boss_session.target_hp = b_info[0]
-                        self.boss_session.target_max_hp = max(
-                            self.boss_session.target_max_hp, b_info[0])
-                        self.boss_session.target_name = b_info[1] or \
-                            self.boss_session.target_name
-                        foe = b_info
-                        self._boss_missing_at = 0.0
+        # A dummy test's own end is the honest combat boundary (see
+        # `suppress_game_combat`): a training yard keeps isInCombat set at any
+        # range inside it, so the meter read IN COMBAT off a finished test.
+        # Hold that down until the game drops the flag or a new test starts.
+        if self._dummy_combat_suppressed:
+            if not in_combat or self.in_dummy_fight:
+                self._dummy_combat_suppressed = False
             else:
-                self._boss_missing_at = 0.0
-            if foe is not None:
-                self.boss_session.target_hp = foe[0]
-                self.boss_session.target_max_hp = max(self.boss_session.target_max_hp, foe[0])
-                if foe[1]:
-                    self.boss_session.target_name = foe[1]
-                self._boss_last_seen = now_b
+                self.combat_state = dict(st, in_combat=False)
 
-        # --- consume REAL damage events ----------------------------------#
-        self._incoming_tick = set()
-        now = time.time()
-        if src is not None:
+    def suppress_game_combat(self) -> None:
+        """Report combat over the moment a dummy test ends by itself.
+
+        The client keeps ``isInCombat`` set anywhere inside a training yard (the
+        dummy holds the flag until the player is ~30 m out), so the moment the
+        tracker concluded the test the meter still read IN COMBAT with the
+        finished run under it — the badge and the armed clock both. The test's
+        own end is the honest boundary, so both read out-of-combat until the
+        game itself drops the flag or a real (non-dummy) swing lands:
+        ``_poll_combat_state`` keeps it applied on every poll and
+        ``DpsTrackerEvents._events_apply_damage`` clears it.
+        """
+        self._dummy_combat_suppressed = True
+        self._combat_wall_start_at = 0.0
+        st = self.combat_state
+        if st and st.get("in_combat"):
+            self.combat_state = dict(st, in_combat=False)
+
+    # --- capture health ---------------------------------------------------#
+    def capture_line(self) -> str:
+        """One line saying whether combat events are actually arriving.
+
+        A fight can start with the capture dead - a stale cluster after a zone
+        change, an unarmed DLL, a scanner still calibrating - and every surface
+        then just shows zeros, silently. This names the mode, the engine's own
+        status, its per-poll diagnostics, the event count and the bridge's issue
+        (the HLBOOT verdict, when that is why it is not arming), so ONE dungeon
+        pull is enough to tell a moved pool from an unarmed bridge.
+        """
+        src = self.source
+        if src is None:
+            return "Top DPS: capture unknown (no event source attached)."
+        parts = [f"mode={getattr(src, 'mode', '?')}"]
+        for label, get in (("status", getattr(src, "status", None)),
+                           ("source", getattr(src, "live_source_name", None))):
+            if not callable(get):
+                continue
             try:
-                new_cursor, events = src.events_after(self._src_cursor)
-                self._src_cursor = new_cursor
-                if events:
-                    self._last_events_ts = now   # any event = reader is alive
-                    self._hp_diff_enabled = False   # bridge is live; skip HP-diff
-                for ev in events:
-                    self._apply_event(ev, pa, heroes, current_foes, now)
+                val = get()
             except Exception:
-                pass
+                continue
+            if val:
+                parts.append(f"{label}={val}")
+        try:
+            d = src.diagnostics() or {}
+        except Exception:
+            d = {}
+        if d:
+            keys = ("displays", "ok", "no_res", "bad_hdr", "bad_amount")
+            parts.append("poll " + " ".join(f"{k}={d.get(k, '-')}" for k in keys))
+        try:
+            n, _other = src.counts()
+            parts.append(f"events={n}")
+        except Exception:
+            pass
+        if self._last_events_ts:
+            parts.append(f"last event {time.time() - self._last_events_ts:.0f}s ago")
         else:
-            # No source at all — enable HP-diff so the meter isn't dead
-            # (unless the user turned the fallback off).
-            self._hp_diff_enabled = self.hp_est_allowed
+            parts.append("no event yet this run")
+        try:
+            issue = src.bridge_issue()
+        except Exception:
+            issue = ""
+        if issue:
+            parts.append(issue)
+        return "Top DPS: capture " + " · ".join(parts)
 
-        # Re-enable HP-diff after a lull (bridge went silent).
-        if (self._hp_diff_enabled is False and self.hp_est_allowed
-                and now - self._last_events_ts > self.hp_est_lull_s):
-            self._hp_diff_enabled = True
+    def _log_capture_if_deaf(self, why: str) -> None:
+        """Log the capture state once, at a fight's start, only when no event
+        has ever been decoded (a working capture needs no commentary)."""
+        if self._last_events_ts or not callable(self.log_line):
+            return
+        self._log_activity(f"{why} — {self.capture_line()}")
 
-        # Authoritative classes win over record-time skill guesses.
-        self._sync_known_classes()
 
-        # --- ENEMY HP-DIFF: infer outgoing damage from foe HP drops -----#
-        # Old-school fallback (v0.3.4 style): when the bridge is silent, diff enemy
-        # HP snapshots into outgoing damage. Only the local player's DPS is estimated
-        # (self-only, same assumption as the old DpsMeter). Real events always win.
-        if self._hp_diff_enabled and self.hp_est_allowed and pa is not None:
-            me_name = self._resolve_hero_name(pa, True)
-            for f_addr, foe in current_foes.items():
-                hp, uid = foe[0], foe[1]
-                if hp <= 0:
-                    continue
-                prev = self._foe_hp.get(f_addr)
-                if prev is not None:
-                    prev_hp, prev_uid = prev
-                    # Guard: unit changed or implausible HP jump = new entity, not a drop.
-                    if uid != prev_uid or (prev_hp and hp > prev_hp * 1.5):
-                        self._foe_hp[f_addr] = (hp, uid)
-                        continue
-                    drop = prev_hp - hp
-                    if 1.0 < drop <= 5_000_000 and drop == drop:
-                        if self.in_boss_fight and f_addr == self.boss_session.target_addr:
-                            self.boss_session.record_hit(
-                                target_name=self.boss_session.target_name or uid,
-                                target_addr=f_addr,
-                                target_hp=hp,
-                                target_max_hp=self.boss_session.target_max_hp,
-                                damage=drop,
-                                caster_name=me_name or "You",
-                                is_me=True,
-                                skill_id="(HP)",
-                                skill_name="HP diff (est.)",
-                                is_crit=False,
-                            )
-                        elif self.in_boss_fight:
-                            self.boss_adds_session.record_hit(
-                                target_name=uid, target_addr=f_addr,
-                                target_hp=hp, target_max_hp=max(self._foe_max_hp.get(f_addr, hp), hp),
-                                damage=drop, caster_name=me_name or "You",
-                                is_me=True, skill_id="(HP)", skill_name="HP diff (est.)",
-                                is_crit=False,
-                            )
-                        else:
-                            self.trash_session.record_hit(
-                                target_name=uid, target_addr=f_addr,
-                                target_hp=hp, target_max_hp=max(self._foe_max_hp.get(f_addr, hp), hp),
-                                damage=drop, caster_name=me_name or "You",
-                                is_me=True, skill_id="(HP)", skill_name="HP diff (est.)",
-                                is_crit=False,
-                            )
-                        self.overall_session.record_hit(
-                            target_name=uid, target_addr=f_addr,
-                            target_hp=hp, target_max_hp=max(self._foe_max_hp.get(f_addr, hp), hp),
-                            damage=drop, caster_name=me_name or "You",
-                            is_me=True, skill_id="(HP)", skill_name="HP diff (est.)",
-                            is_crit=False,
-                        )
-                # Update tracking.
-                self._foe_hp[f_addr] = (hp, uid)
-                self._foe_max_hp[f_addr] = max(self._foe_max_hp.get(f_addr, hp), hp)
 
-        # --- damage-taken FALLBACK signal: hero HP drops -----------------#
-        # Lull-only; never mixes with authoritative events. Labeled ≈ in the UI.
-        lull = now - self._last_events_ts > self.hp_est_lull_s
-        for h_addr, hp in hero_hp_now.items():
-            prev = self._hero_hp.get(h_addr)
-            drop = (prev - hp) if prev is not None else 0.0
-            if prev is not None and prev > 0 and hp <= 0:
-                h_name = self._hero_name(h_addr, pa, heroes)
-                if h_name:
-                    if self.in_dummy_fight:
-                        self.dummy_session.record_death(h_name)
-                    elif self.in_boss_fight:
-                        self.boss_session.record_death(h_name)
-                    else:
-                        self.trash_session.record_death(h_name)
-                    self.overall_session.record_death(h_name)
 
-            if (prev is not None and prev > 0 and hp > 0
-                    and lull
-                    and h_addr not in self._incoming_tick
-                    and 1.0 < drop <= 5_000_000 and drop == drop):
-                if solo_status(self.model, self) is True and h_addr != pa:
-                    continue
-                self._apply_damage_taken(h_addr, drop, pa, heroes, now,
-                                         is_est=True)
-        self._hero_hp = hero_hp_now
 
-        # --- boss defeat / end (kill flags + boss HP/despawn) -------------#
-        if self.in_boss_fight and self.boss_session.group_damage > 0:
-            now = time.time()
-            foe = current_foes.get(self.boss_session.target_addr)
-            killed = self._boss_kill_pending and (now - self._boss_kill_pending <= BOSS_KILL_GRACE_S)
-            if foe is not None and foe[0] <= 0:
-                self._end_boss_fight("Boss Defeated")
-            elif foe is None:
-                idle = now - max(self.boss_session.last_event_time,
-                                 self._boss_last_seen or 0.0)
-                # Game signals confirm an end only once also damage-idle for BOSS_IDLE_AUX_S.
-                game_confirmed = (self._game_combat_end_at > 0
-                                  and (now - self._game_combat_end_at)
-                                  >= GAME_COMBAT_END_CONFIRM_S)
-                if killed or idle > BOSS_GONE_IDLE_S \
-                        or (game_confirmed and idle >= BOSS_IDLE_AUX_S):
-                    self._end_boss_fight("Boss Defeated" if killed else "Boss Fight")
 
-        # --- combat lull auto-pause (trash / general fights) -------------#
-        if not self.in_boss_fight and not self.in_dummy_fight:
-            now_lull = time.time()
-            trash_lulled = self.trash_session.check_combat_lull(
-                now_lull, timeout_s=6.0)
-            overall_lulled = self.overall_session.check_combat_lull(
-                now_lull, timeout_s=6.0)
-            if trash_lulled or overall_lulled:
-                # Fight over (idle past the lull): next pull starts fresh.
-                self.reset_hp_baselines(reason="combat lull")
 
-    def _end_boss_fight(self, reason: str):
-        self.boss_session.pause()
-        self.archive_current_encounter(reason)
-        self.in_boss_fight = False
-        self._boss_kill_pending = 0.0
-        self._boss_missing_at = 0.0
-        # Encounter over: next fight starts from a clean HP baseline.
-        self.reset_hp_baselines(reason=f"{reason}")
 
-    def _end_dummy_fight(self, reason: str):
-        self.dummy_session.pause()
-        self.archive_current_encounter(reason)
-        self.in_dummy_fight = False
-        self.reset_hp_baselines(reason=f"{reason}")
+
 
     # --- pet/summon owner attribution ------------------------------------#
-    @staticmethod
-    def _merge_player_into(dst: PlayerParse, src: PlayerParse) -> None:
-        """Fold one PlayerParse into another (Party_XXXX row into a known player)."""
-        dst.total_damage += src.total_damage
-        dst.damage_taken += src.damage_taken
-        dst.damage_taken_est += src.damage_taken_est
-        dst.heals += src.heals
-        dst.hit_count += src.hit_count
-        dst.heal_count += src.heal_count
-        dst.deaths += src.deaths
-        dst.last_hit_ts = max(dst.last_hit_ts, src.last_hit_ts)
-        if not dst.hero_class:
-            dst.hero_class = src.hero_class
-        for sid, ssp in src.skills.items():
-            dsp = dst.skills.get(sid)
-            if dsp is None:
-                dst.skills[sid] = ssp
-                continue
-            dsp.damage += ssp.damage
-            dsp.hit_count += ssp.hit_count
-            dsp.crit_count += ssp.crit_count
-            dsp.min_hit = min(dsp.min_hit, ssp.min_hit)
-            dsp.max_hit = max(dsp.max_hit, ssp.max_hit)
-            dsp.heals += ssp.heals
-            dsp.heal_count += ssp.heal_count
-            dsp.min_heal = min(dsp.min_heal, ssp.min_heal)
-            dsp.max_heal = max(dsp.max_heal, ssp.max_heal)
-            dsp.damage_taken += ssp.damage_taken
-            dsp.taken_count += ssp.taken_count
-            dsp.last_hit_ts = max(dsp.last_hit_ts, ssp.last_hit_ts)
 
-    def _fold_party_row(self, old_name: str, owner_name: str,
-                        pet_skills: bool = False) -> None:
-        """Fold a Party_XXXX row into the owner row (merge + timeline sync; pet rows gain "(pet)")."""
-        if not old_name or old_name == owner_name:
-            return
-        for sess in (self.overall_session, self.trash_session,
-                     self.boss_session):
-            old = sess.players.pop(old_name, None)
-            if old is None:
-                continue
-            if pet_skills:
-                for ssp in old.skills.values():
-                    nm = ssp.name or ssp.skill_id
-                    if not nm.endswith("(pet)"):
-                        ssp.name = f"{nm} (pet)"
-            owner = sess.players.get(owner_name)
-            if owner is None:
-                old.name = owner_name
-                sess.players[owner_name] = old
-            else:
-                self._merge_player_into(owner, old)
-            pt = sess.player_timeline
-            bucket = pt.pop(old_name, None)
-            if bucket:
-                ob = pt.setdefault(owner_name, {})
-                for sec, amt in bucket.items():
-                    ob[sec] = ob.get(sec, 0.0) + amt
 
-    def _map_pet_source(self, src: int, pa: int,
-                        heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]],
-                        now: float) -> tuple[bool, int]:
-        """Re-credit a non-hero source to its owning hero (foes never resolve). Returns ``(from_pet, source)``."""
-        if not src or src in heroes or src == pa:
-            return False, src
-        owner = self._pet_owners.get(src)
-        if owner:
-            return True, owner
-        if now - self._pet_probe_at.get(src, 0.0) < PET_PROBE_S:
-            return False, src
-        self._pet_probe_at[src] = now
-        owner = 0
-        try:
-            resolve = getattr(self.model, "resolve_pet_owner", None)
-            if resolve is not None:
-                owner = resolve(src) or 0
-        except Exception:
-            owner = 0
-        if not owner:
-            return False, src
-        self._pet_owners[src] = owner
-        self._pet_last_seen[src] = now
-        self._pet_probe_at.pop(src, None)   # resolved: stop probing
-        # Fold anything that already stacked under the uid fallback row.
-        party = self._fallback_rows.get(src)
-        if party:
-            try:
-                oname, _ome = self._resolve_caster(owner, pa, heroes)
-            except Exception:
-                oname = None
-            if oname and not oname.startswith("Party_"):
-                self._fold_party_row(party, oname, pet_skills=True)
-                self._fallback_rows.pop(src, None)
-        return True, owner
-
-    def _own_proc_source(self, src: int, skill_raw: str, pa: int) -> int:
-        """Re-credit an owned-item proc source to the local hero (``pa`` or 0)."""
-        if not src or not pa or src == pa:
-            return 0
-        if src in self._owned_proc_sources:
-            return self._owned_proc_sources[src]
-        name = names.skill_name(skill_raw or "") or skill_raw or ""
-        if name not in OWNED_ITEM_PROC_SKILLS:
-            return 0
-        cached = self._hero_pointers.get(src)
-        if cached and cached[1]:
-            return 0
-        self._owned_proc_sources[src] = pa
-        # Fold this source's uid row into you.
-        party = self._fallback_rows.get(src)
-        if party:
-            try:
-                oname, _ome = self._resolve_caster(pa, pa, {})
-            except Exception:
-                oname = None
-            if oname:
-                self._fold_party_row(party, oname)
-                self._fallback_rows.pop(src, None)
-        return pa
 
     # --- per-event application --------------------------------------------#
-    def _confirm_boss_kill(self, ev: DamageEvent, now: float) -> None:
-        """Pure kill notification (st.Player.notifyUnitKilled__impl).
+    def _confirm_boss_kill(self, ev, now):
+        return self.events.confirm_boss_kill(ev, now)
 
-        It carries only the killed unit's raw id — no killer, no amount — so
-        it can never feed damage rows. Its value is boss-KILL CONFIRMATION:
-        when the id matches the ACTIVE boss, arm the boss-end grace, so a boss
-        that dies and despawns before its HP ever reads 0 still closes the
-        encounter as "Boss Defeated" instead of "Boss Fight".
-        """
-        if not self.in_boss_fight or self.boss_session.group_damage <= 0:
-            return
-        uid = (getattr(ev, "target_name", "") or "").strip().lower()
-        if not uid:
-            return
-        boss = self.boss_session
-        raw = (self._foe_raw_ids.get(boss.target_addr) or "").strip().lower()
-        disp = (boss.target_name or "").replace("👑 ", "").strip().lower()
-        if (raw and uid == raw) or (disp and uid == disp):
-            if self._boss_kill_pending <= 0.0 and callable(self.log_line):
-                try:
-                    self.log_line("Top DPS: boss defeat confirmed by kill notification")
-                except Exception:
-                    pass
-            self._boss_kill_pending = now
+    def _apply_event(self, ev, pa, heroes, foes, now):
+        return self.events.apply_event(ev, pa, heroes, foes, now)
 
-    def _apply_event(self, ev: DamageEvent, pa: int,
-                     heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]],
-                     foes: dict[int, tuple[float, str, bool, float, float, float]],
-                     now: float):
-        amt = ev.amount
-        if not amt or amt != amt:
-            # Zero-amount kill notification: confirm a boss kill, nothing else.
-            if ev.kill:
-                self._confirm_boss_kill(ev, now)
-            return
-        amount = amt
-        tgt = ev.target_addr
-        src = ev.source_addr
-        # Pets carry the pet as serverSource; re-credit to the owning hero.
-        from_pet = bool(src and src in self._pet_owners)
-        if from_pet:
-            src = self._pet_owners[src] or 0
+    def _apply_damage_taken(self, tgt, amount, pa, heroes, now, **kwargs):
+        return self.events.apply_damage_taken(tgt, amount, pa, heroes, now, **kwargs)
 
-        # Solo Open-World Filter: when ungrouped in open world, only process
-        # events involving the local player or local player's pet.
-        # Bystanders/strangers fighting nearby are strictly filtered out so
-        # combat sessions only start and run when YOU are in combat,
-        # guaranteeing 100% local player stats with zero stranger noise.
-        if solo_status(self.model, self) is True and pa:
-            is_me_ev = bool(getattr(ev, "is_me", False))
-            if not is_me_ev:
-                is_me_addr = (
-                    src == pa
-                    or tgt == pa
-                    or (from_pet and src == pa)
-                    or (tgt in self._pet_owners and self._pet_owners[tgt] == pa)
-                    or (src in self._owned_proc_sources and self._owned_proc_sources[src] == pa)
-                )
-                if not is_me_addr:
-                    src_ptr = self._hero_pointers.get(src)
-                    tgt_ptr = self._hero_pointers.get(tgt)
-                    if (src_ptr and src_ptr[1]) or (tgt_ptr and tgt_ptr[1]):
-                        is_me_addr = True
-                if not is_me_addr:
-                    own_proc = self._own_proc_source(src, getattr(ev, "skill", ""), pa)
-                    if own_proc == pa:
-                        is_me_addr = True
-                        src = pa
-                if not is_me_addr:
-                    my_name = self._resolve_hero_name(pa, True)
-                    s_nm = getattr(ev, "source_name", "")
-                    t_nm = getattr(ev, "target_name", "")
-                    if (s_nm and (s_nm == my_name or s_nm in ("Player", "You"))) or \
-                       (t_nm and (t_nm == my_name or t_nm in ("Player", "You"))):
-                        is_me_addr = True
-                if not is_me_addr:
-                    return
+    def _apply_heal(self, ev, amount, src, tgt, pa, heroes, now, **kwargs):
+        return self.events.apply_heal(ev, amount, src, tgt, pa, heroes, now, **kwargs)
 
-        # Direct name path: hooked events already have authoritative caster/target names.
-        if getattr(ev, "source_name", ""):
-            if ev.incoming:
-                t_name = getattr(ev, "target_name", "") or "Player"
-                self._apply_damage_taken(tgt, amount, pa, heroes, now,
-                                         target_name=t_name, is_me=getattr(ev, "is_me", False))
-            elif ev.kind in (K_HEAL, K_SHIELD) or amt < 0:
-                self._apply_heal(ev, abs(amount), src, tgt, pa, heroes, now,
-                                 from_pet=from_pet)
-            else:
-                self._apply_damage(ev, amount, src, tgt, pa, heroes, foes, now,
-                                   from_pet=from_pet)
-            return
+    def _apply_damage(self, ev, amount, src, tgt, pa, heroes, foes, now, **kwargs):
+        return self.events.apply_damage(ev, amount, src, tgt, pa, heroes, foes, now, **kwargs)
 
-        # --- classify: heal / incoming damage / outgoing damage ----------#
-        kind = None
-        if amt < 0:
-            kind = K_HEAL
-            amount = -amt
-        elif ev.kind in (K_HEAL, K_SHIELD):
-            kind = K_HEAL
-            amount = abs(amount)
-        # Known heroes include roster/pointer/cache heroes, not just the scene (far-ally guard).
-        def _is_known_hero(addr: int) -> bool:
-            if not addr:
-                return False
-            if addr == pa or addr in heroes:
-                return True
-            hp = self._hero_pointers.get(addr)
-            if hp is not None and not hp[0].startswith("Party_"):
-                return True
-            cached = self._hero_name_cache.get(addr)
-            return bool(cached and not cached.startswith("Party_"))
 
-        if src in heroes and (tgt in heroes or tgt == pa):
-            kind = K_HEAL                    # friendly number over a hero
-        elif _is_known_hero(src) and _is_known_hero(tgt):
-            kind = K_HEAL                    # far-ally heal (off-scene hero)
-        elif kind == K_HEAL:
-            # A heal/shield onto a hero from a source that is not a known
-            # hero: never "incoming damage". Re-credit pets/summons to their
-            # owner (an unscanned pet heal resolves through the model exactly
-            # like pet damage does); a probe miss leaves src untouched so the
-            # heal still lands on its own channel instead of a damage-taken row.
-            if not from_pet:
-                from_pet, src = self._map_pet_source(src, pa, heroes, now)
-        elif tgt == pa or (tgt in heroes) or ev.incoming or _is_known_hero(tgt):
-            # Incoming: enemy hit on a hero (hero-on-hero already classified as heal).
-            if tgt and (tgt in heroes or _is_known_hero(tgt)):
-                h_addr = tgt
-            else:
-                h_addr = pa
-            self._incoming_tick.add(h_addr)
-            self._apply_damage_taken(h_addr, amount, pa, heroes, now,
-                                     target_name=getattr(ev, "target_name", ""),
-                                     is_me=getattr(ev, "is_me", None))
-            return
-        elif tgt in self._pet_owners and self._pet_owners[tgt] in heroes:
-            # a hit on my pet counts as damage taken by its owner
-            owner = self._pet_owners[tgt]
-            self._incoming_tick.add(owner)
-            self._apply_damage_taken(owner, amount, pa, heroes, now,
-                                     is_me=(owner == pa))
-            return
-        else:
-            # Outgoing: try owned-proc re-credit, then pet probe (foes never resolve).
-            if not from_pet:
-                own = self._own_proc_source(src, ev.skill, pa)
-                if own:
-                    src = own
-                else:
-                    from_pet, src = self._map_pet_source(src, pa, heroes, now)
-            kind = K_DAMAGE
 
-        if kind == K_HEAL:
-            # Pet heals report the pet too; hero sources pass through untouched.
-            if not from_pet:
-                from_pet, src = self._map_pet_source(src, pa, heroes, now)
-            self._apply_heal(ev, amount, src, tgt, pa, heroes, now,
-                             from_pet=from_pet)
-            return
-        self._apply_damage(ev, amount, src, tgt, pa, heroes, foes, now,
-                           from_pet=from_pet)
 
-    def _apply_damage_taken(self, tgt: int, amount: float, pa: int,
-                            heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]],
-                            now: float, is_est: bool = False,
-                            target_name: str = "", is_me: bool | None = None):
-        """Record damage taken by a hero into the active segment + overall."""
-        if target_name and target_name not in ("Enemy", ""):
-            name = target_name
-            if is_me is None:
-                is_me = (target_name in ("Player", "You")
-                         or (pa and self._resolve_hero_name(pa, True) == target_name))
-            if is_me and pa:
-                loc = self._resolve_hero_name(pa, True)
-                if loc:
-                    name = loc
-        else:
-            name = self._hero_name(tgt, pa, heroes)
-            if not name and pa:
-                name = self._resolve_hero_name(pa, True)
-            if not name:
-                name = "You" if (is_me or (tgt and tgt == pa)) else "Player"
-            if is_me is None:
-                is_me = (tgt == pa or name == "You")
 
-        if not name:
-            return
-        if self.in_boss_fight:
-            self.boss_session.record_damage_taken(name, amount, is_est=is_est,
-                                                  is_me=is_me)
-        else:
-            self.trash_session.record_damage_taken(name, amount, is_est=is_est,
-                                                   is_me=is_me)
-        self.overall_session.record_damage_taken(name, amount, is_est=is_est,
-                                                 is_me=is_me)
-
-    def _apply_heal(self, ev: DamageEvent, amount: float, src: int, tgt: int, pa: int,
-                    heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]],
-                    now: float, from_pet: bool = False):
-        if getattr(ev, "source_name", ""):
-            caster = ev.source_name
-            is_me = bool(getattr(ev, "is_me", False))
-            if is_me and pa:
-                loc = self._resolve_hero_name(pa, True)
-                if loc:
-                    caster = loc
-        else:
-            caster, is_me = self._resolve_caster(src, pa, heroes)
-        if caster is None:
-            return
-        if getattr(ev, "target_name", ""):
-            target_name = ev.target_name
-            if (target_name in ("Player", "Hero") or not target_name) and is_me and pa:
-                loc = self._resolve_hero_name(pa, True)
-                if loc:
-                    target_name = loc
-        else:
-            target_name = self._hero_name(tgt, pa, heroes) or (self._foe_names.get(tgt) or "Hero")
-        sid, sname = self._skill_labels(ev, fallback=("Regen", "Heal"))
-        if from_pet:
-            sname = f"{sname} (pet)"
-        is_dummy = udata.is_training_dummy(target_name) or (
-            tgt and udata.is_training_dummy(self._foe_raw_ids.get(tgt)))
-        boss = self.in_boss_fight
-        # Engage dummy fight on event path (sceneless injection)
-        # Canonical display spelling (same rule as _apply_damage): a heal
-        # event can name the dummy by raw id; its session label must match
-        # the scan's "🎯 <display name>" form instead of flipping spellings.
-        if is_dummy:
-            target_name = _canonical_unit_display(target_name)
-        if is_dummy and not self.in_dummy_fight and not self.in_boss_fight:
-            self.in_dummy_fight = True
-            self.dummy_session.reset()
-            self.dummy_session.target_name = f"🎯 {target_name}"
-            self.reset_hp_baselines(reason="dummy engaged (event)")
-        if is_dummy:
-            self.dummy_session.record_heal(target_name=target_name, heal_amount=amount,
-                                              caster_name=caster, is_me=is_me,
-                                              skill_id=sid, skill_name=sname)
-        elif boss:
-            self.boss_session.record_heal(target_name=target_name, heal_amount=amount,
-                                              caster_name=caster, is_me=is_me,
-                                              skill_id=sid, skill_name=sname)
-        else:
-            self.trash_session.record_heal(target_name=target_name, heal_amount=amount,
-                                              caster_name=caster, is_me=is_me,
-                                              skill_id=sid, skill_name=sname)
-        self.overall_session.record_heal(target_name=target_name, heal_amount=amount,
-                                         caster_name=caster, is_me=is_me,
-                                         skill_id=sid, skill_name=sname)
-
-    def _apply_damage(self, ev: DamageEvent, amount: float, src: int, tgt: int, pa: int,
-                      heroes: dict[int, tuple[str, bool, tuple[float, float, float], str]],
-                      foes: dict[int, tuple[float, str, bool, float, float, float]],
-                      now: float, from_pet: bool = False):
-        if getattr(ev, "source_name", ""):
-            caster = ev.source_name
-            is_me = bool(getattr(ev, "is_me", False))
-            if is_me and pa:
-                loc = self._resolve_hero_name(pa, True)
-                if loc:
-                    caster = loc
-        else:
-            caster, is_me = self._resolve_caster(src, pa, heroes)
-        if caster is None:
-            return
-        if getattr(ev, "target_name", ""):
-            target_name = ev.target_name
-        else:
-            target_name = self._foe_name(tgt, foes) or self._hero_name(tgt, pa, heroes) or "Enemy"
-
-        clean_tgt = (target_name or "").replace("👑 ", "").strip().lower()
-        clean_boss = (self.boss_session.target_name or "").replace("👑 ", "").strip().lower()
-
-        is_boss_named = bool(
-            clean_tgt and clean_boss and clean_boss != "none" and (
-                clean_tgt == clean_boss
-                or clean_tgt in clean_boss
-                or clean_boss in clean_tgt
-            )
-        )
-        is_dummy_unit = bool(
-            udata.is_training_dummy(target_name)
-            or udata.is_training_dummy(clean_tgt)
-            or udata.is_training_dummy(self._foe_raw_ids.get(tgt))
-        )
-        is_boss_unit = bool(
-            udata.is_boss(target_name)
-            or udata.is_boss(clean_tgt)
-            or (clean_tgt.startswith("demonsuperelite") and "falseclone" not in clean_tgt)
-            or "boss" in clean_tgt
-        )
-        # NOTE: is_dummy_unit intentionally excluded from is_boss_unit —
-        # dummies route to their own group, not the boss group.
-
-        foe = foes.get(tgt)
-
-        # Stored/displayed names use the canonical display spelling; the
-        # routing flags above deliberately keep the raw event spelling (unit
-        # family checks) and stay untouched.
-        disp_name = _canonical_unit_display(target_name or "Enemy")
-
-        # Auto-engage dummy fight first (own group, parallel to boss)
-        if not self.in_dummy_fight and not self.in_boss_fight and (
-                is_dummy_unit or (foe is not None and foe[3])):
-            self.in_dummy_fight = True
-            if self.trash_session.group_damage > 0:
-                if self.trash_session.state == "COMBAT":
-                    self.trash_session.pause()
-                self.archive_current_encounter("Trash Mobs Cleared")
-            self.dummy_session.reset()
-            dummy_name = (disp_name or "").replace("🎯", "").strip()
-            if not dummy_name.startswith("🎯 "):
-                dummy_name = f"🎯 {dummy_name}"
-            self.dummy_session.target_name = dummy_name
-            self.dummy_session.target_addr = tgt or (getattr(foe, "addr", 0) if foe else 0)
-            if foe is not None and foe[0] > 0:
-                self.dummy_session.target_hp = foe[0]
-                self.dummy_session.target_max_hp = foe[0]
-            if not self.dummy_session.target_addr:
-                for f_a, f_info in foes.items():
-                    if f_info[3]:  # is_dummy
-                        self.dummy_session.target_addr = f_a
-                        self.dummy_session.target_hp = f_info[0]
-                        self.dummy_session.target_max_hp = f_info[0]
-                        break
-            self.reset_hp_baselines(reason="dummy engaged (damage)")
-            for h_addr, (h_name, is_m, *_) in heroes.items():
-                if is_m:
-                    self.dummy_session.register_player(h_name, is_me=is_m)
-
-        # Auto-engage boss fight if hitting a boss even if scene scanner missed boss_present
-        # (e.g. after manual reset during boss encounter or delayed spawn)
-        if not self.in_boss_fight and (is_boss_unit or (foe is not None and foe[2])):
-            self.in_boss_fight = True
-            if self.trash_session.group_damage > 0:
-                if self.trash_session.state == "COMBAT":
-                    self.trash_session.pause()
-                self.archive_current_encounter("Trash Mobs Cleared")
-            self.boss_session.reset()
-            self.boss_adds_session.reset()
-            crown_name = disp_name if disp_name.startswith("👑 ") else f"👑 {disp_name}"
-            self.boss_session.target_name = crown_name
-            self.boss_session.target_addr = tgt or (getattr(foe, "addr", 0) if foe else 0)
-            if foe is not None and foe[0] > 0:
-                self.boss_session.target_hp = foe[0]
-                self.boss_session.target_max_hp = foe[0]
-            if not self.boss_session.target_addr:
-                for f_a, f_info in foes.items():
-                    if f_info[2]:  # is_boss
-                        self.boss_session.target_addr = f_a
-                        self.boss_session.target_hp = f_info[0]
-                        self.boss_session.target_max_hp = f_info[0]
-                        break
-            self.reset_hp_baselines(reason="boss engaged (damage)")
-            for h_addr, (h_name, is_m, *_) in heroes.items():
-                if is_m:
-                    self.boss_session.register_player(h_name, is_me=is_m)
-
-        is_dummy = is_dummy_unit
-        on_dummy = self.in_dummy_fight and (
-            (tgt and tgt == self.dummy_session.target_addr)
-            or is_dummy
-            or (self.dummy_session.target_name in ("None", "") and not is_dummy)
-        )
-        on_boss = self.in_boss_fight and (
-            (tgt and tgt == self.boss_session.target_addr)
-            or (foe is not None and foe[2])
-            or is_boss_named
-            or is_boss_unit
-            or (self.boss_session.target_name in ("None", "") and not clean_boss)
-        )
-
-        target_hp = foe[0] if foe else 0.0
-        if tgt and foe:
-            self._foe_max_hp[tgt] = max(self._foe_max_hp.get(tgt, foe[0]), foe[0])
-            target_max = self._foe_max_hp[tgt]
-        else:
-            target_max = foe[0] if foe else 0.0
-
-        # When hitting boss via bridge (tgt == 0), inherit boss HP from live session
-        if on_boss:
-            if target_hp <= 0 and self.boss_session.target_hp > 0:
-                target_hp = self.boss_session.target_hp
-            if target_max <= 0 and self.boss_session.target_max_hp > 0:
-                target_max = self.boss_session.target_max_hp
-
-        sid, sname = self._skill_labels(ev, fallback=("Attack", "Attack"))
-        if from_pet:
-            sname = f"{sname} (pet)"
-
-        if on_dummy:
-            self.dummy_session.record_hit(target_name=disp_name, target_addr=tgt,
-                                          target_hp=target_hp, target_max_hp=target_max,
-                                          damage=amount, caster_name=caster, is_me=is_me,
-                                          skill_id=sid, skill_name=sname, is_crit=ev.crit)
-        elif on_boss:
-            self.boss_session.record_hit(target_name=disp_name, target_addr=tgt,
-                                          target_hp=target_hp, target_max_hp=target_max,
-                                          damage=amount, caster_name=caster, is_me=is_me,
-                                          skill_id=sid, skill_name=sname, is_crit=ev.crit)
-        elif self.in_boss_fight:
-            self.boss_adds_session.record_hit(target_name=disp_name, target_addr=tgt,
-                                              target_hp=target_hp, target_max_hp=target_max,
-                                              damage=amount, caster_name=caster, is_me=is_me,
-                                              skill_id=sid, skill_name=sname, is_crit=ev.crit)
-        else:
-            self.trash_session.record_hit(target_name=disp_name, target_addr=tgt,
-                                          target_hp=target_hp, target_max_hp=target_max,
-                                          damage=amount, caster_name=caster, is_me=is_me,
-                                          skill_id=sid, skill_name=sname, is_crit=ev.crit)
-        self.overall_session.record_hit(target_name=disp_name, target_addr=tgt,
-                                        target_hp=target_hp, target_max_hp=target_max,
-                                        damage=amount, caster_name=caster, is_me=is_me,
-                                        skill_id=sid, skill_name=sname, is_crit=ev.crit)
-
-        # Kill flags arm the boss end; HP/despawn check above confirms before archiving.
-        if ev.kill and on_boss:
-            self._boss_kill_pending = now
 
     @staticmethod
-    def _skill_labels(ev: DamageEvent, fallback: tuple[str, str]) -> tuple[str, str]:
-        sid = (ev.skill or "").strip()
+    def _skill_labels(ev: DamageEvent, fallback: tuple[str, str]) -> tuple[str, str, bool]:
+        """The hit's skill as (id, display name, tagged-as-pet).
+
+        The id comes back CANONICAL: any `(pet)` the wire appended is stripped,
+        and reported separately as the flag. That is the whole point of this
+        function.
+
+        Two taggers write "(pet)" into a skill string: the bridge reader
+        (`dps_bridge`, onto the id) and the tracker's own pet-owner map
+        (`_events_apply_damage`/`_apply_heal`, onto the name). The bridge's tag
+        is decided per hit from a live memory read (`bridge_core.h`: is
+        `dealer + OFF_FOE_OWNER` readable and a hero instance right now?), so
+        the SAME pet swing arrives tagged on one hit and untagged on the next.
+
+        Nothing reconciled them, and every skill bucket is keyed by id. So one
+        pet skill minted two rows in the HUD, and `update_stats` hides every row
+        whose id is not in this tick's `active_skills` — the pair took turns
+        appearing and disappearing at the pet's cadence (reported live
+        2026-10-03: "auto expanding skills keep showing then hiding"). Worse, a
+        hit that BOTH taggers marked read `... (pet) (pet)`.
+
+        Pet-ness is a property of the skill, not of one hit's read, so it is
+        decided once here from both signals and stamped on exactly one field.
+        """
+        raw = (ev.skill or "").strip()
+        tagged = raw.endswith(_PET_SUFFIX)
+        sid = raw[:-len(_PET_SUFFIX)].strip() if tagged else raw
         if not sid or sid == "?":
             # Unread skills stay "Unknown", never masquerade as basic attacks.
-            return "?", "Unknown"
-        return sid, names.skill_name(sid) or sid
+            return "?", "Unknown", tagged
+        name = names.skill_name(sid) or sid
+        if name.endswith(_PET_SUFFIX):
+            name = name[:-len(_PET_SUFFIX)].strip()
+        return sid, name, tagged

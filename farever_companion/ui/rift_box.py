@@ -6,7 +6,8 @@ from PySide6 import QtCore, QtWidgets
 
 from . import theme
 from ..data import icons
-from ..sound import play_sound
+from ..runtime.sound import play_sound
+from ..core.rift_tracker import parse_rift_ding
 
 
 class ClickFrame(QtWidgets.QFrame):
@@ -141,52 +142,37 @@ class RiftSidebarMixin:
             self._update_sidebar_rift()
 
     def _check_rift_ding(self, r: dict) -> None:
-        """Play one chime per selected lead time (multi-select) before a rift."""
+        """One chime per selected lead time per rift; misses latch silently.
+
+        Everything derives from one wall-clock reading (`remaining`), so a
+        skewed countdown can neither burst nor disarm: dues sit >= 59 s apart
+        while the ring window is 2 s wide, hence at most one lead time rings
+        per tick, and unreached moments stay armed.
+        """
         if getattr(self.s, "show_rift_timer", "Always") == "Off":
             return
-        raw = getattr(self.s, "rift_ding", ["15", "10", "5", "1"])
-        if isinstance(raw, str):
-            if raw.lower() == "off":
-                return
-            if raw.lower() == "all":
-                thresholds = [15, 10, 5, 1, 0]
-            else:
-                try:
-                    thresholds = [int(raw.replace("m", ""))]
-                except ValueError:
-                    thresholds = [15, 10, 5, 1, 0]
-        else:
-            try:
-                thresholds = sorted({int(str(x).replace("m", "")) for x in raw})
-            except Exception:
-                thresholds = [15, 10, 5, 1, 0]
-        if not thresholds:
-            return
-        secs = r.get("secs_until", 10**9)
-        state = r["state"]
-        if state != "WARNING":
+        thresholds = parse_rift_ding(getattr(self.s, "rift_ding", None))
+        if not thresholds or r.get("state") != "WARNING":
             return
 
         now = time.time()
         target = (int(now // 3600) + 1) * 3600
-        fired = getattr(self, "_rift_dinged", None)
-        if not isinstance(fired, dict):
-            fired = {}
-        self._rift_dinged = fired
+        remaining = target - now  # seconds until the :00 spawn
+        fired = self.__dict__.setdefault("_rift_dinged", {})
 
         for m in thresholds:
-            due_secs = 1 if m == 0 else m * 60
-            if secs > due_secs or fired.get(m) == target:
+            if fired.get(m) == target:
                 continue
-            if now - (target - due_secs) <= 2.0:
+            due = 1 if m == 0 else m * 60
+            early = due - remaining
+            if early < 0:
+                continue  # moment still ahead — stay armed, latch nothing
+            if early <= 2.0:
                 play_sound(getattr(self.s, "rift_sound", "ding"))
                 if hasattr(self, "log"):
                     try:
-                        self.log(f"Rift chime: {'Live' if m == 0 else f'{m}m'} warning")
+                        self.log(f"Rift chime: {'Live' if m == 0 else f'{m}m'} warning "
+                                 f"(remaining={remaining:.0f}s)")
                     except Exception:
                         pass
             fired[m] = target
-
-        cut = now - 7200
-        for m in [m for m, t in fired.items() if t < cut]:
-            fired.pop(m, None)

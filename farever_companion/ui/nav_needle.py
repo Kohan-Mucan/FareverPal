@@ -157,6 +157,20 @@ class NeedleOverlay(QtWidgets.QWidget):
 
         # distance + label at a FIXED y (independent of tilt, no jitter)
         ty = py + 45
+        self._paint_label(p, ty, QtCore.QRectF(0, ty, SIDE, 20),
+                          QtCore.QRectF(0, ty + 20, SIDE, 16))
+        p.end()
+
+    def _paint_label(self, p, ty, span, label_span) -> None:
+        """The distance readout under the needle - or HERE / NOT IN SCENE - the
+        UP/DOWN level marker beside it, and the tracked target's name beneath.
+
+        Screen-space mode centres a SIDE-wide box and projected mode a 400px
+        box on the projected point, so the caller passes both rects; the text,
+        its font and the level marker are identical between the two modes.
+        """
+        searching = self._dist < 0
+        here = not searching and self._dist <= ARRIVE
         p.setPen(QtGui.QColor(theme.TEXT))
         f = p.font()
         f.setFamily(theme.MONO_FONT)
@@ -164,38 +178,40 @@ class NeedleOverlay(QtWidgets.QWidget):
         f.setBold(True)
         p.setFont(f)
         if searching:
-            txt = "NOT IN SCENE"
-            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt)
+            p.drawText(span, QtCore.Qt.AlignHCenter, "NOT IN SCENE")
         elif here:
-            txt = "HERE"
-            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt)
+            p.drawText(span, QtCore.Qt.AlignHCenter, "HERE")
         else:
             txt_dist = f"{self._dist:.0f}m"
-            fm = p.fontMetrics()
-            w_dist = fm.horizontalAdvance(txt_dist)
-            
-            p.drawText(QtCore.QRectF(0, ty, SIDE, 20), QtCore.Qt.AlignHCenter, txt_dist)
-            
-            if abs(self._dz) > LEVEL_DZ:
-                arrow = " ▲ UP" if self._dz > LEVEL_DZ else " ▼ DOWN"
-                col = COL_TEXT_ABOVE if self._dz > LEVEL_DZ else COL_TEXT_BELOW
-                arrow_x = (SIDE + w_dist) / 2
-                
-                f_arrow = QtGui.QFont(f)
-                f_arrow.setPointSize(11)
-                p.setFont(f_arrow)
-                p.setPen(QtGui.QColor(col))
-                p.drawText(QtCore.QPointF(arrow_x, ty + 14), arrow)
-                p.setFont(f)
-                p.setPen(QtGui.QColor(theme.TEXT))
+            w_dist = p.fontMetrics().horizontalAdvance(txt_dist)
+            p.drawText(span, QtCore.Qt.AlignHCenter, txt_dist)
+            self._paint_level_arrow(p, f, span.center().x() + w_dist / 2, ty)
         if self._label:
             f.setPointSize(8)
             f.setBold(False)
             p.setFont(f)
             p.setPen(QtGui.QColor(theme.MUTED))
-            p.drawText(QtCore.QRectF(0, ty + 20, SIDE, 16),
-                       QtCore.Qt.AlignHCenter, self._label)
-        p.end()
+            p.drawText(label_span, QtCore.Qt.AlignHCenter, self._label)
+
+    def _paint_level_arrow(self, p, f, arrow_x, ty):
+        """The small UP/DOWN level marker drawn beside the distance text.
+
+        Its own point size and colour, with the caller's font and pen restored
+        afterwards so the label pass below is unaffected. `arrow_x` is the
+        marker's centre, which the screen-space and the projected layouts place
+        differently; nothing is drawn when the target is within `LEVEL_DZ`.
+        """
+        if abs(self._dz) <= LEVEL_DZ:
+            return
+        arrow = " ▲ UP" if self._dz > LEVEL_DZ else " ▼ DOWN"
+        col = COL_TEXT_ABOVE if self._dz > LEVEL_DZ else COL_TEXT_BELOW
+        f_arrow = QtGui.QFont(f)
+        f_arrow.setPointSize(11)
+        p.setFont(f_arrow)
+        p.setPen(QtGui.QColor(col))
+        p.drawText(QtCore.QPointF(arrow_x, ty + 14), arrow)
+        p.setFont(f)
+        p.setPen(QtGui.QColor(theme.TEXT))
 
     def _paint_projected(self, p):
         """Projected mode: polygons already in window coordinates, lying on
@@ -230,44 +246,8 @@ class NeedleOverlay(QtWidgets.QWidget):
 
         # distance + label under the ring
         tx, ty = text_xy
-        p.setPen(QtGui.QColor(theme.TEXT))
-        f = p.font()
-        f.setFamily(theme.MONO_FONT)
-        f.setPointSize(11)
-        f.setBold(True)
-        p.setFont(f)
-        if searching:
-            txt = "NOT IN SCENE"
-            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt)
-        elif here:
-            txt = "HERE"
-            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt)
-        else:
-            txt_dist = f"{self._dist:.0f}m"
-            fm = p.fontMetrics()
-            w_dist = fm.horizontalAdvance(txt_dist)
-            
-            p.drawText(QtCore.QRectF(tx - 200, ty, 400, 20), QtCore.Qt.AlignHCenter, txt_dist)
-            
-            if abs(self._dz) > LEVEL_DZ:
-                arrow = " ▲ UP" if self._dz > LEVEL_DZ else " ▼ DOWN"
-                col = COL_TEXT_ABOVE if self._dz > LEVEL_DZ else COL_TEXT_BELOW
-                arrow_x = tx + w_dist / 2
-                
-                f_arrow = QtGui.QFont(f)
-                f_arrow.setPointSize(11)
-                p.setFont(f_arrow)
-                p.setPen(QtGui.QColor(col))
-                p.drawText(QtCore.QPointF(arrow_x, ty + 14), arrow)
-                p.setFont(f)
-                p.setPen(QtGui.QColor(theme.TEXT))
-        if self._label:
-            f.setPointSize(8)
-            f.setBold(False)
-            p.setFont(f)
-            p.setPen(QtGui.QColor(theme.MUTED))
-            p.drawText(QtCore.QRectF(tx - 200, ty + 20, 400, 16),
-                       QtCore.Qt.AlignHCenter, self._label)
+        self._paint_label(p, ty, QtCore.QRectF(tx - 200, ty, 400, 20),
+                          QtCore.QRectF(tx - 200, ty + 20, 400, 16))
 
     @staticmethod
     def _needle_polys():

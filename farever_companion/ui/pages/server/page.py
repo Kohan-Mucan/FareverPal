@@ -122,27 +122,33 @@ class ServerPageMixin(PingPanelMixin, ScannerPanelMixin, TracePanelMixin):
         self.server_stack.setCurrentIndex(mapping.get(text, 0))
 
     def _server_cleanup(self):
-        """Force-stop all background diagnostic workers to prevent shutdown crashes."""
-        workers = []
-        if hasattr(self, "_ping_worker") and self._ping_worker:
-            workers.append(self._ping_worker)
-        if hasattr(self, "_scan_worker") and self._scan_worker:
-            workers.append(self._scan_worker)
-        if hasattr(self, "_trace_worker") and self._trace_worker:
-            workers.append(self._trace_worker)
-        if hasattr(self, "_steam_worker") and self._steam_worker:
-            workers.append(self._steam_worker)
+        """Stop background diagnostic workers without killing Qt threads.
 
-        for w in workers:
-            if w.isRunning():
-                w.stop()
-                # Wait up to 2s for graceful exit
-                if not w.wait(2000):
-                    w.terminate()
-                    w.wait()
-
-        # Only clear references after we are sure threads are joined
-        self._ping_worker = None
-        self._scan_worker = None
-        self._trace_worker = None
-        self._steam_worker = None
+        QThread.terminate() is unsafe: it can stop a worker while it is inside
+        a Python/C allocation, leaving the process heap corrupted. The next
+        ordinary Qt allocation then appears as an access violation in an
+        unrelated constructor (for example CallWorker.__init__). Every server
+        worker has a cooperative stop() path, so wait for that path instead.
+        """
+        workers = (
+            ("_ping_worker",),
+            ("_scan_worker",),
+            ("_trace_worker",),
+            ("_steam_worker",),
+        )
+        for (attr,) in workers:
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            try:
+                if w.isRunning():
+                    w.stop()
+                    # Never terminate here. Keep the reference if a network or
+                    # subprocess operation has not returned yet; shutdown_all()
+                    # gets another chance during app teardown.
+                    if not w.wait(2000):
+                        print(f"[server] {attr} still stopping; leaving it alive")
+                        continue
+                setattr(self, attr, None)
+            except Exception:
+                pass

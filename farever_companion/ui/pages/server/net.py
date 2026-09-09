@@ -1,7 +1,8 @@
 """Network plumbing for the Server diagnostics page.
 
 Hardcoded region/host data, the Windows TCP-table scanner, DNS/GeoIP lookups
-and flag pixmaps. Everything here is pure function/data — no widget state.
+flag pixmaps, and the table-cell factory the two capture tables share. All of
+it is stateless: no widget of its own, just the pieces the page's tables need.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import struct
 import urllib.request
 from pathlib import Path
 
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ....config import config_dir
 
@@ -355,6 +356,27 @@ def _get_ip_country(ip: str) -> tuple[str, str]:
         pass
 
     return "Unknown", ""
+
+
+def table_cell(txt, color=None, bold=False, icon_code=None):
+    """A centred table cell, optionally coloured, bold and country-flagged.
+
+    The ping table and the connection-capture table each defined this inner
+    factory, one copy per table, so a tweak to one table missed the other.
+    `str(txt)` keeps the capture table's int cells working."""
+    it = QtWidgets.QTableWidgetItem(str(txt))
+    it.setTextAlignment(QtCore.Qt.AlignCenter)
+    if color:
+        it.setForeground(QtGui.QColor(color))
+    if bold:
+        f = it.font()
+        f.setBold(True)
+        it.setFont(f)
+    if icon_code:
+        pm = _get_flag_pixmap(icon_code, 16)
+        if pm:
+            it.setIcon(QtGui.QIcon(pm))
+    return it
 
 
 def _get_flag_pixmap(code: str, size: int = 24):

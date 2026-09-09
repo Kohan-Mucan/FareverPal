@@ -27,14 +27,39 @@ class POI:
     def dist2d(self, x: float, y: float) -> float:
         return math.hypot(self.x - x, self.y - y)
 
+# Kinds whose POI rows include per-instance scenery, not just the world
+# marker. The 2026-09-11 game-data regen reclassified every interior prop
+# (DungeonExit_*, POI_Dungeon_*_CheckpointZone_*, BeeHive_HoneyStackPlatform*,
+# Rift_Gate_*, Rift_Bonus_Chest_*, Monolith_*, …) as `dungeon`/`rift`, taking
+# those kinds from 14 rows (12 dungeon + 2 rift entrances) to 243. The extras
+# carry instance-local coordinates that overlap the overworld map, so plotting
+# them plastered the minimap with dungeon/rift icons. A real entrance is the
+# row that names the activity it opens (or at least a display name).
+_ENTRANCE_KINDS = ("dungeon", "rift")
+
+
+def _is_world_poi(m: dict) -> bool:
+    """False for a dungeon/rift scenery row that is not a real entrance."""
+    if m.get("sub_kind") not in _ENTRANCE_KINDS:
+        return True
+    return bool(m.get("target_activity") or m.get("name"))
+
+
 @lru_cache(maxsize=1)
 def load_pois() -> list[POI]:
-    """All POIs from compiled raw data with valid world positions."""
+    """All world POIs from compiled raw data with valid world positions.
+
+    Dungeon/rift rows are reduced to their entrance markers (see
+    `_is_world_poi`); obelisks, respawn points, vendors and soulstones are
+    returned as-is.
+    """
     from ..data import cdb
     out = []
     for m in cdb.lines("poi_locs"):
         wp = m.get("world_pos")
         if not wp or "x" not in wp or "y" not in wp:
+            continue
+        if not _is_world_poi(m):
             continue
         out.append(POI(
             id=m.get("id", ""),

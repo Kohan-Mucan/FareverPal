@@ -8,11 +8,11 @@ Owns the single shared LiveModel so every overlay reads one source of truth.
 from __future__ import annotations
 
 import datetime
+import os
 import time
 from collections import deque
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from shiboken6 import isValid as _is_valid
 
 from . import theme
 from . import components as C
@@ -21,24 +21,24 @@ from .page_history import PageHistory
 from .overlay_manager import OverlayManager
 from .game_attach import GameAttachmentController
 from .workers import CallWorker
-from .account import AccountMixin
 from .pages.combat_page import CombatPageMixin
-from .pages.speedrun_page import SpeedrunPageMixin
-from .pages.friends_page import FriendsPageMixin
+from .pages.pb_page import PBPageMixin
+from .pages.party_page import PartyPageMixin
 from .pages.overlays import OverlaysPageMixin
 from .pages.codex import CodexPageMixin
 from .pages.craft import CraftPageMixin
 from .pages.items import ItemPageMixin
 from .pages.settings import SettingsPageMixin
 from .pages.log import LogPageMixin
-from .pages.collection import CollectionPageMixin
-from .pages.server_page import ServerPageMixin
+from .pages.server.page import ServerPageMixin
 
 # Modularized auxiliary mixins
-from .rift_box import ClickFrame, RiftSidebarMixin
+from .rift_box import RiftSidebarMixin
 from .memory_reclaimer import _trim_working_set, MemoryReclaimerMixin
+from .shutdown import ShutdownMixin
 from .updater_ui import UpdaterMixin
 from .entity_visibility import EntityVisibilityMixin
+from .dps_background_tick import DpsBackgroundTickMixin, PowerKeepAlive
 
 from ..config import Settings
 from ..core.proc import backend_name
@@ -46,73 +46,60 @@ from ..core import updater
 from ..data import icons
 from .. import __version__
 
-# nav: key, icon, label
-NAV = [
-    ("overlays", "layers", "Overlays"),
-    ("settings", "settings", "Settings"),
-    ("codex", "layout", "Codex"),
-    ("combat", "swords", "Combat & DPS"),
-    ("speedrun", "timer", "Speedrun"),
-    ("gear", "box", "Gear"),
-    ("craft", "settings", "Craft"),
-    ("collection", "archive", "Collection"),
-    ("friends", "users", "Friends"),
-    ("server", "broadcast", "Server Ping"),
-    ("log", "terminal", "Log"),
-    # git-ignored dev icon-preview tool; only shown in dev/run mode
-    ("devicons", "eye", "Dev Icons"),
-]
-
-
-def filtered_nav(settings: Settings) -> list:
-    """Nav entries the user may see: sign-in gating is applied live by
-    _refresh_nav_visibility, this drops the pages the user disabled
-    (Settings → Pages) so they never appear or build."""
-    disabled = set(getattr(settings, "disabled_pages", []) or [])
-    return [(k, i, l) for k, i, l in NAV if k not in disabled and k != "log"]
-
-
-def dev_icons_enabled() -> bool:
-    """Dev-only icon-preview page gate: only visible in dev/run mode, never in a frozen build."""
-    import sys
-    if getattr(sys, "frozen", False):
-        return False
-    try:
-        import importlib.util
-        return importlib.util.find_spec("farever_companion.ui.pages.devicons") is not None
-    except Exception:
-        return False
+# The sidebar registry (keys, icons, labels) plus its two predicates now live
+# in ui/nav_registry.py; re-exported here because the Settings → Pages tab and
+# tests import them from this module.
+from .nav_registry import (NAV, filtered_nav, dev_icons_enabled,  # noqa: F401
+                           load_dev_page)
 
 
 STEAM_RUN_URL = "steam://rungameid/3672400"
 
+# Event types the app-wide filter (ControlPanel.eventFilter) reacts to, as
+# plain ints. The filter is installed on the QApplication, so it runs for
+# EVERY event the process delivers — building one Settings sub-tab fires
+# thousands of them — and resolving the QEvent enum members plus building the
+# membership tuple on each call was ~30% of every page build (measured
+# 2026-09-27: 4020 calls / 25 ms of a 77 ms DPS tab build). Comparing hoisted
+# ints through one frozenset test keeps the filter to a dict lookup.
+_QEV_MOUSE_MOVE = int(QtCore.QEvent.MouseMove)
+_QEV_MOUSE_PRESS = int(QtCore.QEvent.MouseButtonPress)
+_QEV_MOUSE_RELEASE = int(QtCore.QEvent.MouseButtonRelease)
+_QEV_KEY_PRESS = int(QtCore.QEvent.KeyPress)
+_QEV_WHEEL = int(QtCore.QEvent.Wheel)
+_QEV_IDLE_TYPES = frozenset((_QEV_MOUSE_MOVE, _QEV_MOUSE_PRESS,
+                             _QEV_MOUSE_RELEASE, _QEV_KEY_PRESS, _QEV_WHEEL))
 
-class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPageMixin,
+
+class ControlPanel(CombatPageMixin, PBPageMixin, PartyPageMixin,
                    OverlaysPageMixin, CodexPageMixin,
                    ItemPageMixin, CraftPageMixin,
-                   CollectionPageMixin, SettingsPageMixin,
+                   SettingsPageMixin,
                    ServerPageMixin, LogPageMixin,
                    RiftSidebarMixin, MemoryReclaimerMixin,
                    UpdaterMixin, EntityVisibilityMixin,
+                   DpsBackgroundTickMixin,
+                   # closeEvent and the two saves it must do first. Last
+                   # before QMainWindow so its super().closeEvent(e) chains
+                   # straight through to the real window teardown.
+                   ShutdownMixin,
                    QtWidgets.QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.s = settings
+        self._power_keepalive = PowerKeepAlive()
         self._log_buffer: deque[str] = deque(maxlen=200)
+        # Alert sounds report a dropped burst into this same log, so an audio
+        # glitch names itself (which tone, how many, why) instead of having to
+        # be tracked down from the noise.
+        from ..runtime.sound import set_sound_logger
+        set_sound_logger(self.log)
         self.attach_ctl = GameAttachmentController(settings, self)
         self.overlay_mgr = OverlayManager(settings, self)
         self.overlay_mgr.log.connect(self.log)
         self.overlay_mgr.request_page.connect(self._select_nav)
         self.overlay_mgr.request_page.connect(self._raise_self)
         self._nav_items: dict[str, C.NavItem] = {}
-        # friends + presence
-        self._friends: list = []
-        self._friends_worker: CallWorker | None = None
-        # collection tracker
-        self._col_owned: set = set()
-        self._col_pending_add: set = set()
-        self._col_pending_remove: set = set()
-        self._col_worker: CallWorker | None = None
         self._last_hidden_unit: tuple[str, str] | None = None
         self._last_hidden_comp: tuple[str, str] | None = None
         self._nav_history = PageHistory(self._select_nav)
@@ -120,7 +107,15 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
 
         self.setWindowTitle("Farever Pal")
         self.setMinimumSize(1000, 640)
-        self.resize(1180, 740)
+        # 1400, not the old 1180: the nav sidebar takes 212px, and the Combat
+        # page's own minimum is ~1130px, so anything under about 1340 opens
+        # into a page the rail does not fit in. It used to open at 1180, which
+        # is 160px short — the rail overflowed the page and was clipped at the
+        # window edge, silently, taking the tail of the skills table with it.
+        # The minimum stays at 1000: below ~1340 the Combat page hides the rail
+        # and gives the width to the roster, which is a graceful answer rather
+        # than a truncated one.
+        self.resize(1400, 860)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -132,17 +127,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
 
         self._select_nav("overlays")
 
-        # system-wide hotkeys (work while game-focused)
-        from .hotkeys import GlobalHotkeys
-        self.hotkeys = GlobalHotkeys(QtWidgets.QApplication.instance())
-        self.hotkeys.triggered.connect(self._on_hotkey)
-        self._register_hotkeys()
-
-        # Friends presence: heartbeat + list refresh (app open = "online").
-        self._friends_timer = QtCore.QTimer(self)
-        self._friends_timer.setInterval(45_000)
-        self._friends_timer.timeout.connect(self._friends_poll)
-        self._refresh_friends_gating()
         self._refresh_nav_visibility()
 
         # Auto-attach watcher (in the controller)
@@ -165,6 +149,17 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         self._mem_timer.timeout.connect(self._memory_tick)
         self._mem_timer.start()
 
+        # DPS live tick: the tracker must drain even when neither the Top DPS
+        # overlay (10 Hz tick) nor the Combat tab (page refresh) is on screen.
+        # Without it events pile up undrained for seconds and archive as 0.0s
+        # fights (a full burst consumed in one gulp). Runs on a plain worker
+        # thread, NOT a Qt timer: Windows stretches/suspends a backgrounded
+        # window's timers (the 2026-09-19 gulp) but cannot throttle an OS
+        # thread — see DpsDrainWorker. 1 Hz is plenty (lull windows are 6s+);
+        # sharing one tracker keeps every surface consistent, and the
+        # tracker's non-blocking update guard serializes the two drivers.
+        self._start_dps_drain()
+
         QtCore.QTimer.singleShot(3000, _trim_working_set)
 
         # Self-update check
@@ -173,6 +168,17 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         self._update_check_worker: CallWorker | None = None
         self._update_dl_worker: CallWorker | None = None
         self._updating = False
+        # The check reaches the release oracle and the install path needs a
+        # frozen exe, so `check_updates` decides by MODE: "Always" polls even
+        # here in a source run, "Packaged only" (the default) only where an
+        # update could be installed, "Never" never - the opt-out a packaged
+        # build could not express while this was a boolean. Settings -> Dev
+        # owns the picker, and `_on_update_found` raises the sidebar pill. An
+        # unset or unreadable value reads as the default, which is what keeps a
+        # source run (and the test suite) off the network.
+        if updater.should_check(getattr(self.s, "check_updates", None),
+                                updater.is_frozen()):
+            self._start_update_check()
 
         self.log(f"Read-only. Memory backend: {backend_name()}. Press Attach "
                  "(if another memory tool is running, unload it first to avoid "
@@ -200,9 +206,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
     def overlays(self) -> dict:
         return self.overlay_mgr.overlays
 
-    @property
-    def _overlay_cards(self) -> dict:
-        return self.overlay_mgr.cards
 
     # --- controller signal handlers ---------------------------------------
     def _set_locating(self, on: bool):
@@ -214,6 +217,9 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                 model.damage.log_line = self.log
             if hasattr(model, "dps") and model.dps:
                 model.dps.log_line = self.log
+            # Game attached: exempt the process from Windows background
+            # timer throttling while we hold it (DPS drain lives on timers).
+            self._power_keepalive.acquire()
         self.overlay_mgr.set_model(model)
         idx = self.stack.currentIndex()
         order = [k for k, _, _ in NAV]
@@ -223,17 +229,20 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                 self._refresh_entity_page()
 
     def _on_detaching(self):
+        self._power_keepalive.release()
         self.overlay_mgr.close_all()
-
     def _refresh_nav_visibility(self):
-        """Show/hide nav items: sign-in gated pages + user-disabled pages."""
-        signed_in = bool(self.s.account_token)
+        """Show/hide nav items: the user-disabled pages (Settings → Pages)."""
         disabled = set(getattr(self.s, "disabled_pages", []) or [])
         for key, item in self._nav_items.items():
             if key == "log":
                 item.setVisible(False)
-            elif key in ("friends", "collection"):
-                item.setVisible(signed_in and key not in disabled)
+            elif key == "devicons":
+                # Owned by _apply_sidebar_element_visibility (show_devicons +
+                # the dev gate): the generic rule below would force it visible
+                # whenever it isn't in disabled_pages, making the toggle
+                # decorative.
+                continue
             else:
                 item.setVisible(key not in disabled)
         if not hasattr(self, "stack"):
@@ -242,7 +251,7 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         order = [k for k, _, _ in NAV]
         if 0 <= idx < len(order):
             current_key = order[idx]
-            if current_key in ("friends", "collection") and not signed_in or current_key in disabled:
+            if current_key in disabled:
                 self._select_nav("overlays")
 
     # --- sidebar ---------------------------------------------------------
@@ -285,7 +294,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         lay.addWidget(self._build_launch_button())
         lay.addWidget(self._build_sidebar_footer())
 
-        self._refresh_account_button()
         self._apply_sidebar_element_visibility()
         self._set_status(False, "detached")
         return bar
@@ -295,7 +303,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         targets = (
             ("show_rift_box", getattr(self, "_rift_box", None)),
             ("show_launch_button", getattr(self, "_launch_btn", None)),
-            ("show_account_button", getattr(self, "_acct_container", None)),
             ("show_log", getattr(self, "_log_btn", None)),
         )
         for attr, w in targets:
@@ -328,13 +335,11 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         return launch
 
     def _build_sidebar_footer(self):
-        """Bottom of the sidebar: account button above attach-status strip."""
+        """Bottom of the sidebar: the attach-status strip."""
         foot = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(foot)
         v.setContentsMargins(0, 10, 0, 0)
         v.setSpacing(8)
-        self._acct_container = self._build_account_host()
-        v.addWidget(self._acct_container)
         line = QtWidgets.QFrame()
         line.setFixedHeight(1)
         line.setStyleSheet(f"background:{theme.BORDER};border:0;")
@@ -390,32 +395,27 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
     def _scroll(self, inner):
         return make_scroll(inner)
 
-    def _build_statusstrip(self):
-        strip = QtWidgets.QFrame()
-        strip.setObjectName("StatusStrip")
-        strip.setFixedHeight(28)
-        lay = QtWidgets.QHBoxLayout(strip)
-        lay.setContentsMargins(16, 0, 16, 0)
-        lay.setSpacing(10)
-        dot = QtWidgets.QFrame()
-        dot.setFixedSize(8, 8)
-        dot.setStyleSheet(f"background:{theme.ACCENT};border:0;")
-        self._strip_left = QtWidgets.QLabel()
-        self._strip_left.setObjectName("Mono")
-        right = QtWidgets.QLabel("DOCS   SUPPORT   API")
-        right.setObjectName("Mono")
-        lay.addWidget(dot)
-        lay.addWidget(self._strip_left)
-        lay.addStretch(1)
-        lay.addWidget(right)
-        self._refresh_strip()
-        return strip
-
-    def _refresh_strip(self):
-        self._strip_left.setText(
-            f"READ-ONLY · BACKEND: {backend_name().upper()}")
 
     # --- nav -------------------------------------------------------------
+    # NAV key -> the builder that lazily assembles that page. Spelled out by
+    # hand rather than rebuilt at the call site as f"_page_{key}": a name scan
+    # (ai/workspace/buffy/dead_scan.py and the hygiene censuses) cannot see a
+    # name that lives only inside an f-string, so these builders read as dead /
+    # "kept alive only by a doc" when they are in fact how each page is built.
+    _PAGE_BUILDERS = {
+        "overlays": "_page_overlays",
+        "settings": "_page_settings",
+        "codex": "_page_codex",
+        "combat": "_page_combat",
+        "pb": "_page_pb",
+        "party": "_page_party",
+        "gear": "_page_gear",
+        "craft": "_page_craft",
+        "server": "_page_server",
+        "log": "_page_log",
+        "devicons": "_page_devicons",
+    }
+
     def _nav_order(self) -> list:
         return [k for k, _, _ in NAV]
 
@@ -434,7 +434,8 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         cur_target = self._current_page()
         self._nav_history.record(cur_target, target)
         if not self._pages_built.get(key, False):
-            page_fn = getattr(self, f"_page_{key}", None)
+            builder = self._PAGE_BUILDERS.get(key)
+            page_fn = getattr(self, builder, None) if builder else None
             if page_fn:
                 if key not in ("log", "server", "gear", "craft", "settings", "devicons", "combat"):
                     w = self._scroll(page_fn())
@@ -466,12 +467,12 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                     self._items_tabs.setCurrentText(sub)
                     self._items_set_mode(sub, record_history=False)
             elif key == "settings" and hasattr(self, "_settings_tabs"):
-                self._on_settings_tab(sub)
+                self._on_settings_tab(sub, record_history=False)
             elif key == "codex" and hasattr(self, "_codex_tabs"):
                 tab, _sep, view = sub.partition(":")
                 if self._codex_tabs.currentText() != tab:
                     self._codex_tabs.setCurrentText(tab)
-                    self._codex_tab_changed(0)
+                    self._codex_tab_changed(0, record_history=False)
                 if tab == "Collection" and view:
                     v_low = view.lower()
                     if v_low in ("chests", "orbs") and hasattr(self, "_set_dungeon_view_mode"):
@@ -485,12 +486,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                     if v_low in ("list", "soulstones", "mobs"):
                         self._set_dungeon_view_mode(v_low)
 
-        if key in ("friends", "speedrun") and self.s.account_token:
-            if hasattr(self, "_friends_timer") and not self._friends_timer.isActive():
-                self._friends_timer.start()
-            self._friends_poll()
-        if key == "collection" and self.s.account_token:
-            self._col_pull()
         if key == "entity" and hasattr(self, "_refresh_entity_page"):
             self._refresh_entity_page()
         if key == "settings" and hasattr(self, "_refresh_settings_page"):
@@ -503,6 +498,11 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                 self._select_live_combat()
             except Exception:
                 pass
+        if key == "pb" and hasattr(self, "_pb_refresh"):
+            try:
+                self._pb_refresh()
+            except Exception:
+                pass
         if key == "codex" and hasattr(self, "_refresh_codex_grid"):
             if not sub and hasattr(self, "_sync_codex_to_current_zone"):
                 self._sync_codex_to_current_zone()
@@ -510,17 +510,22 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         if key == "server" and hasattr(self, "_fetch_steam_player_count"):
             self._fetch_steam_player_count()
 
-        if key in ("gear", "craft", "collection") and not getattr(self, "_tiles_prewarmed", False):
+        if key in ("gear", "craft") and not getattr(self, "_tiles_prewarmed", False):
             self._tiles_prewarmed = True
             QtCore.QTimer.singleShot(400, self._prewarm_icon_cache)
 
         self._refresh_rift_box_selected()
 
     def _page_devicons(self):
-        """Lazily build Dev Icons preview page."""
+        """Lazily build the Dev Icons preview page.
+
+        The page is a dev-only tool that lives outside this package
+        (build_tools/dev/), so it is loaded from its file path — never a package
+        import, and absent entirely in a frozen build.
+        """
         try:
-            from .pages.devicons import DevIconsPage
-            return DevIconsPage(self, self.s)
+            devicons = load_dev_page("devicons")
+            return devicons.DevIconsPage(self, self.s)
         except Exception as exc:
             lbl = QtWidgets.QLabel(f"Dev Icons page failed to load:\n{exc}")
             lbl.setObjectName("Muted")
@@ -585,33 +590,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         v.setSpacing(16)
         return page, v
 
-    # --- global hotkeys --------------------------------------------------
-    def _register_hotkeys(self):
-        res = []
-        for action, key in (("sr_toggle", self.s.hotkey_speedrun_toggle),
-                            ("sr_reset", self.s.hotkey_speedrun_reset)):
-            ok = self.hotkeys.set_binding(action, key)
-            res.append(f"{action}={key}" + ("" if ok else " (FAILED — combo taken?)"))
-        self.log("Hotkeys: " + " · ".join(res))
-
-    def _set_hotkey(self, attr, seq):
-        self._set(attr, seq.toString())
-        self._register_hotkeys()
-
-    def _on_hotkey(self, action):
-        if action in ("sr_toggle", "sr_reset"):
-            ov = self.overlays.get("speedrun")
-            if ov is None:
-                self.log(f"Speedrun hotkey '{action}' — open the Speedrun overlay first.")
-                return
-            if action == "sr_toggle":
-                ov.toggle()
-                self.log("Speedrun: " + ("started" if ov.timer.state == "running"
-                                         else f"stopped @ {ov.timer.elapsed():.2f}s"))
-            else:
-                ov.reset()
-                self.log("Speedrun: reset")
-
     # --- Settings sync ---------------------------------------------------
     def _set(self, attr, value):
         setattr(self.s, attr, value)
@@ -626,7 +604,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
             app.setStyleSheet(theme.QSS)
         self._restyle_accent()
         self.overlay_mgr.apply_accent(color)
-        self._sync_accent_to_account()
 
     def _restyle_accent(self):
         from .components import (SectionHeader, Stepper, NavItem,
@@ -639,9 +616,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
                     FilterChip, ChoiceChips):
             for w in self.findChildren(cls):
                 w.restyle()
-        if self.s.account_token and getattr(self, "_avatar_pm", None) is None \
-                and hasattr(self, "_acct_btn"):
-            self._acct_btn.setIcon(QtGui.QIcon(self._account_avatar_pixmap(20)))
         for w in self.findChildren(QtWidgets.QWidget):
             w.update()
 
@@ -651,15 +625,37 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
     def _set_lock(self, on):
         self.overlay_mgr.set_lock(on)
 
-    def _set_snap_mouse(self, on: bool) -> None:
-        self._set("snap_mouse_to_player", on)
-        self.log("Mouse snapping ENABLED." if on else "Mouse snapping disabled.")
-
     # --- Process + overlays ----------------------------------------------
     def log(self, msg: str):
+        """One Activity Log line: ``HH:MM:SS  <msg>``.
+
+        Thread-safe by construction. Every capture engine logs from its own
+        thread — the bridge's UDP loop writes the first ten hits and a health
+        line every 50 events, the DLL-free scanner and the tracker's roster
+        lines log from theirs — and a QWidget may only be written on the GUI
+        thread. That off-thread `appendPlainText` is what corrupted Qt's state
+        and faulted later in an unrelated allocation (access violation in
+        QThread.__init__ while the bridge was mid-fight, 2026-09-25). A foreign
+        thread therefore hands the message to the queued bridge and returns;
+        the GUI thread re-enters here with it and does the widget write.
+        """
+        if QtCore.QThread.currentThread() is not self.thread():
+            self._threadsafe_log(msg)
+            return
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         line = f"{ts}  {msg}"
         self._log_buffer.append(line)
+        # Hand the tail to the dev crash log's pre-allocated buffer, so a
+        # hard crash lands next to what the app was DOING — the Activity Log
+        # lives only in RAM, and the 2026-09-28 stack overflows each died
+        # beside a dump that named nothing. The buffer write is a list slice
+        # + one bytes build (a few µs); the fault path itself only reads it.
+        if os.environ.get("FAREVER_DEV_CRASH_LOG", "").strip():
+            try:
+                from ..runtime import crash_log
+                crash_log.set_activity_tail(list(self._log_buffer))
+            except Exception:
+                pass
         if self._widget_alive(getattr(self, "log_view", None)):
             self.log_view.appendPlainText(line)
 
@@ -688,26 +684,47 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         super().changeEvent(event)
 
     def eventFilter(self, obj, event):
-        """Mouse BACK/FORWARD in the main window walks page history."""
-        et = event.type()
-        if et in (QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress,
-                  QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.KeyPress,
-                  QtCore.QEvent.Wheel):
+        """Mouse BACK/FORWARD walks pane, sub-tab, and page history universally.
+
+        Installed on the QApplication, so this is the hottest Python in the
+        process — it sees every event from every widget, including the ones a
+        half-built Settings page fires while it lays itself out. Only a mouse
+        press can change behaviour, so everything else returns straight after
+        the idle-timestamp bookkeeping instead of walking the isinstance /
+        super() tail (QObject.eventFilter's default return, which is False).
+        """
+        et = int(event.type())
+        if et in _QEV_IDLE_TYPES:
             self._last_interaction = time.monotonic()
-        if (event.type() == QtCore.QEvent.MouseButtonPress
-                and isinstance(obj, QtWidgets.QWidget)
-                and obj.window() is self):
-            step = {QtCore.Qt.MouseButton.XButton1: self._nav_history.back,
-                    QtCore.Qt.MouseButton.XButton2: self._nav_history.forward}.get(event.button())
-            if step:
-                cur = self.stack.currentWidget()
+        if et != _QEV_MOUSE_PRESS or not isinstance(obj, QtWidgets.QWidget):
+            return False
+        btn = event.button()
+        if btn == QtCore.Qt.MouseButton.XButton1:
+            win = obj.window()
+            if isinstance(win, QtWidgets.QDialog):
+                win.reject()
+                return True
+            # Check widget hierarchy upwards for any widget defining consume_pane_back()
+            w = obj
+            while w is not None:
+                fn = getattr(w, "consume_pane_back", None)
+                if callable(fn) and fn():
+                    return True
+                if w.isWindow():
+                    break
+                w = w.parentWidget()
+            if win is self:
+                cur = self.stack.currentWidget() if hasattr(self, "stack") and self.stack else None
                 if cur is not None and getattr(cur, "consume_pane_back", lambda: False)():
                     return True
-                step(self._current_page())
+                if hasattr(self, "consume_pane_back") and self.consume_pane_back():
+                    return True
+                self._nav_history.back(self._current_page())
                 return True
-        if not isinstance(obj, QtCore.QObject):
-            return False
-        return super().eventFilter(obj, event)
+        elif btn == QtCore.Qt.MouseButton.XButton2 and obj.window() is self:
+            self._nav_history.forward(self._current_page())
+            return True
+        return False
 
     def _current_page(self) -> str | None:
         """The active page key, with its sub-view when one is readable."""
@@ -777,13 +794,6 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         self.attach_ctl.detach()
         _trim_working_set()
 
-    def _center(self, widget):
-        w = QtWidgets.QWidget()
-        lay = QtWidgets.QHBoxLayout(w)
-        lay.setContentsMargins(6, 2, 6, 2)
-        lay.addWidget(widget)
-        lay.addStretch(1)
-        return w
 
     def _prewarm_icon_cache(self) -> None:
         try:
@@ -794,28 +804,3 @@ class ControlPanel(AccountMixin, CombatPageMixin, SpeedrunPageMixin, FriendsPage
         except Exception:
             pass
 
-    def closeEvent(self, e):
-        try:
-            self.hotkeys.clear()
-            self._friends_timer.stop()
-        except Exception:
-            pass
-        for attr in ("_friends_worker", "_col_worker", "_update_check_worker", "_update_dl_worker"):
-            worker = getattr(self, attr, None)
-            if worker is not None:
-                try:
-                    if hasattr(worker, "stop"):
-                        worker.stop(800)
-                    else:
-                        worker.requestInterruption()
-                        worker.quit()
-                        worker.wait(800)
-                except Exception:
-                    pass
-                setattr(self, attr, None)
-        try:
-            self._server_cleanup()
-        except Exception:
-            pass
-        self.detach()
-        super().closeEvent(e)

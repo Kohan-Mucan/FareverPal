@@ -199,7 +199,7 @@ def test_mob_rows_group_with_names():
     the authored mob names (each name widget's tooltip carries its own locs)."""
     body = drops.build_drops_body(idata.shown_drops("SmallPouch"))
     labels = _expanded_labels(body)
-    mobs = next(l for l in labels if l.startswith("MOBS · 8"))
+    mobs = next(l for l in labels if l.startswith("MOBS · "))
     assert "Manfish mobs" in mobs and "Slime King" in mobs, mobs
     # the vendor rows stay full-width and visible (never in the expander)
     lbl = next(l for l in labels if l.startswith("MOBS"))
@@ -362,6 +362,8 @@ def test_loc_preview_is_short():
         assert locs, "Kobold mobs location preview not found"
         loc = locs[0]
         assert loc.toolTip() == ""   # no mouse-over tooltips on Items
+        # the group's zone union grew again with the newest spawn data
+        # (8 zones, first two shown)
         assert loc.text() == "Munster's Crossing · Gorgon's Hollow +6", \
             loc.text()
     finally:
@@ -377,7 +379,9 @@ def test_mount_drops_come_from_the_codex_card():
     owl = drops.codex_drop_rows("Glider_Owl_Brown02")
     assert len(owl) == 1
     assert owl[0]["kind"] == "npc" and owl[0]["source"] == "Perina Wann"
-    assert owl[0]["locs"] == ["Navelin"] and owl[0].get("codex")
+    # the 2026-10-01 data refresh resolves the vendor's spot to the ZONE name
+    # (Primevalley) rather than the town (Navelin); both are the same stall
+    assert owl[0]["locs"] == ["Primevalley"] and owl[0].get("codex")
     wolf = drops.codex_drop_rows("Mount_Wolf_02")
     assert wolf and all(d["kind"] == "unit" for d in wolf)
     assert wolf[0]["source"] == "Alpha Wolf"
@@ -431,7 +435,7 @@ def test_codex_mount_vendor_row_skips_rare_tag():
     try:
         texts = ([l.text() for l in host.findChildren(QtWidgets.QLabel)]
                  + [b.text() for b in host.findChildren(QtWidgets.QPushButton)])
-        assert "Perina Wann" in texts and "Navelin" in texts, texts
+        assert "Perina Wann" in texts and "Primevalley" in texts, texts
         assert not any("RARE" in t for t in texts), texts
         btn = next(b for b in host.findChildren(QtWidgets.QPushButton)
                    if b.text() == "Perina Wann")
@@ -457,8 +461,7 @@ def test_codex_target_resolution():
     assert drops._codex_target(perina, item_id="Glider_Owl_Brown02") == \
         "Glider_Owl_Brown02"
     # an item without a codex card keeps the vendor-card target
-    assert drops._codex_target(perina, item_id="Sword_Start") == \
-        "TODO_StableMaster"
+    assert drops._codex_target(perina, item_id="Sword_Start") ==         "TODO_StableMaster"
     slime = {"kind": "unit", "source": "Slime King",
              "source_id": "TODO_Slime_King", "boss": False}
     assert drops._codex_target(slime) == "TODO_Slime_King"
@@ -541,14 +544,83 @@ def test_perina_row_is_a_codex_link():
     assert btn.toolTip() == ""   # no mouse-over tooltips on Items
     btn.click()
     assert calls == [("Mount_Goat_01", "Perina Wann")]
-    # same row without item_id still falls back to the vendor's card
-    calls2 = []
+    # without item_id there is no card to fall back to: the vendor's own codex
+    # card (TODO_StableMaster) is gone from the current data, so the row is
+    # drawn without a link rather than firing a dead click.
     body2 = drops.build_drops_body(
-        idata.shown_drops("Mount_Goat_01"),
-        on_codex_click=lambda uid, nm: calls2.append((uid, nm)))
+        idata.shown_drops("Mount_Goat_01"))
     ws2 = _widgets(body2)
-    btn2 = next((b for w in ws2
-                 for b in w.findChildren(QtWidgets.QPushButton)
-                 if b.text() == "Perina Wann"), None)
-    btn2.click()
-    assert calls2 == [("TODO_StableMaster", "Perina Wann")]
+    assert not any(b.text() == "Perina Wann"
+                   for w in ws2
+                   for b in w.findChildren(QtWidgets.QPushButton))
+
+
+def test_card_scroll_pins_a_short_card_to_the_top(_qapp):
+    """QScrollArea centers a short widget by default, which left short
+    detail cards (and their item names) floating mid-pane — CardScroll pins
+    the card to the top instead."""
+    from PySide6 import QtCore
+    from farever_companion.ui.pages.items import support
+
+    card = QtWidgets.QWidget()
+    lay = QtWidgets.QVBoxLayout(card)
+    lay.addWidget(QtWidgets.QLabel("Short card"))
+    lay.addStretch(1)
+    sc = support.CardScroll(card)
+    assert sc.alignment() & QtCore.Qt.AlignTop
+    host = QtWidgets.QWidget()
+    hl = QtWidgets.QVBoxLayout(host)
+    hl.addWidget(sc)
+    host.resize(500, 600)
+    host.show()
+    try:
+        for _ in range(10):
+            QtCore.QCoreApplication.processEvents()
+        assert card.height() < sc.viewport().height()
+        assert card.y() == 0
+    finally:
+        host.close()
+
+
+def test_vendor_drop_icon_uses_the_codex_card_sprite():
+    """A vendor drop row's icon comes from the vendor's codex CARD `icon`
+    field, not its `TODO_*` unit id: the id names the card, and drawing it
+    straight hit no atlas entry — every Guild Merchant / Stable Master row
+    (the weapon vendors) rendered the bare placeholder box. Pinned to the
+    EXACT sprite, so falling back to the generic npc marker is not a pass."""
+    from farever_companion.data import icons
+    guild = drops._plain_icon({"kind": "npc",
+                               "source_id": "WanderingMerchant_Npc_Azuram"})
+    assert guild.toImage() == icons.pixmap(
+        "Units", "WanderingMerchant", 32).toImage(), \
+        "Guild Merchant did not draw the WanderingMerchant sprite"
+    perina = drops._plain_icon({"kind": "npc",
+                                "source_id": "MountTamer_NPC_1"})
+    assert perina.toImage() == icons.pixmap(
+        "Units", "StableMaster", 32).toImage(), \
+        "Stable Master did not draw the StableMaster sprite"
+
+
+def test_vendor_sprite_resolves_through_the_codex_card():
+    """The Merchants view / cache rows share the chain: the codex card's
+    `icon` field names the real atlas key (TODO_WanderingMerchant -> the
+    WanderingMerchant art), so a Guild Merchant wears a face rather than the
+    shop marker."""
+    assert drops.vendor_sprite("WanderingMerchant_Npc_Azuram",
+                               "Guild Merchant") == "WanderingMerchant"
+    assert drops.vendor_sprite("MountTamer_NPC_1",
+                               "Perina Wann") == "StableMaster"
+
+
+def test_heroic_set_piece_lists_its_boss_not_a_blank_line():
+    """A hero-mode Epic set piece the scan never gave rows shows the boss
+    that guarantees it on its `<boss>_HM` loot table — name and dungeon
+    sub-line — instead of the detail card's 'No drop sources found.'
+    fallback."""
+    host = QtWidgets.QWidget()
+    host.setLayout(drops.build_drops_body(idata.shown_drops("Back_EBee_AssCle")))
+    widgets = (host.findChildren(QtWidgets.QLabel)
+               + host.findChildren(QtWidgets.QPushButton))
+    texts = " ".join(w.text() for w in widgets)
+    assert "Queen Honeyzabeth" in texts, texts
+    assert "Cleodoras Nest" in texts, texts

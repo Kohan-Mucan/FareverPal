@@ -12,7 +12,8 @@ stays under the project's 800-line UI budget:
 - card.py       CodexUnitCard widget
 - map.py        CodexZoneMapCanvas widget
 
-ControlPanel composes the resulting CodexPageMixin into its base list.
+`control_panel.py` imports `CodexPageMixin` from here and mixes it into its base
+list; no page imports another page's package.
 """
 from .page import CodexPageBase
 from .grid import CodexGridMixin

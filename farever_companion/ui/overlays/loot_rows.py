@@ -7,9 +7,8 @@ the dungeon's loot sweep); the Entity HUD calls the builder directly.
 """
 from __future__ import annotations
 
-from PySide6 import QtGui, QtCore
-
 from .. import theme
+from ...data import icons
 from .entity_rows import RowSpec
 
 _RARITY_RANK = {"Legendary": 4, "Epic": 3, "Rare": 2, "Uncommon": 1,
@@ -66,8 +65,9 @@ def build_loot_specs(drops, xyz, floor: str, is_tracked, track,
         col = theme.rarity_color(rar) if rar else "#4ADE80"
         pos_key = f"{nd.x:.1f},{nd.y:.1f},{nd.z:.1f}|{label}"
         tracked = is_tracked("pos", pos_key)
+        icon_sheet = icons.map_icon_sheet(iid)
         specs.append(RowSpec(
-            "item", iid, col, label,
+            icon_sheet, iid, col, label,
             acc if tracked else col,
             value=f"{_drop_dist(nd):>6.0f}m",
             bold=tracked, highlight=tracked,
@@ -83,24 +83,12 @@ def build_loot_specs(drops, xyz, floor: str, is_tracked, track,
 
 
 class DungeonLootMixin:
-    """Dungeon HUD: titlebar loot toggle + the LOOT section builder (delegates
-    the row math to build_loot_specs)."""
+    """Dungeon HUD: the LOOT section builder (delegates the row math to
+    build_loot_specs).
 
-    # --- titlebar toggle ---------------------------------------------------
-    def set_show_loots(self, on: bool):
-        self.s.dungeon_show_loots = bool(on)
-        self.s.save()
-        self._update_loot_btn()
-        self._tick()
-
-    def _update_loot_btn(self) -> None:
-        from ...data import icons
-        on = getattr(self.s, "dungeon_show_loots", True)
-        self._loot_btn.setIcon(QtGui.QIcon(icons.ui_icon(
-            "box" if on else "eye-off",
-            self.s.hud_accent if on else theme.MUTED, 18)))
-        self._loot_btn.setIconSize(QtCore.QSize(18, 18))
-        self._loot_btn.setToolTip("Show loot" if on else "Hide loot")
+    The titlebar loot toggle moved to the overlay's data-driven section
+    buttons (dungeon_overlay._SECTION_TOGGLES, 2026-09-18) — loot_specs still
+    honors dungeon_show_loots so the section hides itself."""
 
     # --- specs -------------------------------------------------------------
     def loot_specs(self, isz: int) -> list[RowSpec] | None:

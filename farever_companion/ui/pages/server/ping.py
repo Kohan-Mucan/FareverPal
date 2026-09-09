@@ -3,15 +3,51 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from ... import theme
 from ....config import config_dir
-from .cards import ClickableCard
 from .net import (
     REGIONS, _STATUS_COLORS, _default_hosts_for, _download_flag, _get_flag_pixmap,
+    table_cell,
 )
 from .workers import _PingWorker
+
+
+class _RegionCard(QtWidgets.QFrame):
+    """Clickable region card for the ping tester grid: toggles on left-click
+    and restyles itself accent/dim. Lives here because ping.py is its only
+    consumer (formerly a separate ping_cards module)."""
+    toggled = QtCore.Signal(str, bool)
+
+    def __init__(self, code, parent=None):
+        super().__init__(parent)
+        self.code = code
+        self.active = True
+        self.setObjectName("Card")
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.update_style()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.active = not self.active
+            self.update_style()
+            self.toggled.emit(self.code, self.active)
+        super().mousePressEvent(event)
+
+    def update_style(self):
+        if self.active:
+            self.setStyleSheet(
+                "QFrame#Card { border: 1.5px solid " + theme.ACCENT + "; background-color: rgba(56, 189, 248, 0.08); border-radius: 6px; }"
+                "QFrame#Card:hover { background-color: rgba(56, 189, 248, 0.15); }"
+                "QLabel { color: " + theme.TEXT + "; }"
+            )
+        else:
+            self.setStyleSheet(
+                "QFrame#Card { border: 1px solid #334155; background-color: rgba(15, 23, 42, 0.2); border-radius: 6px; }"
+                "QFrame#Card:hover { border-color: #475569; background-color: rgba(15, 23, 42, 0.4); }"
+                "QLabel { color: #64748b; }"
+            )
 
 
 class PingPanelMixin:
@@ -154,7 +190,7 @@ class PingPanelMixin:
             card["widget"].show()
 
     def _build_ping_card(self, region):
-        card = ClickableCard(region["code"])
+        card = _RegionCard(region["code"])
         card.setMinimumWidth(100)
         card.toggled.connect(self._save_card_states)
 
@@ -202,7 +238,7 @@ class PingPanelMixin:
             return
 
         menu = QtWidgets.QMenu(self)
-        menu.addAction(f"Diagnostic Trace", lambda: self._start_trace(ip_item.text(), "tracert"))
+        menu.addAction("Diagnostic Trace", lambda: self._start_trace(ip_item.text(), "tracert"))
         menu.addSeparator()
         copy_action = menu.addAction(f"Copy IP ({ip_item.text()})")
         selected = menu.exec_(self._ping_table.viewport().mapToGlobal(pos))
@@ -344,20 +380,7 @@ class PingPanelMixin:
                     "font-size:11px;font-weight:bold;color:" + _STATUS_COLORS["fail"] + ";background:transparent;")
 
         # 2. Show failures too, with a clear reason (DNS dead vs no response)
-        def cell(txt, color=None, bold=False, icon_code=None):
-            it = QtWidgets.QTableWidgetItem(txt)
-            it.setTextAlignment(QtCore.Qt.AlignCenter)
-            if color:
-                it.setForeground(QtGui.QColor(color))
-            if bold:
-                f = it.font()
-                f.setBold(True)
-                it.setFont(f)
-            if icon_code:
-                pm = _get_flag_pixmap(icon_code, 16)
-                if pm:
-                    it.setIcon(QtGui.QIcon(pm))
-            return it
+        cell = table_cell
 
         region = next((r for r in REGIONS if r["code"] == code), None)
         lbl = region["label"] if region else code

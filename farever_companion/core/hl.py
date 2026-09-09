@@ -48,6 +48,7 @@ class Hl:
         self._str_cache: dict[int, str | None] = {}
         self._anc_cache: dict[int, frozenset[str]] = {}
         self._field_off_cache: dict[tuple[int, str], int | None] = {}
+        self._field_type_cache: dict[tuple[int, str], int | None] = {}
 
     # --- primitives ------------------------------------------------------
     def ptr(self, addr: int) -> int | None:
@@ -67,6 +68,13 @@ class Hl:
     def i32(self, addr: int) -> int:
         try:
             return self.proc.i32(addr)
+        except OSError as e:
+            raise ProcError(str(e)) from e
+
+    def u8(self, addr: int) -> int:
+        """One raw byte (the Haxe `Bool` / Int8 fields, e.g. ent.Unit.isInCombat)."""
+        try:
+            return self.proc.read(addr, 1)[0]
         except OSError as e:
             raise ProcError(str(e)) from e
 
@@ -95,61 +103,81 @@ class Hl:
         self._name_cache[type_ptr] = name
         return name
 
+    # --- type unwrapping / chains ----------------------------------------
+    def _unwrap_type(self, tp: int) -> tuple[int, int]:
+        """`(concrete type ptr, hl_type kind)` for `tp`, HNULL unwrapped.
+
+        A slot holding a class value is wrapped in an HNULL type (kind 15)
+        whose +8 slot points at the real type. The wrapper is not itself
+        HOBJ/HSTRUCT, so every walk has to unwrap before reading; and when the
+        inner pointer is not a class either, the wrapper is treated as a
+        struct with `tp` left alone - its +8 slot is then the inner pointer,
+        which is what the readers below take it for."""
+        kind = self.i32(tp)
+        if kind == 15:
+            inner_tp = self.ptr(tp + 8)
+            if inner_tp:
+                inner_kind = self.i32(inner_tp)
+                if inner_kind in (_HOBJ, _HSTRUCT):
+                    return inner_tp, inner_kind
+                return tp, _HSTRUCT
+        return tp, kind
+
+    def _chain(self, tp: int, limit: int = 16):
+        """Yield `(type ptr, hl_type_obj ptr)` up the super-chain from `tp`.
+
+        Ends on a non-class kind, a cycle, `limit` levels, or an unreadable
+        pointer - fail closed, the way each caller did inline. One walk, so
+        the unwrap and the super step exist once for all of them."""
+        seen: set[int] = set()
+        while is_ptr(tp) and tp not in seen and len(seen) < limit:
+            seen.add(tp)
+            try:
+                tp, kind = self._unwrap_type(tp)
+                if kind not in (_HOBJ, _HSTRUCT):
+                    return
+                obj_ptr = self.u64(tp + 8)
+                super_tp = self.u64(obj_ptr + TO_SUPER)
+            except ProcError:
+                return
+            yield tp, obj_ptr
+            tp = super_tp
+
+    def _concrete(self, type_ptr: int) -> tuple[int, int] | None:
+        """The one `(type ptr, hl_type_obj ptr)` for `type_ptr`, or None when
+        it is not a readable HOBJ/HSTRUCT (HNULL unwrapped first)."""
+        return next(self._chain(type_ptr, limit=1), None)
+
+    def _chain_names(self, tp: int, limit: int = 16) -> list[str]:
+        """Class names up the super-chain from `tp`; `?` for an unreadable one."""
+        names: list[str] = []
+        try:
+            for _tp, obj_ptr in self._chain(tp, limit):
+                names.append(self._read_utf16(self.u64(obj_ptr + TO_NAME)) or "?")
+        except ProcError:
+            pass
+        return names
+
     def _resolve_type_name(self, type_ptr: int) -> str | None:
         if not is_ptr(type_ptr):
             return None
+        concrete = self._concrete(type_ptr)
+        if concrete is None or not is_ptr(concrete[1]):
+            return None
         try:
-            kind = self.i32(type_ptr)
-            if kind == 15:  # HNULL unwrapping
-                inner_tp = self.ptr(type_ptr + 8)
-                if inner_tp:
-                    inner_kind = self.i32(inner_tp)
-                    if inner_kind in (_HOBJ, _HSTRUCT):
-                        type_ptr = inner_tp
-                        kind = inner_kind
-                    else:
-                        kind = _HSTRUCT
-            if kind not in (_HOBJ, _HSTRUCT):
-                return None
-            obj_ptr = self.u64(type_ptr + 8)
-            if not is_ptr(obj_ptr):
-                return None
-            name_ptr = self.u64(obj_ptr + TO_NAME)
-            if not is_ptr(name_ptr):
-                return None
-            return self._read_utf16(name_ptr)
+            name_ptr = self.u64(concrete[1] + TO_NAME)
         except ProcError:
             return None
+        if not is_ptr(name_ptr):
+            return None
+        return self._read_utf16(name_ptr)
 
     def class_of(self, instance: int) -> str | None:
         tp = self.ptr(instance)
         return self.type_name(tp) if tp is not None else None
 
     def super_chain(self, instance: int, limit: int = 16) -> list[str]:
-        names: list[str] = []
-        tp = self.ptr(instance)
-        seen = set()
-        while tp and tp not in seen and len(names) < limit:
-            seen.add(tp)
-            try:
-                kind = self.i32(tp)
-                if kind == 15:  # HNULL unwrapping
-                    inner_tp = self.ptr(tp + 8)
-                    if inner_tp:
-                        inner_kind = self.i32(inner_tp)
-                        if inner_kind in (_HOBJ, _HSTRUCT):
-                            tp = inner_tp
-                            kind = inner_kind
-                        else:
-                            kind = _HSTRUCT
-                if kind not in (_HOBJ, _HSTRUCT):
-                    break
-                obj_ptr = self.u64(tp + 8)
-                names.append(self._read_utf16(self.u64(obj_ptr + TO_NAME)) or "?")
-                tp = self.u64(obj_ptr + TO_SUPER)
-            except ProcError:
-                break
-        return names
+        return self._chain_names(self.ptr(instance), limit)
 
     def is_a(self, instance: int, ancestor: str) -> bool:
         """True if `instance`'s class is, or descends from, `ancestor`."""
@@ -162,30 +190,7 @@ class Hl:
         cached = self._anc_cache.get(type_ptr)
         if cached is not None:
             return cached
-        names: list[str] = []
-        tp = type_ptr
-        seen = set()
-        while tp and tp not in seen and len(names) < 16:
-            seen.add(tp)
-            try:
-                kind = self.i32(tp)
-                if kind == 15:  # HNULL unwrapping
-                    inner_tp = self.ptr(tp + 8)
-                    if inner_tp:
-                        inner_kind = self.i32(inner_tp)
-                        if inner_kind in (_HOBJ, _HSTRUCT):
-                            tp = inner_tp
-                            kind = inner_kind
-                        else:
-                            kind = _HSTRUCT
-                if kind not in (_HOBJ, _HSTRUCT):
-                    break
-                obj_ptr = self.u64(tp + 8)
-                names.append(self._read_utf16(self.u64(obj_ptr + TO_NAME)) or "?")
-                tp = self.u64(obj_ptr + TO_SUPER)
-            except ProcError:
-                break
-        result = frozenset(names)
+        result = frozenset(self._chain_names(type_ptr))
         self._anc_cache[type_ptr] = result
         return result
 
@@ -196,22 +201,12 @@ class Hl:
         """Declared field names of an object type (own fields only), in order."""
         if not is_ptr(type_ptr):
             return []
+        concrete = self._concrete(type_ptr)
+        if concrete is None:
+            return []
         try:
-            kind = self.i32(type_ptr)
-            if kind == 15:  # HNULL unwrapping
-                inner_tp = self.ptr(type_ptr + 8)
-                if inner_tp:
-                    inner_kind = self.i32(inner_tp)
-                    if inner_kind in (_HOBJ, _HSTRUCT):
-                        type_ptr = inner_tp
-                        kind = inner_kind
-                    else:
-                        kind = _HSTRUCT
-            if kind not in (_HOBJ, _HSTRUCT):
-                return []
-            obj_ptr = self.u64(type_ptr + 8)
-            n = self.i32(obj_ptr)
-            fields = self.u64(obj_ptr + TO_FIELDS)
+            n = self.i32(concrete[1])
+            fields = self.u64(concrete[1] + TO_FIELDS)
         except ProcError:
             return []
         if not is_ptr(fields) or not (0 <= n < 4096):
@@ -223,6 +218,38 @@ class Hl:
                 out.append(self._read_utf16(name_ptr) or "?")
             except ProcError:
                 break
+        return out
+
+    def field_type_ptr(self, type_ptr: int, name: str) -> int | None:
+        """Declared type pointer of field `name`, searching the super-chain.
+
+        The HL field table stores {name, type, hash} per field, so a type's own
+        layout can be enumerated from the *type* alone — no live instance
+        needed. The config-slot resolver uses this to learn what
+        st.GameLayer.config points at (2026-09-19: the calibrated slot moved
+        and the old candidate landed on an unrelated object). Cached by
+        (type_ptr, name); None when the field or its declared type is
+        unreadable."""
+        key = (type_ptr, name)
+        if key in self._field_type_cache:
+            return self._field_type_cache[key]
+        out: int | None = None
+        try:
+            for _tp, obj_ptr in self._chain(type_ptr, limit=32):
+                n = self.i32(obj_ptr)
+                fields = self.u64(obj_ptr + TO_FIELDS)
+                if is_ptr(fields) and 0 < n < 4096:
+                    for i in range(n):
+                        base = fields + i * FIELD_STRIDE
+                        if (self._read_utf16(self.u64(base)) or "") == name:
+                            t = self.u64(base + 8)
+                            out = t if is_ptr(t) else None
+                            break
+                    if out is not None:
+                        break
+        except ProcError:
+            out = None
+        self._field_type_cache[key] = out
         return out
 
     def field_offset(self, type_ptr: int, name: str) -> int | None:
@@ -245,26 +272,9 @@ class Hl:
         # fields up the chain, then reverse. The HL runtime numbers fields the
         # same way, so a name's position here is its global field index.
         levels: list[list[str]] = []
-        tp = type_ptr
-        seen: set[int] = set()
         try:
-            while is_ptr(tp) and tp not in seen and len(levels) < 32:
-                seen.add(tp)
-                kind = self.i32(tp)
-                if kind == 15:  # HNULL unwrapping
-                    inner_tp = self.ptr(tp + 8)
-                    if inner_tp:
-                        inner_kind = self.i32(inner_tp)
-                        if inner_kind in (_HOBJ, _HSTRUCT):
-                            tp = inner_tp
-                            kind = inner_kind
-                        else:
-                            kind = _HSTRUCT
-                if kind not in (_HOBJ, _HSTRUCT):
-                    break
-                obj_ptr = self.u64(tp + 8)
+            for tp, _obj_ptr in self._chain(type_ptr, limit=32):
                 levels.append(self.field_names(tp))
-                tp = self.u64(obj_ptr + TO_SUPER)
         except ProcError:
             return None
         global_names = [n for lvl in reversed(levels) for n in lvl]
@@ -275,12 +285,7 @@ class Hl:
         # Read the byte offset from the concrete type's runtime layout table.
         try:
             # Re-resolve the concrete type in case the original was HNULL-wrapped.
-            concrete_tp = type_ptr
-            kind = self.i32(concrete_tp)
-            if kind == 15:
-                inner_tp = self.ptr(concrete_tp + 8)
-                if inner_tp and self.i32(inner_tp) in (_HOBJ, _HSTRUCT):
-                    concrete_tp = inner_tp
+            concrete_tp = self._unwrap_type(type_ptr)[0]
             obj_ptr = self.u64(concrete_tp + 8)
             rt = self.u64(obj_ptr + TO_RUNTIME)
             if not is_ptr(rt):

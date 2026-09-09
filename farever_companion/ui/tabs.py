@@ -83,6 +83,18 @@ class UnderlineTabs(QtWidgets.QWidget):
         self._current: str | None = None
         self.setCurrentText(current or (options[0] if options else ""))
 
+    def set_tab_visible(self, text: str, visible: bool) -> None:
+        """Show/hide one tab button.
+
+        For a tab whose content only applies to certain runs (Settings' "Dev"),
+        hiding the button is enough: the stack keeps every tab's index, so the
+        page's lazy builder and its stored indices are untouched. Picking the
+        hidden tab by name still works, which is what the dev-run tests use.
+        """
+        b = self._btns.get(text)
+        if b is not None:
+            b.setVisible(bool(visible))
+
     def _pick(self, text: str) -> None:
         if text != self._current:
             self.setCurrentText(text)

@@ -4,6 +4,32 @@ import re
 import zlib
 from pathlib import Path
 
+# The compiler is STANDALONE: it has to run with the app package unimportable,
+# because it is the thing that GENERATES part of that package. So the shared
+# game rules (unit-flag bits, the premium-id / guild-merchant predicates, the
+# codex kind sets, the rating labels, the payload-pure item derivations) live in
+# `game_rules.py` beside this file, and the app reads a GENERATED copy of it:
+# `_bundle_shared_rules` writes that copy into the package on every build. The
+# app's own modules keep importing the rules exactly as before (their current
+# homes re-export them), so no call site moved.
+#
+# The only app-side knowledge left in this file is PACKAGE_DIRNAME below — the
+# one place the package's directory name is written down.
+from game_rules import (
+    RATING_ATTR_LABELS, SPARK_PROXY_FLAG_BIT, UNIQUE_FLAG_BIT, crafted_item_ids,
+    heroic_boss_items, is_guild_merchant_source, is_no_codex, is_premium_shop_id,
+    is_special_flag, is_unreleased_kind, recipe_output_ids_from_payload,
+    shop_item_ids_from_payload)
+
+#: The app package's directory name — written down ONCE, here, because the
+#: compiler may not import the package to ask. `tests/test_compiler.py` pins it
+#: against the real directory and against the runtime's `paths.data_root()`, so
+#: a rename has to move all three or fail loudly.
+PACKAGE_DIRNAME = "farever_companion"
+
+#: The canonical shared-rules leaf, bundled into the package on every build.
+RULES_SOURCE = Path(__file__).resolve().parent / "game_rules.py"
+
 
 def _embed_shim(stem: str, payload: dict) -> str:
     """Render a self-contained loader shim for `stem`.
@@ -76,19 +102,117 @@ def _payload_meta() -> dict:
     }
 
 
-def _write_embedded_data(output_dir: Path, stem: str, payload: dict, dev_dir: Path) -> None:
-    """Write {stem}.py (embedded payload) plus {stem}.json as a dev-only copy.
-    The readable JSON lands in `dev_dir` (the gitignored tmp_preview/ folder),
-    keeping the shipped module dir free of loose plain-text data."""
+def _write_embedded_data(output_dir: Path, stem: str, payload: dict,
+                         dev_dir: Path | None = None) -> None:
+    """Write {stem}.py (embedded payload), plus {stem}.json as a dev-only
+    copy when `dev_dir` is given (opt-in via compiler --dev-copy). Without
+    it only the shim is written — no tmp_preview/ output, keeping the
+    shipped module dir free of loose plain-text data either way."""
     payload = dict(payload)
     payload["__meta__"] = _payload_meta()
     p = output_dir / f"{stem}.py"
     p.write_text(_embed_shim(stem, payload), encoding="utf-8")
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if dev_dir is None:
+        print(f"Written: {p.name} ({len(raw) / 1024:.0f} KB)")
+        return
     dev_dir.mkdir(parents=True, exist_ok=True)
     json_p = dev_dir / f"{stem}.json"
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     json_p.write_bytes(raw)
     print(f"Written: {p.name} (+{json_p.name} dev copy in {dev_dir.name}/, {len(raw) / 1024:.0f} KB)")
+
+
+# --- the shared-rules bundle ------------------------------------------------#
+# `game_rules.py` (beside this file) is the canonical home of the rules the app
+# and the build both spell. The app cannot import a root-level module, so the
+# build bundles it into the package as `rules.py`. Two properties matter:
+#
+#   * the banner is COMMENTS, not a docstring — `from __future__ import
+#     annotations` stays the first statement after the copy's own module
+#     docstring, so the bundled file still parses;
+#   * no timestamp, for the same reason `_payload_meta` has none: the copy is a
+#     pure function of `game_rules.py`, so rebuilding unchanged rules is
+#     byte-identical and the test below can pin the two together.
+_RULES_BANNER = '''\
+# -*- coding: utf-8 -*-
+# GENERATED FILE - DO NOT EDIT.
+#
+# The app's copy of the shared game rules, bundled from `game_rules.py` at the
+# repo root by `compiler.py` on every build. The rules live OUTSIDE the app
+# package so the build can load them without that package being importable (the
+# build is what generates it), and the app keeps importing them here.
+#
+# Edit `game_rules.py` and rebuild: an edit to THIS file is reverted by the next
+# `python compiler.py`, and `tests/test_compiler.py` fails while the two differ.
+
+'''
+
+
+def bundled_rules_source() -> str:
+    """The exact text of the app's `rules.py`: the banner plus `game_rules.py`."""
+    return _RULES_BANNER + RULES_SOURCE.read_text(encoding="utf-8")
+
+
+def _bundle_shared_rules(package_dir: Path) -> Path:
+    """Write the shared-rules copy into the app package; returns the path.
+
+    Called from `__main__` (the entry point `build-mod.bat` and
+    `Update_Raw_Data.bat` use) and deliberately NOT from `compile_to_py`, whose
+    contract is that it writes only under the `output_file` it is handed — a
+    test asserts that, and a caller compiling into a tmp dir must not be able to
+    touch the checkout.
+    """
+    p = package_dir / "rules.py"
+    p.write_text(bundled_rules_source(), encoding="utf-8")
+    return p
+
+def _prune_entries(rows, using_atlas: bool) -> list:
+    """Strip the per-row gfx/icon fallbacks once the atlas carries them."""
+    if not using_atlas:
+        return rows
+    for row in rows:
+        row.pop("gfx", None)
+        row.pop("icon", None)
+    return rows
+
+
+def _write_data_file(output_dir: Path, filename: str, data_dict: dict,
+                     dev_dir: Path | None, using_atlas: bool) -> None:
+    """Write one shim.
+
+    The payload is embedded inside the shim module itself as zlib+base85
+    compressed JSON: that keeps each raw_X.py a single self-contained file and
+    import fast (one zlib.decompress + json.load, ~5x faster than the old
+    Python literal), and `from . import raw_X; raw_X.DATA` keeps working
+    everywhere (dev + frozen) without touching any consumer.
+    """
+    stem = Path(filename).stem
+    payload = {}
+    for key, val in data_dict.items():
+        if key in ["units", "items", "skills", "lootTable"]:
+            val = _prune_entries(val, using_atlas)
+        payload[key] = val
+    _write_embedded_data(output_dir, stem, payload, dev_dir)
+
+
+def _load_atlas_map(atlas_dir: Path, category: str) -> dict:
+    """atlas_<category>*.json, merged.
+
+    Merge ALL matching files (multi-sheet packs: atlas_items_01.json,
+    atlas_items_02.json, ...) instead of returning the first one found.
+    """
+    merged = {}
+    for ap in sorted(atlas_dir.glob(f"atlas_{category}*.json")):
+        if not ap.exists():
+            continue
+        try:
+            content = json.loads(ap.read_text(encoding="utf-8"))
+            if isinstance(content, dict):
+                merged.update(content)
+        except Exception:
+            continue
+    return merged
+
 
 def _collection_source(entry: dict) -> str:
     """Human-readable acquisition source for a derived collection row,
@@ -124,44 +248,112 @@ def _collection_source(entry: dict) -> str:
 
 
 # Cash-shop / early-access premium id pattern — mirrors the runtime authority
-# (farever_companion/data/codex.py's _SHOP_ID_RE / is_shop_item). shop.json is
-# the canonical list once the dump ships it; until then the id pattern is the
-# only signal. Kept in sync with the runtime by test_collection.py's
-# cross-check (every catalog shop row must be obtainable).
-_SHOP_ID_RE = re.compile(r"(?i)(_ea_|earlyaccess|^spark)")
+# (farever_companion/data/codex.py's _SHOP_ID_RE / is_shop_item). The runtime's
+# canonical shop set is derived from the item drops index's vendor rows
+# (sources.shop_item_ids()), and `_compiled_shop_ids` below derives the SAME set
+# from the same JSON; this pattern only backstops ids the drops index never
+# records as a shop offer. (The dead shop.json sheet was retired 2026-10-05:
+# the dump never shipped it, so raw_shop was a placeholder.) The pattern
+# itself is `rules.PREMIUM_SHOP_ID_RE`, applied through
+# `rules.is_premium_shop_id` below rather than restated here.
 
+def _compiled_shop_ids(data_new: Path, data_clean: Path) -> frozenset[str]:
+    """The drops index's shop-ONLY id set, derived exactly as the runtime does.
 
-def _load_shop_ids(data_clean: Path, data_new: Path) -> set[str]:
-    """Cash-shop / early-access item ids from shop.json (empty set until the
-    dump ships it — callers fall back to _SHOP_ID_RE)."""
-    shop_p = data_new / "shop.json"
-    if not shop_p.exists():
-        shop_p = data_clean / "shop.json"
-    if not shop_p.exists():
-        return set()
+    `rules.shop_item_ids_from_payload` is the single implementation of the
+    predicate (the runtime's `shop_item_ids()` calls that same function over the
+    live payload), and the compiler imports it from the stdlib-only leaf rather
+    than from `data.items.sources` — the data layer must not be importable at
+    build time. The index is read here because the collection catalog is built
+    ~480 lines before the drops shim is written, and the crafted-id set comes
+    from the same payload plus the craft.json recipe outputs. Missing index ->
+    empty set, matching the runtime's own `frozenset()` fallback.
+    """
+    drops_p = data_new / "item_drops.json"
+    if not drops_p.exists():
+        drops_p = data_clean / "item_drops.json"
+    if not drops_p.exists():
+        return frozenset()
     try:
-        rows = json.loads(shop_p.read_text(encoding="utf-8"))
-        if isinstance(rows, dict):
-            # accept the game's native sheet shape ({"lines": [...]}) as well
-            # as the plain {"shop": [...]} / {"items": [...]} wrappers
-            rows = (rows.get("shop") or rows.get("items")
-                    or rows.get("rows") or rows.get("lines") or [])
-        if isinstance(rows, list):
-            return {str(r.get("id")) for r in rows
-                    if isinstance(r, dict) and r.get("id")}
+        drops = json.loads(drops_p.read_text(encoding="utf-8"))
     except Exception:
-        pass
-    return set()
+        return frozenset()
+    return shop_item_ids_from_payload(
+        drops, crafted_item_ids(drops, _recipe_output_ids(data_new, data_clean)))
+
+
+def _recipe_output_ids(data_new: Path, data_clean: Path) -> frozenset[str]:
+    """Ids any recipe produces, from craft.json — the payload-pure derivation
+    in `rules` (the runtime reaches the same function through `craft`'s rows),
+    so a change cannot drift. Missing sheet -> empty set, matching the
+    runtime's lazy fallback."""
+    craft_p = data_new / "craft.json"
+    if not craft_p.exists():
+        craft_p = data_clean / "craft.json"
+    if not craft_p.exists():
+        return frozenset()
+    try:
+        lines = json.loads(craft_p.read_text(encoding="utf-8")).get("lines", [])
+    except Exception:
+        return frozenset()
+    return recipe_output_ids_from_payload(lines)
+
+
+def _stamp_heroic_boss_edges(drops_data: dict, loot_rows) -> None:
+    """Add the heroic boss edge to items the live scan recorded NO rows for.
+
+    The scan records drop ROLLS; it never saw the boss -> `<boss>_HM` edge, so
+    an Epic `_E<Faction>` set piece a heroic boss guarantees had no `drops`
+    row and its card read "No drop sources found." The lootTable sheet is the
+    ground truth (game_rules.heroic_boss_items) and the compiler already holds
+    it, so stamp the edge here and every consumer of the compiled index sees
+    it — not just the one card that used to read the sheet live.
+
+    Only items with NO recorded rows are touched: whatever the scan captured
+    stays exactly as it is, so this can neither drop nor rewrite a real roll.
+    The boss source / `_HM` table are appended to the index only if missing,
+    so existing indices are untouched.
+    """
+    items = drops_data.get("items") or {}
+    tables_by_id = heroic_boss_items(loot_rows)
+    if not items or not tables_by_id:
+        return
+    sources = drops_data.setdefault("_sources", [])
+    tables = drops_data.setdefault("_tables", [])
+    sidx = {s.get("id"): i for i, s in enumerate(sources)}
+    tidx = {t: i for i, t in enumerate(tables)}
+    for tid, rolled in tables_by_id.items():
+        boss = tid[:-3]
+        si = sidx.get(boss)
+        if si is None:
+            si = len(sources)
+            sources.append({"id": boss, "kind": "unit", "name": boss})
+            sidx[boss] = si
+        ti = tidx.get(tid)
+        if ti is None:
+            ti = len(tables)
+            tables.append(tid)
+            tidx[tid] = ti
+        for iid in rolled:
+            it = items.get(iid)
+            if not isinstance(it, dict) or it.get("drops"):
+                continue          # no row of its own -> stamp; else leave alone
+            it["drops"] = [{"l": -1, "p": 0.01, "s": si, "t": ti}]
 
 
 def _collection_catalog_from_codex(data_clean: Path, data_new: Path,
                                    item_rows: list,
                                    ach_rewards: dict | None = None,
-                                   shop_ids: set[str] | None = None) -> dict | None:
+                                   shop_ids: frozenset[str] = frozenset()
+                                   ) -> dict | None:
     """Derive the collection catalog (mounts / gliders / wild companions) from
     codex.json. Row ids stay the canonical game ids, so account sync and the
     website keep matching. Returns None when the codex is unavailable, letting
-    the caller fall back to {}."""
+    the caller fall back to {}.
+
+    `shop_ids` is the drops index's shop-only set (`_compiled_shop_ids`); a row
+    in it counts as obtainable even though codex.json flags it 'unreleased'.
+    """
     codex_p = data_clean / "codex.json"
     if not codex_p.exists():
         codex_p = data_new / "codex.json"
@@ -202,17 +394,21 @@ def _collection_catalog_from_codex(data_clean: Path, data_new: Path,
         # 'unreleased' (its scanner doesn't know about either), but both ARE
         # obtainable in-game — mirror the codex payload's reflag (kind ->
         # 'achievement' for coords-less rewards) and the runtime's
-        # is_shop_item (shop.json ids + the premium id pattern) so the
-        # catalog agrees with the Codex Collection views instead of listing
-        # them [unreleased].
+        # is_shop_item (the drops index's shop-only set OR the premium id
+        # pattern) so the catalog agrees with the Codex Collection views
+        # instead of listing them [unreleased].
         is_ach_reward = bool(ach_rewards and eid in ach_rewards)
-        is_shop = eid in (shop_ids or ()) or bool(_SHOP_ID_RE.search(eid))
+        # The same union the runtime's codex.is_shop_item applies: the drops
+        # index's shop-only set OR the premium id pattern. Checking only the
+        # pattern (before this) dropped every drops-index shop row whose id
+        # carries no premium token.
+        is_shop = eid in shop_ids or is_premium_shop_id(eid)
         row = {
             "id": eid,
             "name": entry.get("name") or eid,
             "category": cat,
             "subtype": subtype or cat[:-1].capitalize(),
-            "obtainable": (entry.get("kind") or "").lower() != "unreleased"
+            "obtainable": not is_unreleased_kind(entry.get("kind"))
                           or (is_ach_reward and not coords)
                           or is_shop,
             "source": _collection_source(entry),
@@ -226,6 +422,373 @@ def _collection_catalog_from_codex(data_clean: Path, data_new: Path,
             row["coords"] = coords
         rows.append(row)
     return {"version": "codex", "items": rows}
+
+
+# --- per-sheet compilation --------------------------------------------------#
+# One builder per sheet family. These used to be inline in compile_to_py, which
+# grew to ~1150 lines doing every sheet by hand; each builder takes its inputs
+# and returns the rows its sheets contribute, so the pipeline below reads as
+# the list of things it compiles.
+
+# The fields each standard sheet keeps (names resolve into the rows; texts and
+# gfx are handled per sheet name in _compile_standard_sheets).
+SHEET_FIELDS = {
+    "units": ["id", "type", "lvl", "maxLvl", "faction", "flags"],
+    "unitType": ["id", "name", "lootTable"],
+    # props: only gearUpgrades is read (data/items/stats.py). The rest of the
+    # subtree (generationChance/iLevelBonus/sellPriceFactor) ships unread -
+    # ratcheted into the hygiene suite's baked-key census; an older comment
+    # here claimed it "feeds the loot predictor", but no loot predictor
+    # exists in the tree.
+    "rarity": ["id", "color", "props"],
+    # parent/type ride along: geo/zones.py resolves each
+    # SubLocation (type 2) to its parent Location via
+    # zone_parent_map(), and that read has no loose-sheet
+    # fallback in the frozen build.
+    "zone": ["id", "name", "parent", "type"],
+    "items": ["id", "rarity", "type"],
+    "skills": ["id", "type", "nature"],
+    # Tuning constants (GearUpgrades material costs, WorldLootLevel, ...)
+    "constant": ["id", "v"],
+    # Luck counters (the Soulwell buffs' per-stack chance math): only
+    # the `luckParams` block is a tunable, and only the five Luck_*
+    # rows carry one, so most rows bake as bare ids. data/soulwell.py
+    # is the reader.
+    "counter": ["id", "luckParams"],
+}
+
+# Hardcoded fallback region names
+KNOWN_REGION_NAMES = {
+    "Z1_Region": "Skover Island",
+    "Z2_Region": "Valley of Eternal Autumn",
+    "Z3_Region": "Crimson Island",
+    "CrimsonIsland_Region": "Crimson Island",
+}
+
+
+def _unit_type_names(data_new: Path) -> tuple[dict, dict]:
+    """`(names, gfx)` from unitType.json — what a unit row falls back to naming
+    itself by when its own sheet carries no name."""
+    ut_p = data_new / "unitType.json"
+    ut_names = {}
+    ut_gfx = {}
+    if ut_p.exists():
+        ut_raw = json.loads(ut_p.read_text(encoding="utf-8"))
+        for r in ut_raw.get("lines", []):
+            if r.get("name"): ut_names[r["id"]] = r["name"]
+            if r.get("gfx"): ut_gfx[r["id"]] = r["gfx"]
+    return ut_names, ut_gfx
+
+
+def _named_boss_ids(data_new: Path) -> set:
+    """Units whose id matches a loot-table id — the only "this is a boss"
+    signal the unit sheet has, and the row pruning below must keep them."""
+    named_boss_ids = set()
+    lt_p = data_new / "lootTable.json"
+    if lt_p.exists():
+        try:
+            lt_raw = json.loads(lt_p.read_text(encoding="utf-8"))
+            named_boss_ids = {r["id"] for r in lt_raw.get("lines", [])}
+        except: pass
+    return named_boss_ids
+
+
+def _compile_standard_sheets(data_new: Path, data_clean: Path,
+                             unit_region_map: dict) -> dict:
+    """Compile the standard sheets, narrowed to the fields the app reads.
+
+    The per-name handling is where each sheet's shape is decided: unit rows get
+    a resolved name and region, item rows get their buff-status refs, and skill
+    rows carry everything the description resolver touches (the loose
+    skill.json is a compile input only and is not bundled — see
+    FareverPal.spec). Returns {sheet name: rows}.
+    """
+    ut_names, ut_gfx = _unit_type_names(data_new)
+    named_boss_ids = _named_boss_ids(data_new)
+    out: dict[str, list] = {}
+    for name, fields in SHEET_FIELDS.items():
+        # Mapping plural internal names to singular CDB filenames
+        json_name = "unit" if name == "units" else name.rstrip('s') if name in ["items", "skills"] else name
+        p = data_new / f"{json_name}.json"
+        if not p.exists():
+            p = data_clean / f"{json_name}.json"
+
+        if p.exists():
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            rows = []
+            for line in raw.get("lines", []):
+                uid = line.get("id")
+                fl = line.get("flags", 0)
+                # Skip compiling units the sheet marks as not-for-codex
+                # (Dummy, the internal `_Z*D_` variants, the portal)
+                if name == "units" and is_no_codex(fl):
+                    continue
+                
+                # Aggressive Pruning: Skip non-boss/non-unique internal unit types
+                if name == "units":
+                    utype = line.get("type")
+                    is_special = is_special_flag(fl) or (uid in named_boss_ids)
+                    if utype in ("Totem", "Environment", "Trigger", "Marker") and not is_special:
+                        continue
+
+                # Only include fields that have a value
+                row = {f: line[f] for f in fields if line.get(f) is not None}
+                
+                # Bake the name directly into the row to save runtime logic
+                if name in ["units", "items", "skills"]:
+                    row["name"] = (line.get("texts") or {}).get("name") or line.get("name")
+                    if name == "skills":
+                        # Skill-description resolver fields: data/skills.py
+                        # resolves the ::token:: descriptions from the FULL
+                        # row (texts.desc + texts.refs for ::ref_*:: slots,
+                        # vars, scalar cooldown/duration, the first step's
+                        # range — plus texts.rankDescs and props.rankOverride
+                        # for rank-aware text). The loose skill.json is a
+                        # compile input only (not bundled — see
+                        # FareverPal.spec), so these fields must ride in the
+                        # shim for the item page's weapon-skills section to
+                        # resolve descriptions in the frozen build. Pruned
+                        # to exactly what the resolver touches (~31 KB
+                        # compressed vs 138 KB for the full rows).
+                        texts = line.get("texts") or {}
+                        t = {}
+                        for k in ("name", "desc", "refs", "rankDescs"):
+                            if texts.get(k) is not None:
+                                t[k] = texts[k]
+                        if t:
+                            row["texts"] = t
+                        # rank resolution: props.rankOverride (per-rank
+                        # var/prop overrides) + the scalar props templates
+                        # read (::charges::, ::duration:: ...)
+                        props = line.get("props") or {}
+                        p = {}
+                        if props.get("rankOverride"):
+                            p["rankOverride"] = props["rankOverride"]
+                        p.update({k: v for k, v in props.items()
+                                  if k != "rankOverride"
+                                  and isinstance(v, (int, float))})
+                        if p:
+                            row["props"] = p
+                        if line.get("vars"):
+                            row["vars"] = line["vars"]
+                        if line.get("cooldown") is not None:
+                            row["cooldown"] = line["cooldown"]
+                        if line.get("duration") is not None:
+                            row["duration"] = line["duration"]
+                        # step pruning: keep range + the move step's
+                        # duration (data/skills.skill_moves reads them for
+                        # the base-chain wind-up / reach lines)
+                        steps = [{k: s[k] for k in ("range", "duration")
+                                  if s.get(k) is not None}
+                                 for s in (line.get("steps") or [])
+                                 if s.get("range") is not None
+                                 or s.get("duration") is not None]
+                        if steps:
+                            row["steps"] = steps
+                    if name == "units":
+                        if not row.get("name"):
+                            row["name"] = ut_names.get(line.get("type"), "")
+                        
+                        # Region assignment: Priority 1: World placement, Priority 2: Dungeon flag, Priority 3: Zone fallback
+                        uid = line.get("id")
+                        rid = unit_region_map.get(uid)
+                        if not rid:
+                            if "_D_" in uid or uid.endswith("_D") or uid.startswith("D_") or "Z1D" in uid or "Z2D" in uid or "Z3D" in uid:
+                                rid = "Dungeon"
+                            elif "Z3" in uid: rid = "Z3"
+                            elif "Z2" in uid: rid = "Z2"
+                            elif "Z1" in uid: rid = "Z1"
+                        row["region"] = rid
+                elif name == "zone":
+                    zname = line.get("name") or (line.get("texts") or {}).get("name") or KNOWN_REGION_NAMES.get(line.get("id"))
+                    row["name"] = zname
+                
+                # Always resolve gfx/icon for atlas fallback; will be stripped later if using_atlas
+                row["gfx"] = line.get("gfx") or (ut_gfx.get(line.get("type")) if name == "units" else None)
+                if name == "items" and line.get("icon"):
+                    row["icon"] = line.get("icon")
+                # Consumables stamp their buff-status ref (props.effects[].
+                # status[].ref, e.g. 'Whetstone_Status') so the runtime can
+                # map a live buff id back to the item that grants it
+                # (data/names.status_name) — the skill sheet carries no
+                # source. ~120 extra keys, a few KB in raw_items.
+                if name == "items":
+                    status_refs = [st.get("ref")
+                                   for fx in (line.get("props") or {}).get("effects") or []
+                                   for st in fx.get("status") or []
+                                   if st.get("ref")]
+                    if status_refs:
+                        row["statusRefs"] = status_refs
+                        # Weightstone's status is authored 'Weighstone_Status'
+                        # (game-sheet typo, missing the 't'): stamp the
+                        # corrected spelling too so both buff ids resolve.
+                        for ref in status_refs:
+                            fixed = ref.replace("Weighstone", "Weightstone")
+                            if fixed != ref and fixed not in status_refs:
+                                row["statusRefs"].append(fixed)
+
+                rows.append(row)
+            out[name] = rows
+    return out
+
+
+# Field whitelists: only the fields the runtime actually reads survive
+# compilation. world/layer/kind/tile/instances are engine bookkeeping the app
+# never consumes (and id is only a dead fallback for chest_locs).
+LOC_FIELDS = {
+    "chest_locs": ["sub_kind", "chest_id", "world_pos", "z", "lootTable"],
+    "poi_locs": ["id", "sub_kind", "world_pos", "z", "name", "zone",
+                  "target_activity", "lootTable", "chest_ids",
+                  "spawn_unit", "cost_item", "cost_count", "world"],
+    "gatherable_locs": ["name", "world", "x", "y", "z"],
+    "orb_positions": ["id", "x", "y", "z", "region", "zone", "world"],
+    "critter_locs": ["id", "units", "unit"],
+    # world mob spawns — the Items page resolves 'unknown location' drop
+    # rows against these zones (items/sources.py reads the compiled list)
+    "mob_locs": ["unit", "units", "zone"],
+}
+
+# --- Instance-row guard ------------------------------------------------------
+# The 1-Click extraction started copying res.levels.pak's Level/POI tree into
+# the same prefab root the world scanner walks (automated_live_extract.ps1
+# "Step 2": `$LevelsPak = res.levels.pak` … "Copy all extracted prefab files
+# and subdirectories directly into prefabs/"), so the sheets gained the scenery
+# placed INSIDE every dungeon & rift level. On the 2026-09-11 data that took
+# dungeon/rift POIs from 14 entrances to 243 (DungeonExit_*,
+# *_CheckpointZone_*, Rift_Gate_*, Monolith_*), world orbs from 284 to 324
+# (Beehive / KoboldsMines RedOrbs) and added 18 instance ore nodes. Those rows
+# carry instance-local coordinates that overlap the overworld map, so packing
+# them plastered the minimap with dungeon/rift/orb icons and turned 132 instance
+# rows into zone-resolution anchors.
+#
+# A row is an instance row when its `world` prefab names a dungeon/rift level.
+# The scanner currently prunes `world` from the POI/orb sheets, so until it
+# stops (LOC_FIELDS above keeps it now), fall back to the row's shape.
+_INSTANCE_KINDS = ("poi_locs", "orb_positions", "gatherable_locs")
+_INSTANCE_WORLD_TOKENS = ("POI_", "Dungeon")
+
+
+def _is_instance_row(key, r) -> bool:
+    if key not in _INSTANCE_KINDS:
+        return False
+    w = r.get("world")
+    if isinstance(w, str) and w:
+        return any(t in w for t in _INSTANCE_WORLD_TOKENS)
+    if key == "poi_locs":
+        # a real entrance names the activity it opens (or a display name)
+        return (r.get("sub_kind") in ("dungeon", "rift")
+                and not (r.get("target_activity") or r.get("name")))
+    if key == "orb_positions":
+        # the static index is the overworld `RedOrb_World_*` placements
+        return not str(r.get("id") or "").startswith("RedOrb_World")
+    return False
+
+
+def _drop_instance_rows(key, rows):
+    """Remove instance-interior rows (mirrors _prune_loc_rows' shape handling)."""
+    if isinstance(rows, dict):
+        return {k: _drop_instance_rows(key, v) if isinstance(v, list) else v
+                for k, v in rows.items()}
+    if isinstance(rows, list):
+        return [r for r in rows
+                if not (isinstance(r, dict) and _is_instance_row(key, r))]
+    return rows
+
+
+def _prune_loc_rows(rows, keep):
+    """Keep only whitelisted fields from each loc row (lists, or dicts that
+    wrap lists like orb_positions: {'orbs': [...]})."""
+    if isinstance(rows, dict):
+        return {k: _prune_loc_rows(v, keep) if isinstance(v, list) else v
+                for k, v in rows.items()}
+    return [{f: r[f] for f in keep if f in r} for r in rows]
+
+
+def _compile_loc_datasets(data_new: Path, data_clean: Path) -> dict:
+    """Compile the map-location sheets (dungeons, POIs, chests, gatherables,
+    orbs, critters, mob spawns), dropping instance-interior rows and narrowing
+    each family to LOC_FIELDS. Returns {sheet key: rows}.
+    """
+    out: dict[str, list] = {}
+    for loc_name, key in [
+        ("dungeons.json", "dungeons"),
+        ("poi_locs.json", "poi_locs"),
+        ("chest_locs.json", "chest_locs"),
+        ("gatherable_locs.json", "gatherable_locs"),
+        ("orb_positions.json", "orb_positions"),
+        ("critter_locs.json", "critter_locs"),
+        ("mob_locs.json", "mob_locs"),
+    ]:
+        p = data_new / loc_name
+        if not p.exists():
+            p = data_clean / loc_name
+        if p.exists():
+            try:
+                jdata = json.loads(p.read_text(encoding="utf-8"))
+                rows = (jdata.get(key) or jdata.get("pois")
+                        or jdata.get("chests") or jdata.get("gatherables")
+                        or jdata.get("critters") or jdata.get("mobs")
+                        or jdata)
+
+                rows = _drop_instance_rows(key, rows)
+
+                # Deduplicate poi_locs by appending suffix to duplicate IDs.
+                # Two passes:
+                #  1. Named-world-NPC rows (sub_kind "npc") are dropped ENTIRELY.
+                #     They never render in the app (no NPC minimap layer — only
+                #     vendors/petshops show), and their only other use was as
+                #     zone-resolution anchors — a value the app doesn't ship
+                #     them for. The full dump WITH NPCs stays in the GameFiles
+                #     scanner output (Live_Data_Clean) for the website.
+                #  2. Exact repeats — the same named node (same kind, id, zone
+                #     AND position) double-emitted from overlapping world tiles
+                #     is dropped for ANY kind. A second pin at the same spot is
+                #     dead weight (this is what the scanner's spatial dedup
+                #     cannot catch for vendor/petshop kinds, which it refuses
+                #     to merge to protect distinct hub NPCs).
+                #  3. Same-id repeats of other kinds get a numeric suffix so
+                #     genuinely distinct instances (different positions) stay
+                #     addressable.
+                if key == "poi_locs" and isinstance(rows, list):
+                    seen_spots = set()
+                    seen_ids = {}
+                    kept_rows = []
+                    for row in rows:
+                        if row.get("sub_kind") == "npc":
+                            continue
+                        wp = row.get("world_pos") or {}
+                        spot = (row.get("sub_kind"), row.get("id"), row.get("zone"),
+                                wp.get("x"), wp.get("y"))
+                        if spot in seen_spots:
+                            continue
+                        seen_spots.add(spot)
+                        rid = row.get("id")
+                        if not rid:
+                            kept_rows.append(row)
+                            continue
+                        if rid in seen_ids:
+                            seen_ids[rid] += 1
+                            row["id"] = f"{rid}_{seen_ids[rid]}"
+                        else:
+                            seen_ids[rid] = 0
+                        kept_rows.append(row)
+                    rows = kept_rows
+                    # The scan names the Guild Merchant NPCs "Wandering Merchant",
+                    # but the in-game name is "Guild Merchant" (unit.json
+                    # TODO_WanderingMerchant) — normalize so the Vendors layer and
+                    # any website show the real name.
+                    for row in rows:
+                        if is_guild_merchant_source(row.get("id")) \
+                                and row.get("name") == "Wandering Merchant":
+                            row["name"] = "Guild Merchant"
+                
+                if key in LOC_FIELDS:
+                    rows = _prune_loc_rows(rows, LOC_FIELDS[key])
+                
+                out[key] = rows
+            except Exception:
+                pass
+    return out
 
 
 def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
@@ -278,27 +841,6 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                                 unit_region_map[uid] = rid
             except Exception:
                 pass
-
-    # 1. Standard Sheets (Optimized: names resolved and texts/gfx stripped)
-    sheets = {
-        "units": ["id", "type", "lvl", "maxLvl", "faction", "flags"],
-        "unitType": ["id", "name", "lootTable"],
-        # props.generationChance feeds the loot predictor's rarity roll odds
-        "rarity": ["id", "color", "props"],
-        "zone": ["id", "name"],
-        "items": ["id", "rarity", "type"],
-        "skills": ["id", "type", "nature"],
-        # Tuning constants (GearUpgrades material costs, WorldLootLevel, ...)
-        "constant": ["id", "v"]
-    }
-
-    # Hardcoded fallback region names
-    KNOWN_REGION_NAMES = {
-        "Z1_Region": "Skover Island",
-        "Z2_Region": "Valley of Eternal Autumn",
-        "Z3_Region": "Crimson Island",
-        "CrimsonIsland_Region": "Crimson Island"
-    }
 
     # 1b. Achievement rewards (ach.json): mounts/gliders awarded by achievements
     # (Bestiary/Collector/Savior of <region>, Secret Orb Hunter, collection
@@ -391,128 +933,8 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                     ach_rewards[iid] = info
         break
 
-    # Pre-map unitType names for faster lookup
-    ut_p = data_new / "unitType.json"
-    ut_names = {}
-    ut_gfx = {}
-    if ut_p.exists():
-        ut_raw = json.loads(ut_p.read_text(encoding="utf-8"))
-        for r in ut_raw.get("lines", []):
-            if r.get("name"): ut_names[r["id"]] = r["name"]
-            if r.get("gfx"): ut_gfx[r["id"]] = r["gfx"]
-
-    # Pre-calculate named bosses (units whose ID matches a loot table ID)
-    named_boss_ids = set()
-    lt_p = data_new / "lootTable.json"
-    if lt_p.exists():
-        try:
-            lt_raw = json.loads(lt_p.read_text(encoding="utf-8"))
-            named_boss_ids = {r["id"] for r in lt_raw.get("lines", [])}
-        except: pass
-
-    for name, fields in sheets.items():
-        # Mapping plural internal names to singular CDB filenames
-        json_name = "unit" if name == "units" else name.rstrip('s') if name in ["items", "skills"] else name
-        p = data_new / f"{json_name}.json"
-        if not p.exists():
-            p = data_clean / f"{json_name}.json"
-
-        if p.exists():
-            raw = json.loads(p.read_text(encoding="utf-8"))
-            rows = []
-            for line in raw.get("lines", []):
-                uid = line.get("id")
-                fl = line.get("flags", 0)
-                # Skip compiling units flagged with NoCodex (bit 18 / 0x40000)
-                if name == "units" and isinstance(fl, int) and (fl & 0x40000):
-                    continue
-                
-                # Aggressive Pruning: Skip non-boss/non-unique internal unit types
-                if name == "units":
-                    utype = line.get("type")
-                    is_special = (isinstance(fl, int) and (fl & 0x90)) or (uid in named_boss_ids)
-                    if utype in ("Totem", "Environment", "Trigger", "Marker") and not is_special:
-                        continue
-
-                # Only include fields that have a value
-                row = {f: line[f] for f in fields if line.get(f) is not None}
-                
-                # Bake the name directly into the row to save runtime logic
-                if name in ["units", "items", "skills"]:
-                    row["name"] = (line.get("texts") or {}).get("name") or line.get("name")
-                    if name == "skills":
-                        # Skill-description resolver fields: data/skills.py
-                        # resolves the ::token:: descriptions from the FULL
-                        # row (texts.desc + texts.refs for ::ref_*:: slots,
-                        # vars, scalar cooldown/duration, the first step's
-                        # range — plus texts.rankDescs and props.rankOverride
-                        # for rank-aware text). The loose skill.json is a
-                        # compile input only (not bundled — see
-                        # FareverPal.spec), so these fields must ride in the
-                        # shim for the item page's weapon-skills section to
-                        # resolve descriptions in the frozen build. Pruned
-                        # to exactly what the resolver touches (~31 KB
-                        # compressed vs 138 KB for the full rows).
-                        texts = line.get("texts") or {}
-                        t = {}
-                        for k in ("name", "desc", "refs", "rankDescs"):
-                            if texts.get(k) is not None:
-                                t[k] = texts[k]
-                        if t:
-                            row["texts"] = t
-                        # rank resolution: props.rankOverride (per-rank
-                        # var/prop overrides) + the scalar props templates
-                        # read (::charges::, ::duration:: ...)
-                        props = line.get("props") or {}
-                        p = {}
-                        if props.get("rankOverride"):
-                            p["rankOverride"] = props["rankOverride"]
-                        p.update({k: v for k, v in props.items()
-                                  if k != "rankOverride"
-                                  and isinstance(v, (int, float))})
-                        if p:
-                            row["props"] = p
-                        if line.get("vars"):
-                            row["vars"] = line["vars"]
-                        if line.get("cooldown") is not None:
-                            row["cooldown"] = line["cooldown"]
-                        if line.get("duration") is not None:
-                            row["duration"] = line["duration"]
-                        # step pruning: keep range + the move step's
-                        # duration (data/skills.skill_moves reads them for
-                        # the base-chain wind-up / reach lines)
-                        steps = [{k: s[k] for k in ("range", "duration")
-                                  if s.get(k) is not None}
-                                 for s in (line.get("steps") or [])
-                                 if s.get("range") is not None
-                                 or s.get("duration") is not None]
-                        if steps:
-                            row["steps"] = steps
-                    if name == "units":
-                        if not row.get("name"):
-                            row["name"] = ut_names.get(line.get("type"), "")
-                        
-                        # Region assignment: Priority 1: World placement, Priority 2: Dungeon flag, Priority 3: Zone fallback
-                        uid = line.get("id")
-                        rid = unit_region_map.get(uid)
-                        if not rid:
-                            if "_D_" in uid or uid.endswith("_D") or uid.startswith("D_") or "Z1D" in uid or "Z2D" in uid or "Z3D" in uid:
-                                rid = "Dungeon"
-                            elif "Z3" in uid: rid = "Z3"
-                            elif "Z2" in uid: rid = "Z2"
-                            elif "Z1" in uid: rid = "Z1"
-                        row["region"] = rid
-                elif name == "zone":
-                    zname = line.get("name") or (line.get("texts") or {}).get("name") or KNOWN_REGION_NAMES.get(line.get("id"))
-                    row["name"] = zname
-                
-                # Always resolve gfx/icon for atlas fallback; will be stripped later if using_atlas
-                row["gfx"] = line.get("gfx") or (ut_gfx.get(line.get("type")) if name == "units" else None)
-                if name == "items" and line.get("icon"):
-                    row["icon"] = line.get("icon")
-
-                rows.append(row)
-            all_data[name] = rows
+    # 1. Standard Sheets (Optimized: names resolved and texts/gfx stripped)
+    all_data.update(_compile_standard_sheets(data_new, data_clean, unit_region_map))
 
     # 2. Loot Tables (Nested)
     lt_p = data_new / "lootTable.json"
@@ -582,9 +1004,11 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     # doesn't use (it belongs to the not-yet-wired website tool). The mounts /
     # gliders / wild companions catalog is therefore always derived from
     # codex.json. {} if the codex is unavailable too.
-    # Cash-shop ids are passed separately so shop items count as obtainable
-    # (they're buyable NOW even though codex.json flags them 'unreleased').
-    shop_ids = _load_shop_ids(data_clean, data_new)
+    # Shop items count as obtainable: they're buyable NOW even though
+    # codex.json flags them 'unreleased'. The set is the drops index's
+    # shop-only ids, derived exactly as the runtime does, OR the premium id
+    # pattern (rules.is_premium_shop_id) — the union codex.is_shop_item applies.
+    shop_ids = _compiled_shop_ids(data_new, data_clean)
     manifest = _collection_catalog_from_codex(data_clean, data_new,
                                               all_data.get("items", []),
                                               ach_rewards, shop_ids) or {}
@@ -596,129 +1020,15 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     all_data["info_collection_catalog"] = manifest
 
     # 4b. Map Location datasets compilation (POI, Chesto, Gatherables, Orbs, Dungeons)
-    # Field whitelists: only the fields the runtime actually reads survive
-    # compilation. world/layer/kind/tile/instances are engine bookkeeping the
-    # app never consumes (and id is only a dead fallback for chest_locs).
-    LOC_FIELDS = {
-        "chest_locs": ["sub_kind", "chest_id", "world_pos", "z", "lootTable"],
-        "poi_locs": ["id", "sub_kind", "world_pos", "z", "name", "zone",
-                      "target_activity", "lootTable", "chest_ids",
-                      "spawn_unit", "cost_item", "cost_count"],
-        "gatherable_locs": ["name", "world", "x", "y", "z"],
-        "orb_positions": ["id", "x", "y", "z", "region", "zone"],
-        "critter_locs": ["id", "units", "unit"],
-        # world mob spawns — the Items page resolves 'unknown location' drop
-        # rows against these zones (items/sources.py reads the compiled list)
-        "mob_locs": ["unit", "units", "zone"],
-    }
-
-    def prune_loc_rows(rows, keep):
-        """Keep only whitelisted fields from each loc row (lists, or dicts that
-        wrap lists like orb_positions: {'orbs': [...]})."""
-        if isinstance(rows, dict):
-            return {k: prune_loc_rows(v, keep) if isinstance(v, list) else v
-                    for k, v in rows.items()}
-        return [{f: r[f] for f in keep if f in r} for r in rows]
-
-    for loc_name, key in [
-        ("dungeons.json", "dungeons"),
-        ("poi_locs.json", "poi_locs"),
-        ("chest_locs.json", "chest_locs"),
-        ("gatherable_locs.json", "gatherable_locs"),
-        ("orb_positions.json", "orb_positions"),
-        ("critter_locs.json", "critter_locs"),
-        ("mob_locs.json", "mob_locs"),
-    ]:
-        p = data_new / loc_name
-        if not p.exists():
-            p = data_clean / loc_name
-        if p.exists():
-            try:
-                jdata = json.loads(p.read_text(encoding="utf-8"))
-                rows = (jdata.get(key) or jdata.get("pois")
-                        or jdata.get("chests") or jdata.get("gatherables")
-                        or jdata.get("critters") or jdata.get("mobs")
-                        or jdata)
-                
-                # Deduplicate poi_locs by appending suffix to duplicate IDs.
-                # Two passes:
-                #  1. Named-world-NPC rows (sub_kind "npc") are dropped ENTIRELY.
-                #     They never render in the app (no NPC minimap layer — only
-                #     vendors/petshops show), and their only other use was as
-                #     zone-resolution anchors — a value the app doesn't ship
-                #     them for. The full dump WITH NPCs stays in the GameFiles
-                #     scanner output (Live_Data_Clean) for the website.
-                #  2. Exact repeats — the same named node (same kind, id, zone
-                #     AND position) double-emitted from overlapping world tiles
-                #     is dropped for ANY kind. A second pin at the same spot is
-                #     dead weight (this is what the scanner's spatial dedup
-                #     cannot catch for vendor/petshop kinds, which it refuses
-                #     to merge to protect distinct hub NPCs).
-                #  3. Same-id repeats of other kinds get a numeric suffix so
-                #     genuinely distinct instances (different positions) stay
-                #     addressable.
-                if key == "poi_locs" and isinstance(rows, list):
-                    seen_spots = set()
-                    seen_ids = {}
-                    kept_rows = []
-                    for row in rows:
-                        if row.get("sub_kind") == "npc":
-                            continue
-                        wp = row.get("world_pos") or {}
-                        spot = (row.get("sub_kind"), row.get("id"), row.get("zone"),
-                                wp.get("x"), wp.get("y"))
-                        if spot in seen_spots:
-                            continue
-                        seen_spots.add(spot)
-                        rid = row.get("id")
-                        if not rid:
-                            kept_rows.append(row)
-                            continue
-                        if rid in seen_ids:
-                            seen_ids[rid] += 1
-                            row["id"] = f"{rid}_{seen_ids[rid]}"
-                        else:
-                            seen_ids[rid] = 0
-                        kept_rows.append(row)
-                    rows = kept_rows
-                    # The scan names the Guild Merchant NPCs "Wandering Merchant",
-                    # but the in-game name is "Guild Merchant" (unit.json
-                    # TODO_WanderingMerchant) — normalize so the Vendors layer and
-                    # any website show the real name.
-                    for row in rows:
-                        if (row.get("id") or "").startswith("WanderingMerchant_") \
-                                and row.get("name") == "Wandering Merchant":
-                            row["name"] = "Guild Merchant"
-                
-                if key in LOC_FIELDS:
-                    rows = prune_loc_rows(rows, LOC_FIELDS[key])
-                
-                all_data[key] = rows
-            except Exception:
-                pass
+    all_data.update(_compile_loc_datasets(data_new, data_clean))
 
     # 5. Atlas sprite-sheet coordinates (Merged into specific modules)
-    def load_atlas_map(category):
-        # Merge ALL matching files (multi-sheet packs: atlas_items_01.json,
-        # atlas_items_02.json, ...) instead of returning the first one found.
-        merged = {}
-        for ap in sorted(atlas_dir.glob(f"atlas_{category}*.json")):
-            if not ap.exists():
-                continue
-            try:
-                content = json.loads(ap.read_text(encoding="utf-8"))
-                if isinstance(content, dict):
-                    merged.update(content)
-            except Exception:
-                continue
-        return merged
-
-    enemies_atlas = load_atlas_map("enemies")
-    dungeons_atlas = load_atlas_map("dungeons")
-    items_atlas = load_atlas_map("items")
-    skills_atlas = load_atlas_map("skills")
-    collection_atlas = load_atlas_map("collection")
-    minimap_atlas = load_atlas_map("minimap")
+    enemies_atlas = _load_atlas_map(atlas_dir, "enemies")
+    dungeons_atlas = _load_atlas_map(atlas_dir, "dungeons")
+    items_atlas = _load_atlas_map(atlas_dir, "items")
+    skills_atlas = _load_atlas_map(atlas_dir, "skills")
+    collection_atlas = _load_atlas_map(atlas_dir, "collection")
+    minimap_atlas = _load_atlas_map(atlas_dir, "minimap")
 
     # Combine all for a general lookup if needed
     all_atlas = {**enemies_atlas, **dungeons_atlas, **items_atlas, **skills_atlas, **collection_atlas, **minimap_atlas}
@@ -744,33 +1054,14 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
 
     # Write to multiple files to allow lazy loading and reduce memory pressure
     output_dir = output_file.parent
-    # Dev-only readable .json copies land in the gitignored tmp_preview/ folder
-    # (matched by the `tmp_*` rule), keeping the shipped module dir clean.
-    if dev_dir is None:
-        dev_dir = Path(__file__).parent / "tmp_preview"
+    # Dev-only readable .json copies are opt-in (compiler --dev-copy writes
+    # them to tmp_preview/): by default only the embedded shims are written
+    # and no tmp_preview/ folder is created. An explicit dev_dir (tests,
+    # --dev-copy) still gets the JSON copies via _write_embedded_data.
     
-    def prune_entries(rows):
-        if not using_atlas:
-            return rows
-        for row in rows:
-            row.pop("gfx", None)
-            row.pop("icon", None)
-        return rows
-
-    # The payload is embedded inside the shim module itself as zlib+base85
-    # compressed JSON. That keeps each raw_X.py a single self-contained file
-    # and import fast (one zlib.decompress + json.load, ~5x faster than the
-    # old Python literal). The shim keeps `from . import raw_X; raw_X.DATA`
-    # working everywhere (dev + frozen) without touching any consumer.
-
     def write_data_file(filename, data_dict):
-        stem = Path(filename).stem
-        payload = {}
-        for key, val in data_dict.items():
-            if key in ["units", "items", "skills", "lootTable"]:
-                val = prune_entries(val)
-            payload[key] = val
-        _write_embedded_data(output_dir, stem, payload, dev_dir)
+        """Write one shim to this run's output dir (see _write_data_file)."""
+        _write_data_file(output_dir, filename, data_dict, dev_dir, using_atlas)
 
     # Split sheets and bundle their specific atlas data
     unit_ids = {u["id"] for u in all_data.get("units", [])}
@@ -821,9 +1112,9 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                 if d.get("boss_id"): dungeon_ids.add(d["boss_id"])
                 for mid in d.get("mobs", []): dungeon_ids.add(mid)
 
-            # Metadata Icons from atlas_minimap_01.json
-            ICON_DUNGEON = {"x": 492, "y": 2}
-            ICON_SPARK = {"x": 1864, "y": 2}
+            # (Dungeon/spark badges need no baked icon coordinates: the UI
+            # resolves those map-marker sprites by NAME - see
+            # components.set_marker. Rows carry the semantic flags only.)
 
             codex_json_p = data_clean / "codex.json"
             if not codex_json_p.exists():
@@ -865,7 +1156,11 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
 
                     # Real Spark & Dungeon detection logic
                     flags = u.get("flags", 0)
-                    is_unique = (flags & (1 << 6)) != 0
+                    # A Spark CANDIDATE, not "unique": this bit (0x40) is the
+                    # compiler's stand-in for the real Spark bit (0x400000),
+                    # which it overlaps without matching. Named once in
+                    # unit_flags.py; do not read it as units.py's is_unique.
+                    spark_proxy = (flags & SPARK_PROXY_FLAG_BIT) != 0
                     # dungeons.json (curated per-dungeon mob lists) is the only
                     # authority for dungeon membership. The old bit-7 heuristic
                     # wrongly flagged named world mobs (Sparkling variants,
@@ -877,7 +1172,10 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                     # variants, soulstone demons, dungeon elites like the Slick
                     # Nepsid FS whale) — mark it dungeon so the UI doesn't
                     # present a coords-less mob as open-world.
-                    if not is_dungeon and (flags & 128):
+                    # Same physical bit units.py calls UNIQUE — the compiler
+                    # reuses it as the instance-only fallback. Named once; see
+                    # unit_flags.py for why "unique" is the broad reading.
+                    if not is_dungeon and (flags & UNIQUE_FLAG_BIT):
                         _cj = enriched_map.get(uid) or {}
                         if uid not in all_coords and not (_cj.get("locations") or _cj.get("coords")):
                             is_dungeon = True
@@ -892,15 +1190,18 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                     is_sparkling = "sparkling" in nm.lower()
                     is_critter = u.get("isCritter", False)
 
-                    if (is_unique or (is_sparkling and not is_critter)) and uid not in EXCLUDE_DUST:
+                    if (spark_proxy or (is_sparkling and not is_critter)) and uid not in EXCLUDE_DUST:
                         nu["drops_spark"] = True
                     if is_dungeon:
                         nu["is_dungeon"] = True
 
-                    at = all_atlas.get(uid)
-                    if at:
-                        if at.get("x"): nu["atlas_x"] = at["x"]
-                        if at.get("y"): nu["atlas_y"] = at["y"]
+                    # No per-row atlas_x/atlas_y is baked here: the app
+                    # resolves every icon by NAME through the atlas dict
+                    # shipped in the raw_* shims below (data/atlas.py), so a
+                    # per-row copy of the same rectangle is unread dead weight
+                    # - removed 2026-09-27 alongside v0.3.2's
+                    # ICON_DUNGEON/ICON_SPARK constants (commit 92959ec), same
+                    # never-read history.
                     coords = all_coords.get(uid, [])
                     # Curated codex.json can supply spawn coords the game dump
                     # misses (e.g. a named mob standing next to its sibling).
@@ -1080,25 +1381,6 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         print(f"ERROR: Missing required sequence file: {codex_order_p}")
         print("Run extract_completion_flags.py or Update_Raw_Data.bat to generate assets/data/codex_order.json before compiling.")
 
-    # Shop catalog: the game's shop.json (cash-shop / early-access items),
-    # compiled into raw_shop.py so the codex Shop filter lists every entry.
-    # Skipped (id-pattern fallback used) until the dump ships shop.json.
-    shop_p = data_new / "shop.json"
-    if not shop_p.exists():
-        shop_p = data_clean / "shop.json"
-    if shop_p.exists():
-        try:
-            shop_rows = json.loads(shop_p.read_text(encoding="utf-8"))
-            if isinstance(shop_rows, dict):
-                # game-native sheet shape ({"lines": [...]}) plus the plain
-                # {"shop": [...]} / {"items": [...]} wrappers
-                shop_rows = (shop_rows.get("shop") or shop_rows.get("items")
-                             or shop_rows.get("rows") or shop_rows.get("lines") or [])
-            if isinstance(shop_rows, list) and shop_rows:
-                _write_embedded_data(output_dir, "raw_shop", {"shop": shop_rows}, dev_dir)
-        except Exception as e:
-            print(f"Warning: failed to compile shop.json: {e}")
-
     # Crafting: the craft.json recipe sheet + job.json professions, compiled
     # into raw_craft.py so the Craft page works in the frozen build too
     # (these are dev dumps, not .pak sheets, so they aren't part of the
@@ -1158,14 +1440,26 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     # flat attribute affixes are carried over here — the same sheet
     # source — giving the Enchants-page cards their +N stat lines.
     item_grant_stats: dict[str, list[dict]] = {}
+    # Containers roll a rarity SPAN when their gainItem clamps the roll:
+    # `props.gainItem.rarity = {min: "Epic"}` is a FLOOR, not a fixed rarity
+    # (the roll can climb to the ladder top), and the ONE box in the game
+    # today that has one is the Hero Weapon Cache. The compiled item sheet
+    # prunes `props`, so the span is stamped onto the drops row here — the
+    # same route as aptitudes/faction/skills — and the runtime reads it
+    # instead of a hand-recorded floor. Keyed by item id.
+    item_roll_rarity_min: dict[str, str] = {}
+    item_roll_rarity_max: dict[str, str] = {}
+    # The WHOLE `props.gainItem` of every container, stamped onto its drops row
+    # as `gain_item`: the loot table it opens into, the level range it rolls at
+    # and how many pieces one open yields, next to the rarity floor above. The
+    # item sheet prunes `props`, so this is where those facts survive — the
+    # cache contract tests read them from the shim instead of the loose sheet,
+    # which is what lets the contract run in CI (no game dump -> no skip).
+    # Keyed by item id.
+    item_gain: dict[str, dict] = {}
     # the item sheet's affix attributes are game-internal names; the
     # rating ones translate to the fareverdb labels the app speaks
-    _ATTR_LABELS = {
-        "CritChanceRating": "Critical",
-        "FervorRating": "Fervor",
-        "ArmorPenetrationRating": "Armor Penetration",
-        "SpellPenetrationRating": "Magic Penetration",
-    }
+    _ATTR_LABELS = RATING_ATTR_LABELS
     items_p = data_new / "item.json"
     if not items_p.exists():
         items_p = data_clean / "item.json"
@@ -1176,6 +1470,20 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                 iid = r.get("id")
                 if not iid:
                     continue
+                # the gainItem's rarity clamp, if the box has one (see the
+                # item_roll_rarity_* note above)
+                gi = (r.get("props") or {}).get("gainItem")
+                if isinstance(gi, dict):
+                    # the whole gainItem (loot table / levelRange / maxItems /
+                    # rarity) — see the item_gain note above
+                    if gi.get("lootTable"):
+                        item_gain[iid] = gi
+                    gr = gi.get("rarity")
+                    if isinstance(gr, dict):
+                        if gr.get("min"):
+                            item_roll_rarity_min[iid] = gr["min"]
+                        if gr.get("max"):
+                            item_roll_rarity_max[iid] = gr["max"]
                 apts = [a.get("ref") if isinstance(a, dict) else str(a)
                         for a in (r.get("aptitudes") or [])]
                 if apts:
@@ -1244,6 +1552,19 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
                     st = item_grant_stats.get(iid)
                     if st and not it.get("stats"):
                         it["stats"] = st
+                    rmin = item_roll_rarity_min.get(iid)
+                    if rmin and not it.get("roll_rarity_min"):
+                        it["roll_rarity_min"] = rmin
+                    rmax = item_roll_rarity_max.get(iid)
+                    if rmax and not it.get("roll_rarity_max"):
+                        it["roll_rarity_max"] = rmax
+                    gi = item_gain.get(iid)
+                    if gi and not it.get("gain_item"):
+                        it["gain_item"] = gi
+                # the scan never captured the boss -> `<boss>_HM` edge; stamp
+                # it from the lootTable sheet so no heroic set piece ships
+                # blank (see _stamp_heroic_boss_edges)
+                _stamp_heroic_boss_edges(drops_data, all_data.get("lootTable"))
                 _write_embedded_data(output_dir, "raw_item_drops",
                                      drops_data, dev_dir)
         except Exception as e:
@@ -1267,7 +1588,7 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         if lp.exists():
             try:
                 parsed = json.loads(lp.read_text(encoding="utf-8"))
-                locs_data[loc_key] = parsed
+                locs_data[loc_key] = _drop_instance_rows(loc_key, parsed)
             except Exception as e:
                 print(f"Warning: failed to load {loc_name}: {e}")
     if locs_data:
@@ -1283,6 +1604,13 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
         "atlas": {k: v for k, v in all_atlas.items() if k in items_atlas}
     })
 
+    # Whole skill rows, VERBATIM from the source sheet (not the trimmed
+    # `skills` mirror above): the item page's "Weapon Upgraded" ladders read
+    # the row's `affixes` (8 weapon types), `props.rankOverride` + `vars` (the
+    # other 12) and the description templates, and the frozen app has no loose
+    # skill.json to fall back on. Trimming these fields here breaks item
+    # cards in the build only — tests/test_item_drops.py
+    # ::test_weapon_upgrade_ladders_survive_the_frozen_build guards it.
     skill_rows = []
     sk_raw_p = data_new / "skill.json"
     if not sk_raw_p.exists():
@@ -1306,28 +1634,55 @@ def compile_to_py(raw_data_path: Path, manifest_path: Path, output_file: Path,
     write_data_file("raw_data.py", all_data)
 
 def prune_unused_jsons(data_dir: Path):
-    """Remove JSON files from assets/data that are not used by the app."""
+    """Remove JSON files from assets/data that are not used by the app.
+
+    `required` must name EVERY sheet the build reads - missing one lets the
+    pruner delete a compile input (it used to eat craft.json / job.json /
+    item_drops.json / codex.json, which verify_assets.py then reported as
+    missing), and naming one nothing reads keeps a dead sheet forever
+    (codex_completion.json was listed here with no reader at all). The
+    scanner-era duplicates - crafting*.json, achievements*.json, map*.json,
+    codex_clean / collection_clean / collection_catalog, unitGroup,
+    items_manifest, loot_tables, loot_table_contents, codex_completion - are
+    deliberately absent so a prune retires them. tests/test_data_layer_sheets.py
+    keeps this set in step with the sheets the data layer actually reads.
+
+    `required` must ALSO be a superset of every sheet verify_assets.py requires
+    to exist. Update_Raw_Data.bat option [2] prunes AFTER the compile and the
+    deletion is permanent (the sheet only comes back from a fresh scan), so
+    dropping a verifier-required sheet turns the next build's verify step red
+    with the file already gone - that is how item_drops.json / craft.json /
+    job.json went missing before. tests/test_data_layer_sheets.py pins the
+    superset relation.
+    """
     required = {
-        "unit.json", "unitType.json", "rarity.json", "zone.json", "item.json",
-        "constant.json", "skill.json", "lootTable.json", "enemies.json",
-        "items.json", "skills.json",
+        "unit.json", "unitType.json", "itemType.json", "rarity.json",
+        "zone.json", "item.json", "constant.json", "counter.json",
+        "skill.json", "lootTable.json", "enemies.json", "items.json",
+        "skills.json", "craft.json", "job.json", "item_drops.json",
+        "codex.json", "ach.json", "codex_order.json",
         "dungeons.json", "poi_locs.json", "chest_locs.json",
         "gatherable_locs.json", "orb_positions.json", "critter_locs.json",
-        "mob_locs.json", "_version.json", "ach.json",
-        "codex_order.json", "codex_completion.json"
+        "mob_locs.json", "_version.json",
     }
     
     deleted = 0
+    removed = []
     for p in data_dir.glob("*.json"):
         if p.name not in required:
             try:
                 p.unlink()
                 deleted += 1
+                removed.append(p.name)
             except Exception as e:
                 print(f"Error deleting {p.name}: {e}")
                 
     if deleted:
         print(f"Pruned {deleted} unused JSON files from {data_dir.name}/")
+        # Name them: this is a permanent delete (the sheet only comes back from
+        # a fresh scan), and the verifier requires some sheets BY NAME - a
+        # wrongly-removed one must not scroll by as a bare count.
+        print("  removed: " + ", ".join(sorted(removed)))
 
 if __name__ == "__main__":
     import sys
@@ -1339,10 +1694,21 @@ if __name__ == "__main__":
         prune_unused_jsons(project_root / "assets" / "data")
         sys.exit(0)
 
-    # Use provided path or default to project root
-    raw_source = Path(args[1]) if args[1:] and len(args) > 1 else Path(__file__).parent
+    # Use provided path or default to project root (flags skipped, so
+    # `compiler.py --dev-copy` doesn't mistake the flag for the path)
+    positionals = [a for a in args[1:] if not a.startswith("--")]
+    raw_source = Path(positionals[0]) if positionals else Path(__file__).parent
     project_root = Path(__file__).parent
-    
-    out = project_root / "farever_companion" / "data" / "raw_data.py"
-    
-    compile_to_py(raw_source, project_root, out)
+
+    # The shim target comes from THIS file's location plus PACKAGE_DIRNAME, not
+    # from the app's own path module: the compiler is standalone and may not
+    # import the app tree (it is what generates that tree). PACKAGE_DIRNAME and
+    # this arithmetic are pinned by tests/test_compiler.py against the runtime's
+    # own `paths.data_root()`.
+    package_dir = project_root / PACKAGE_DIRNAME
+    out = package_dir / "data" / "raw_data.py"
+
+    dev = project_root / "tmp_preview" if "--dev-copy" in args else None
+    compile_to_py(raw_source, project_root, out, dev_dir=dev)
+    # Built output, refreshed on every build so a stale copy cannot ship.
+    _bundle_shared_rules(package_dir)

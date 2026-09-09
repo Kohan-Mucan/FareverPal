@@ -84,12 +84,98 @@ def _fmt_id(rid) -> str | None:
     return s if len(s) <= 200 else s[:200] + "…"
 
 
+def _module_path(mod: str) -> str:
+    """farever_companion.ui.pages.items.detail -> ui/pages/items/detail.py."""
+    if mod.startswith("farever_companion."):
+        return mod[len("farever_companion.") :].replace(".", "/") + ".py"
+    return mod
+
+
+def _source_of(w: QtWidgets.QWidget) -> str:
+    t = type(w)
+    return f"{t.__module__}.{t.__name__}"
+
+
+def _code_hint(w: QtWidgets.QWidget, limit: int = 3) -> str | None:
+    """Nearest custom (farever_companion) owners: Class (path/to/file.py).
+
+    Plain Qt widgets (QFrame/Card) carry no file info on their own, so walk
+    up and report the first custom ancestors — that is the file to edit.
+    """
+    found: list[str] = []
+    node: QtWidgets.QWidget | None = w
+    while node is not None and len(found) < limit:
+        mod = type(node).__module__ or ""
+        if mod.startswith("farever_companion"):
+            found.append(f"{type(node).__name__} ({_module_path(mod)})")
+        node = node.parentWidget()
+    return " > ".join(found) if found else None
+
+
+def _location_line(w: QtWidgets.QWidget) -> str | None:
+    """PAGE for the main window, OVERLAY for HUDs, WINDOW/DIALOG otherwise."""
+    try:
+        win = w.window()
+    except Exception:
+        return None
+    if win is None:
+        return None
+    try:
+        cls = type(win).__name__
+        # Main window: ControlPanel._current_page() already knows the page +
+        # sub-tab (gear:Loadout, codex:Dungeons:Mobs, settings:hud's, ...).
+        cur = getattr(win, "_current_page", None)
+        if callable(cur):
+            try:
+                page = cur()
+            except Exception:
+                page = None
+            if page:
+                return f"PAGE: {page}"
+        # HUD overlays: OverlayWindow subclasses carry _geo_key (dungeon,
+        # entity, dps, minimap, speedrun, combat) + a titlebar title.
+        geo = getattr(win, "_geo_key", None)
+        if geo:
+            title = ""
+            try:
+                bar = getattr(win, "titlebar", None)
+                lab = getattr(bar, "title", None)
+                if lab is not None and hasattr(lab, "text"):
+                    title = lab.text().strip()
+            except Exception:
+                title = ""
+            title = title or win.windowTitle().strip()
+            suffix = f' "{title}"' if title else ""
+            return f"OVERLAY: {geo} ({cls}){suffix}"
+        if win.isWindow() or isinstance(win, QtWidgets.QDialog):
+            title = ""
+            try:
+                title = win.windowTitle().strip()
+            except Exception:
+                title = ""
+            suffix = f' "{title}"' if title else ""
+            kind = "DIALOG" if isinstance(win, QtWidgets.QDialog) else "WINDOW"
+            if win is w:
+                return f"{kind}: {cls}{suffix}"
+            return f"{kind}: {cls}{suffix}"
+    except Exception:
+        return None
+    return None
+
+
 def _dev_block(w: QtWidgets.QWidget, gpos: QtCore.QPoint, view: QtWidgets.QAbstractItemView | None,
                text: str | None, tip: str) -> str:
     lines = [f"ELEMENT: {type(w).__name__}"]
     on = w.objectName()
     if on:
         lines.append(f"OBJECT NAME: {on}")
+    lines.append(f"SOURCE: {_source_of(w)}")
+    loc = _location_line(w)
+    if loc:
+        lines.append(loc)
+    code = _code_hint(w)
+    if code:
+        lines.append(f"CODE: {code}")
     it = rid = rtip = None
     if view is not None:
         it, rid, rtip = _item_data_at(view, gpos)
@@ -106,9 +192,11 @@ def _dev_block(w: QtWidgets.QWidget, gpos: QtCore.QPoint, view: QtWidgets.QAbstr
         lines.append(f"ITEM TOOLTIP: {_plain(rtip)}")
     chain = []
     p = w.parentWidget()
-    while p is not None and len(chain) < 4:
+    while p is not None and len(chain) < 10:
         on2 = p.objectName()
         chain.append(f"{type(p).__name__}({on2})" if on2 else type(p).__name__)
+        if p.isWindow():
+            break
         p = p.parentWidget()
     if chain:
         lines.append("PARENTS: " + " > ".join(chain))

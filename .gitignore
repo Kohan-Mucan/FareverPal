@@ -26,6 +26,18 @@ __pycache__/
 # --- Logs ---
 *.log
 
+# --- Dev-only bridge logging switches (no .log extension, so the rule
+# --- above cannot match them) ---
+# core/bridge_log.sync_dev_flag() writes FAREVERMOD_DEBUG_LOG beside the
+# proxy DLLs on every dev-mode run and deletes it on the next non-dev run;
+# its first line names the log the binaries should write. It is a local dev
+# switch that points at an absolute path on this machine, never a source
+# file. The _forward_only.flag / _grace_ms.txt siblings are per-DLL runtime
+# levers the proxies read from next to themselves (see dps_bridge/README.md).
+FAREVERMOD_DEBUG_LOG
+*_forward_only.flag
+*_grace_ms.txt
+
 # --- local game data (optional sibling data) ---
 # Note: htdocs is now a sister folder in the root, but we keep these ignored
 # here just in case local copies are made.
@@ -63,6 +75,9 @@ Thumbs.db
 desktop.ini
 
 # --- local scratch / working files ---
+# A crashed msys grep/find drops a Windows Error Reporting stack dump wherever
+# it was run, which the stray-file guard then has to name as unowned scratch.
+*.stackdump
 _scratch*.py
 _tmp*.py
 tmp_*
@@ -75,6 +90,8 @@ docs/*
 !docs/setup.md
 !docs/_config.yml
 !docs/CREDITS.md
+# Session handoffs are deliberately NOT re-allowed: docs/ is machine-local
+# working context, not a repo artifact (dropped from the index 2026-10-06).
 Run_Scripts.bat
 
 
@@ -87,8 +104,9 @@ Run_Scripts.bat
 !/.github/
 # Non-dotfile names still excluded separately:
 /ai/
-AGENTS.md
+# AGENTS.md is kept in the repo so the agent rule is versioned and shared.
 
-# --- git-ignored dev icon-preview page (dev/run-mode only testing tool) ---
-farever_companion/ui/pages/devicons.py
+tests/scratch/
+# (the dev-only icon/overlay preview page is no longer ignored here: it lives in
+#  build_tools/dev/, which is tracked, and is loaded by path at runtime)
 

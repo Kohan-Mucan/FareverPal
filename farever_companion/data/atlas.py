@@ -126,7 +126,10 @@ def data():
             
     return combined
 
-_SHEET_MAP = {
+# Category alias -> canonical sheet folder. THE one alias table: `icons.py`
+# imports it instead of keeping a second copy (its own table was exactly
+# these eight rows).
+SHEET_MAP = {
     "units": "units",
     "unit": "units",
     "enemies": "units",
@@ -166,7 +169,7 @@ def find_entry(category: str | None, entry_id: str):
     # 1. Try specified category
     if category:
         cat = category.lower()
-        cat = _SHEET_MAP.get(cat, cat)
+        cat = SHEET_MAP.get(cat, cat)
         res = _lookup(all_data.get(cat))
         if res:
             return res

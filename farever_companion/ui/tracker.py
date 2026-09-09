@@ -17,6 +17,7 @@ import time
 from PySide6 import QtCore
 
 from .nav_needle import NeedleOverlay
+from ..core import game_state
 from ..data import names
 from ..geo import nav, orbs as geo_orbs
 
@@ -356,11 +357,7 @@ class TrackController(QtCore.QObject):
                         return None
                 # Inside a dungeon/rift, allow up to 90s (1.5m) for boss intermissions/transitions;
                 # in the open world, keep a 3s grace for dead/despawned mobs.
-                in_dg = False
-                try:
-                    in_dg = self.model is not None and self.model.is_in_dungeon_or_rift()
-                except Exception:
-                    pass
+                in_dg = self.model is not None and game_state.in_instance(self.model)
                 limit = 90.0 if in_dg else 3.0
 
                 now = time.monotonic()

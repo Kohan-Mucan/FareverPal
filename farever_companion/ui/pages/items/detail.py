@@ -13,17 +13,45 @@ from ... import theme
 from ... import components as C
 from ....data import items as idata
 from . import support
+from .cache_box import build_cache_box, build_mog_vendor
 from .skills_section import SkillBar
 from .drops import (_deduped_drops, build_drops_body,
                     codex_drop_rows)
 from .support import GLYPH_DOWN, GLYPH_RIGHT, GLYPH_RIFT, ID_ROLE
 from .upgrades_matrix import build_upgrades_matrix_scroll
 
+
+def _trait_line_html(tr: dict, txt: str) -> str:
+    """The ⚡ line as rich text. A "Weapon Upgraded" trait carries `parts`
+    whose rarity-tagged bits take that rarity's own ladder colour, so its
+    per-rarity values can't be misread as one merged run; every other trait
+    (the authored item text) renders as plain escaped prose in the line's
+    gold. The whole label is wrapped in a span so Qt always treats it as rich
+    text — otherwise a stray '&' in sheet prose would render as an entity."""
+    parts = tr.get("parts")
+    if not parts:
+        body = html.escape(txt)
+    else:
+        body = "".join(
+            (f'<span style="color:{theme.rarity_color(rarity)};'
+             f'font-weight:700">{html.escape(seg)}</span>') if rarity
+            else html.escape(seg) for seg, rarity in parts)
+    return (f"<span>⚡&nbsp; ({html.escape(tr['type'])})&nbsp; {body}</span>")
+
 # Gear-scale slider cap failsafe — DORMANT until the game lets rare gear
 # upgrade past its drop level. FAREVER_SOURCE_CAPS=1 re-enables it: the
 # slider caps at each item's real-source level (the highest boss level in
 # its drop data, or the authored zone-tier level for world-drop gear).
 _USE_ITEM_SOURCE_CAPS = os.environ.get("FAREVER_SOURCE_CAPS") == "1"
+
+# the granted-skill box's text size. It rides a set of whole sentences (the
+# skill's description plus the crucible's (2)/(4)/(6) tiers), so it is reading
+# text, not a label — and it stays a notch ABOVE the Infusions tab's ladder
+# (_TIER_PX in enchants.py, 13px), which had to shrink to fit three
+# rows above the fold. Same three tiers, two surfaces: the ladder is compact
+# because the tab has a fold to clear, this box is not, so it keeps the size
+# the same ladder reads at on a surface that scrolls
+_INFUSION_PX = 14
 
 
 def _item_scale_cap(item_id: str) -> int:
@@ -100,6 +128,7 @@ class ItemDetailMixin:
         hrow.addWidget(tile, 0, QtCore.Qt.AlignTop)
         ncol = QtWidgets.QVBoxLayout()
         ncol.setSpacing(4)
+        ncol.setAlignment(QtCore.Qt.AlignTop)
         name = QtWidgets.QLabel(it.get("name") or it["id"])
         # wrap long crafted names — an unbroken 700px+ line stretches the
         # window to the right (same fix as the Drops From location labels).
@@ -107,7 +136,7 @@ class ItemDetailMixin:
         # token can't wrap, so only a max-width keeps it from driving the
         # window's minimum size.
         name.setWordWrap(True)
-        name.setAlignment(QtCore.Qt.AlignCenter)
+        name.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         name.setMaximumWidth(640)
         name.setStyleSheet(
             f"color:{col};font-size:19px;font-weight:700;background:transparent;")
@@ -119,10 +148,12 @@ class ItemDetailMixin:
             bits.append(" · ".join(idata.class_label(c)
                                     for c in it["classes"]))
         elif it.get("faction"):
-            bits.append(it["faction"])
+            # display name: the sheet keys Nightling gear by its old "Demon"
+            # id, but the game shows "Nightling"
+            bits.append(support.faction_label(it["faction"]))
         meta.setText(" — ".join(bits))
         meta.setWordWrap(True)
-        meta.setAlignment(QtCore.Qt.AlignCenter)
+        meta.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         meta.setStyleSheet(
             f'color:{theme.MUTED};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
             "font-size:11px;letter-spacing:0.5px;background:transparent;")
@@ -169,9 +200,36 @@ class ItemDetailMixin:
                     lambda: self._items_open_in_craft(unlocked["item"]))
                 lay.addWidget(utag, 0, QtCore.Qt.AlignLeft)
 
-        if idata.is_gear(it):
-            lay.addWidget(self._items_farm_btn(it["id"]),
-                          0, QtCore.Qt.AlignLeft)
+        # combine ADD TO FARM button and DAMAGE indicator on the same line
+        is_gear_item = idata.is_gear(it)
+        atk = idata.weapon_attack(it)
+
+        if is_gear_item or atk:
+            action_row = QtWidgets.QHBoxLayout()
+            action_row.setSpacing(16)
+
+            if is_gear_item:
+                action_row.addWidget(self._items_farm_btn(it["id"]), 0, QtCore.Qt.AlignVCenter)
+
+            if atk:
+                acol = idata.affinity_color(atk["affinity"])
+                dmg = QtWidgets.QLabel(
+                    f"{atk['affinity']} · {atk['ratio']:g}× Weapon Power")
+                dmg.setStyleSheet(
+                    f'color:{acol};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
+                    f"font-size:13px;font-weight:700;background:transparent;")
+                tag = QtWidgets.QLabel("DAMAGE")
+                tag.setStyleSheet(
+                    f"color:{theme.DIM};font-size:10px;letter-spacing:1px;"
+                    "background:transparent;")
+                dmg_box = QtWidgets.QHBoxLayout()
+                dmg_box.setSpacing(6)
+                dmg_box.addWidget(tag)
+                dmg_box.addWidget(dmg)
+                action_row.addLayout(dmg_box)
+
+            action_row.addStretch(1)
+            lay.addLayout(action_row)
 
         # the item's OWN stat values (authored affixes): chips like the viewer
         # (+2 Vitality · +2 Strength, +20 Critical / -20 Fervor on augments).
@@ -195,27 +253,6 @@ class ItemDetailMixin:
             chips.addStretch(1)
             lay.addLayout(chips)
 
-        # weapons: the damage line — real game data (base-attack affinity +
-        # WeaponPower ratio; the game derives the actual number at runtime)
-        atk = idata.weapon_attack(it)
-        if atk:
-            arow = QtWidgets.QHBoxLayout()
-            arow.setSpacing(10)
-            acol = idata.affinity_color(atk["affinity"])
-            dmg = QtWidgets.QLabel(
-                f"{atk['affinity']} · {atk['ratio']:g}× Weapon Power")
-            dmg.setStyleSheet(
-                f'color:{acol};font-family:"{theme.MONO_FONT}", "Consolas", monospace;'
-                f"font-size:13px;font-weight:700;background:transparent;")
-            tag = QtWidgets.QLabel("DAMAGE")
-            tag.setStyleSheet(
-                f"color:{theme.DIM};font-size:10px;letter-spacing:1px;"
-                "background:transparent;")
-            arow.addWidget(tag)
-            arow.addWidget(dmg)
-            arow.addStretch(1)
-            lay.addLayout(arow)
-
         # gear scaling (gear only) — level slider + the merged rarity ×
         # upgrade table (base states and step stats in one view, port of the
         # Item Lookup viewer's computeStats). Built by
@@ -235,6 +272,73 @@ class ItemDetailMixin:
             self._items_stat_block = stat_block
             lay.addWidget(stat_block)
 
+        # special weapon affixes, passive traits, and proc effects (compact
+        # 1-line labels). The SkillBar below documents the weapon's OWN
+        # passives — one tile each, full effect text — and it reads the same
+        # rows, so re-listing them here was a verbatim second copy of the
+        # same sentence. Those lines stay with the bar; this block keeps what
+        # only it can show: the authored item text and the engine-granted
+        # "Weapon Upgraded" passive, spelled out per upgrade rank.
+        traits = [t for t in idata.item_special_traits(it["id"])
+                  if not t.get("skill")]
+        upgrade_trait = idata.weapon_upgrade_trait(it["id"])
+        if upgrade_trait:
+            traits = [upgrade_trait] + traits
+        if traits:
+            tbox = QtWidgets.QWidget()
+            tlay = QtWidgets.QVBoxLayout(tbox)
+            tlay.setContentsMargins(0, 2, 0, 4)
+            tlay.setSpacing(4)
+            for tr in traits:
+                txt = tr["text"] if tr["text"] != tr["title"] else tr["title"]
+                lbl = QtWidgets.QLabel(_trait_line_html(tr, txt))
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(
+                    f"color: {theme.GOLD}; background: {theme.with_alpha(theme.GOLD, 16)}; "
+                    f"border: 1px solid {theme.with_alpha(theme.GOLD, 60)}; "
+                    "border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 11px;")
+                tlay.addWidget(lbl)
+            lay.addWidget(tbox)
+
+        # the Infusion System's patterns: what the pattern grants once
+        # applied at the crucible — the skill sheet's own description for
+        # the granted skill (and the ultimate, when the sheet names one),
+        # styled like the traits box so it reads as effect text. Values the
+        # sheet leaves as template slots show the sheet's own 'X'.
+        notes = idata.infusion_skill_notes(it["id"])
+        if notes:
+            ibox = QtWidgets.QWidget()
+            ilay = QtWidgets.QVBoxLayout(ibox)
+            ilay.setContentsMargins(0, 2, 0, 4)
+            ilay.setSpacing(4)
+            for n in notes:
+                # the crucible's set tiers ride the granted skill: the
+                # (2)-piece base desc is the box's main line, the (4) stat
+                # affixes and (6) rank text render as their own lines
+                txt = (f"<b style='color:{theme.GOLD};'>{n['name']}</b>"
+                       f"<span style='color:{theme.DIM};'> · {n['tag']}</span>")
+                if n["desc"]:
+                    txt += f"<br>{n['desc']}"
+                for a in n.get("set4") or ():
+                    # both tier tags wear the same DIM label color: the (4)
+                    # tag used to be gold, which made it read as part of the
+                    # affix rather than as the ladder's third label (the box
+                    # is already gold-tinted, and so is the skill's name)
+                    txt += (f"<br><span style='color:{theme.DIM};'>(4) Set :</span> "
+                            f"{a}")
+                if n.get("set6"):
+                    txt += (f"<br><span style='color:{theme.DIM};'>(6) Set :</span> "
+                            f"{n['set6']}")
+                lbl = QtWidgets.QLabel(txt)
+                lbl.setWordWrap(True)
+                lbl.setTextFormat(QtCore.Qt.RichText)
+                lbl.setStyleSheet(
+                    f"color: {theme.TEXT}; background: {theme.with_alpha(theme.GOLD, 14)}; "
+                    f"border: 1px solid {theme.with_alpha(theme.GOLD, 55)}; "
+                    f"border-radius: 4px; padding: 4px 8px; font-size: {_INFUSION_PX}px;")
+                ilay.addWidget(lbl)
+            lay.addWidget(ibox)
+
         # drops from — gear with a boss shows its faction's dungeon bosses
         # (see shown_drops); everything else lists every merged source
         drops = idata.shown_drops(it["id"])
@@ -244,6 +348,11 @@ class ItemDetailMixin:
         # the scan
         if (it.get("type") or "") in ("Mount", "GearGlider"):
             drops = codex_drop_rows(it["id"]) or drops
+        # a recorded merchant counter outlives that preference: a codex card
+        # authors mobs and known vendors, never what a scanned shop held, and
+        # the Riftstalkers' mount card lists mobs only (see
+        # sources.with_recorded_shop)
+        drops = idata.with_recorded_shop(drops, it["id"])
         db = QtWidgets.QWidget()
         dl2 = QtWidgets.QVBoxLayout(db)
         dl2.setContentsMargins(0, 0, 0, 0)
@@ -308,6 +417,9 @@ class ItemDetailMixin:
             nlab.setWordWrap(True)
             nlab.setMaximumWidth(620)
             dl2.addWidget(nlab)
+        if it["id"] == "BadgeOfGlory":
+            # the MoG spend list: what Shiro James stocks, priced in medals
+            dl2.addWidget(build_mog_vendor(self))
         if not drops:
             # crafted pieces skip the reason line — the CRAFTED tag above
             # already explains why there are no drop sources
@@ -322,6 +434,11 @@ class ItemDetailMixin:
                 drops, on_codex_click=self._codex_jump_to_unit,
                 on_expand=self._items_refresh_scroll,
                 item_id=it["id"]))
+        # a heroic cache is a BOX: what it opens into is the whole point, and
+        # the cache itself has no drops of its own to show
+        boxw = build_cache_box(it["id"])
+        if boxw is not None:
+            dl2.addWidget(boxw)
         lay.addWidget(db)
 
         # weapons: the skill list — the ACTION BAR (mockup 02): one square
@@ -562,9 +679,12 @@ class ItemDetailMixin:
 
         head = QtWidgets.QHBoxLayout()
         head.setSpacing(10)
+        mode_btn = None
         if ladder:
             hdr = C.SectionHeader("UPGRADE LADDER")
             head.addWidget(hdr)
+            mode_btn = self._items_stat_mode_toggle()
+            self._items_stat_mode_btn = mode_btn
         head.addStretch(1)
 
         if fixed:
@@ -604,13 +724,31 @@ class ItemDetailMixin:
             stb.addLayout(head)
 
         if ladder:
-            # crafted gear is made at a FIXED level with set stats, and
-            # armor + jewelry can't be upgraded in-game yet (weapons can)
-            # — render only the base column, not the step gains (the steps
-            # stay in the data; they're hidden until those upgrades land)
+            # crafted gear is made at a FIXED level with set stats, and no
+            # armor or jewelry can be upgraded in-game yet (only weapons,
+            # Rare/Epic/Legendary) — Epic armor's +N path isn't live, so it is
+            # locked too. Render only the base column, not the step gains.
+            upgrade_locked = idata.upgrade_locked(it["id"])
+            locked = not fixed and upgrade_locked
+            show_steps = not (fixed or upgrade_locked)
+            # gear stats only — the weapon's "Weapon Upgraded" passive is
+            # stated once on this card's ⚡ trait line, never re-listed here
+            # as a row of the same percentages
             stb.addWidget(build_upgrades_matrix_scroll(
                 ladder, level_label=None,
-                show_steps=not (fixed or idata.upgrade_locked(it["id"]))))
+                stats_control=mode_btn,
+                show_steps=show_steps))
+            # A locked piece drops the step columns on purpose (the game has
+            # no upgrade path for armor/jewelry yet). Say so rather than
+            # leaving the truncated ladder to read like a rendering bug.
+            # Crafted gear is EXCLUDED: its FIXED L readout already explains
+            # the absence, so the note would be redundant noise there.
+            if locked:
+                note = QtWidgets.QLabel("Upgrades not available yet")
+                note.setObjectName("Muted")
+                note.setWordWrap(True)
+                note.setMaximumWidth(620)
+                stb.addWidget(note)
 
         return stat_block
 
@@ -618,10 +756,10 @@ class ItemDetailMixin:
         """Swap the gear-scale stat block in place on a level change — only
         that section is affected, so the header/drops/recipes (and the
         scroll position) stay untouched."""
-        cur = self._items_list.currentItem()
-        if cur is None:
+        iid = getattr(self, "_items_shown_id", None)
+        if not iid:
             return
-        it = idata.item(cur.data(ID_ROLE)) or {}
+        it = idata.item(iid) or {}
         if not it or not idata.is_gear(it):
             return
         old = getattr(self, "_items_stat_block", None)

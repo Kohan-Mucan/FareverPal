@@ -1,12 +1,13 @@
 """Player cards and metric summary components for the Combat page.
 
-Includes the player cards displayed in class columns, the proportional stacked
-skill bar, the compact stat strip, and single-metric cards.
+Includes the player cards displayed in class columns, the damage-by-type
+stacked bar, the compact stat strip, and single-metric cards.
 """
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .. import affinity_view
 from .. import theme
 from .. import components as C
 from ...core.dps_tracker import PlayerParse, SkillParse
@@ -125,56 +126,145 @@ class _StatStrip(QtWidgets.QFrame):
             pair[0].setToolTip(sub)
 
 
-class _StackedSkillBar(QtWidgets.QWidget):
-    """Proportional multi-colored segmented horizontal bar of top skills."""
+def _rel_luminance(color: QtGui.QColor) -> float:
+    """WCAG relative luminance, for choosing readable text on a segment."""
+
+    def _channel(value: int) -> float:
+        s = value / 255.0
+        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+
+    return (0.2126 * _channel(color.red())
+            + 0.7152 * _channel(color.green())
+            + 0.0722 * _channel(color.blue()))
+
+
+def _ink_for(color: QtGui.QColor) -> str:
+    """The theme's light or dark ink, whichever reads better on `color`.
+
+    The damage-type palette is OPEN: `affinity_color` falls back to the theme
+    accent for a school no item sheet names, and a patch can add any colour, so
+    the segment label cannot be drawn in a hardcoded pen.
+    """
+    lum = _rel_luminance(color)
+
+    def _contrast(other: str) -> float:
+        lo, hi = sorted((lum, _rel_luminance(QtGui.QColor(other))))
+        return (hi + 0.05) / (lo + 0.05)
+
+    return theme.TEXT if _contrast(theme.TEXT) >= _contrast(theme.BG) else theme.BG
+
+
+class _DamageTypeBar(QtWidgets.QWidget):
+    """One player's damage split by the game's own per-hit damage type.
+
+    This bar IS the Combat rail's damage-by-type readout: it replaced the
+    one-line text summary that used to sit there. Every `affinity_view.TypeRow`
+    becomes a segment sized by its share, labelled inside itself whenever the
+    segment is wide enough to hold the text; hovering carries the full table
+    (amounts and hit counts) for the ones that are not. A type too narrow to
+    label is deliberately NOT spelled out in prose beside the bar - that would
+    rebuild the line this replaced.
+
+    Visibility belongs to the rail, not to this widget: a child hidden on its
+    own stays hidden when its container is shown again, which is the trap
+    `components._badge` shipped once. `clear()` is the teardown the rail calls
+    instead, so no stale split survives behind a hidden bar.
+    """
+
+    # Every present type keeps a visible hairline, so a bucket the game really
+    # did report cannot read as absent just because its share is sub-pixel.
+    MIN_SEG_W = 1.0
+    # Horizontal room a label needs beyond its own text before it is drawn.
+    LABEL_PAD = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(12)
+        self.setFixedHeight(16)
         self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.segments: list[tuple[str, float, str]] = []
+        self.rows: list = []
 
-    def set_skills(self, skills: list, total_dmg: float):
-        if total_dmg <= 0 or not skills:
-            self.segments = []
-            self.setToolTip("No skill damage recorded")
-            self.update()
-            return
-        segs = []
-        tooltip_lines = ["Skill Damage Distribution:"]
-        for sp in skills[:8]:
-            val = getattr(sp, "total", getattr(sp, "damage", 0.0))
-            if val <= 0:
-                continue
-            pct = (val / total_dmg) * 100.0
-            col = theme.skill_color(sp.skill_id)
-            segs.append((sp.name, pct, col))
-            tooltip_lines.append(f"• {sp.name}: {val:,.0f} ({pct:.1f}%)")
-        self.segments = segs
-        self.setToolTip("\n".join(tooltip_lines))
+    def clear(self) -> None:
+        """Drop the segments AND the tooltip: a stale split behind a hidden
+        bar is visible only to whatever reads this widget's own state."""
+        self.rows = []
+        self.setToolTip("")
+        self.update()
+
+    def set_rows(self, rows) -> None:
+        """`rows` is an ordered, already-totalled `affinity_view.TypeRow` list.
+
+        A zero-share row is dropped: it can carry no width, and the tooltip
+        should not advertise a bucket with nothing in it.
+        """
+        self.rows = [r for r in (rows or [])
+                     if float(getattr(r, "pct", 0.0) or 0.0) > 0.0]
+        self.setToolTip(affinity_view.affinity_tooltip_html(self.rows)
+                        if self.rows else "")
         self.update()
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         rect = self.rect()
-        w = rect.width()
-        h = rect.height()
+        w = float(rect.width())
+        h = float(rect.height())
         bg_path = QtGui.QPainterPath()
-        bg_path.addRoundedRect(QtCore.QRectF(0, 0, w, h), 3, 3)
+        bg_path.addRoundedRect(QtCore.QRectF(0.0, 0.0, w, h), 3, 3)
         painter.fillPath(bg_path, QtGui.QColor(theme.SURFACE))
 
-        if not self.segments:
+        if not self.rows or w <= 0.0:
             return
 
         painter.setClipPath(bg_path)
-        cur_x = 0.0
-        for name, pct, col in self.segments:
-            seg_w = (pct / 100.0) * w
-            if seg_w < 1.0:
-                continue
-            painter.fillRect(QtCore.QRectF(cur_x, 0, seg_w, h), QtGui.QColor(col))
-            cur_x += seg_w
+        font = painter.font()
+        font.setPixelSize(9)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = QtGui.QFontMetrics(font)
+
+        # Segment edges in pixels, built from the CUMULATIVE share so a boundary
+        # can never drift from where the previous segment ended; the last edge
+        # is pinned to the right instead of trusting the shares to total exactly
+        # 100 (the untagged remainder is one of them). A share too small to
+        # paint is widened to a hairline and everything after it SHIFTS right,
+        # so the widening can never be painted over; painting is clipped to the
+        # bar, so a shifted tail meets the right edge rather than passing it.
+        edges = [0.0]
+        share = 0.0
+        for index, row in enumerate(self.rows):
+            share += float(row.pct)
+            true_right = w if index == len(self.rows) - 1 else share / 100.0 * w
+            edges.append(min(w, max(edges[-1] + self.MIN_SEG_W, true_right)))
+
+        for row, x0, right in zip(self.rows, edges, edges[1:]):
+            if right - x0 <= 0.0:
+                continue                    # squeezed out on a very narrow bar
+            seg = QtCore.QRectF(x0, 0.0, right - x0, h)
+            color = QtGui.QColor(row.color)
+            painter.fillRect(seg, color)
+            label = f"{row.label} {row.pct_text()}"
+            if metrics.horizontalAdvance(label) + self.LABEL_PAD <= seg.width():
+                painter.setPen(QtGui.QColor(_ink_for(color)))
+                painter.drawText(seg, QtCore.Qt.AlignCenter, label)
+
+
+class _PdMdLabel(QtWidgets.QLabel):
+    """The PD / MD pair beside the rail's damage-by-type bar.
+
+    Text comes from ``affinity_view.pd_md_text`` — the same merge the Test
+    Dummy HUD draws — so this stays a thin carrier: ``set_player`` reads one
+    player's affinity and clears itself when nothing was classified, and the
+    rail's visibility rules own whether the label is shown at all (a child
+    that hides itself stays hidden when its container re-shows — the trap
+    ``components._badge`` shipped once, and the reason ``_DamageTypeBar``
+    carries no hide flag either).
+    """
+
+    def set_player(self, p) -> None:
+        """Write the pair from one player's own affinity buckets."""
+        from .. import affinity_view
+        damage, _hits, total = affinity_view.player_affinity(p)
+        self.setText(affinity_view.pd_md_text(damage, total))
 
 
 class _PlayerCardWidget(QtWidgets.QFrame):
@@ -191,7 +281,6 @@ class _PlayerCardWidget(QtWidgets.QFrame):
         self.name = name
         self.is_me = is_me
         self._is_selected = False
-        self._zero_collapsed = False
         self._hero_class = ""
 
         self.setObjectName("PlayerCombatCard")
@@ -321,19 +410,6 @@ class _PlayerCardWidget(QtWidgets.QFrame):
             f"{left_border} border-radius: 5px; padding: 2px; }}"
         )
 
-    def set_zero_collapsed(self, on: bool):
-        """Collapse a zero-data ally row to one quiet line."""
-        if on == self._zero_collapsed:
-            return
-        self._zero_collapsed = on
-        self.bar.setVisible(not on)
-        self.b_row_widget.setVisible(not on)
-        if on:
-            self.rate_lbl.setText("—")
-            self.total_lbl.setText("no events")
-        else:
-            self.rate_lbl.setText("0/s")
-            self.total_lbl.setText("0 (0%)")
 
     def update_stats(self, idx: int, p: PlayerParse, duration: float,
                      group_dmg: float, group_heals: float, tab: str,
@@ -365,7 +441,7 @@ class _PlayerCardWidget(QtWidgets.QFrame):
         hps_val = p.hps(duration)
         dmg_share = p.share_pct(group_dmg)
         heal_share = p.heal_share_pct(group_heals)
-        taken_val = getattr(p, "total_damage_taken", p.damage_taken + p.damage_taken_est)
+        taken_val = getattr(p, "total_damage_taken", p.damage_taken)
         taken_share = (taken_val / max(1.0, group_taken)) * 100.0 if group_taken > 0 else 0.0
 
         if tab == "healing":

@@ -10,10 +10,13 @@ this guide → `docs/ARCHITECTURE.md` → the source for the area you're touchin
 ## The one thing to internalise first
 
 Farever Pal is **read-only and out-of-process**. It reads the game's memory from
-a separate process and never writes to the game, injects code, automates input,
-or touches the network. Every contribution must keep that true. See
-`docs/ARCHITECTURE.md` for the full rule set — it's not negotiable, it's the
-reason the tool is safe to run.
+a separate process and never writes to the game, automates input, or touches the
+network. The only in-game code interface is the optional DPS DLL / proxy /
+injector path owned by `core/dps_bridge.py`. That path is still read-only in
+intent — it receives game damage data, it does not write to the game state,
+automate input, or touch the network. Everything else (memory reads, logic, UI)
+stays pure read-only. See `docs/ARCHITECTURE.md` for the full rule set — it's
+not negotiable, it's the reason the tool is safe to run.
 
 ## Prerequisites
 
@@ -27,6 +30,10 @@ reason the tool is safe to run.
 
 You do **not** need the game to work on the data layer, the DPS math, or the UI —
 those are headless and unit-tested.
+
+Check every prerequisite at once before a build with `build_tools\doctor.bat`:
+it probes the venv, Rust, MSVC and the Windows SDK, prints the exact fix for
+each that is missing, and exits non-zero when something is.
 
 ## Set up
 
@@ -91,8 +98,13 @@ reflection lists (refl=n, add the real name to the `_*_FIELDS` tuples in
 order).
 
 The DPS meter (Top DPS overlay + Combat & DPS Analysis page) is fed by the
-game's own per-hit damage events: `core/damage.py` reads the
-`ui.comp.DamageDisplay` numbers; `core/dps_source.py` feeds the event ring.
+game's own per-hit damage events. `core/dps_source.py` owns the shared event
+ring and routes capture to ONE of two engines that deliberately share no code:
+`core/dps_bridge.py` (Options 1 & 2 - the in-game DLL, drop-in proxy or
+injected, streaming JSON over UDP) and `core/dps_memory.py` (Option 3 - the
+DLL-free scanner, which reads `ui.comp.DamageDisplay` numbers via
+`core/damage.py`). Fix DLL/proxy/injector problems in the former, offsets and
+floaty decoding in the latter; editing one must never break the other.
 `core/group_reader.py` reads the replicated `st.Group` party roster (the read
 side of the game's invite-to-group flow) and `core/dps_tracker.py` seeds it
 into the name maps, so far-away group members resolve by real name instead of
@@ -100,13 +112,9 @@ synthetic `Party_XXXX` rows. See `core/damage.py` for the calibration pattern
 and offsets.
 
 Damage totals are NEVER HP-derived - enemy health is only read for the boss
-bar and encounter state. The one exception, explicitly labeled in the UI
-(≈): the per-player **damage-taken** readout uses hero HP as a *fallback*
-signal, gated so events and estimates can never mix or double-count: the
-estimate engages only after a reader lull (no events at all for 3s), a
-hero that received an incoming event that tick is skipped regardless, a
-death transition (hp reaching 0) is never counted as damage taken, and HP
-diffs never contribute to outgoing damage or heals.
+bar and encounter state, and hero HP only for death detection (prev>0 ->
+hp<=0 ends the fight for wipe handling). There is no estimate channel:
+with no damage events, nothing is recorded.
 
 Pets/summons are re-credited to their owners: `core/dps_tracker.py` maps each
 player-owned companion (an ent.Foe whose scene owner resolves to an ent.Hero)
@@ -139,13 +147,16 @@ farever_companion/
     hl.py               HashLink reflection (class names, super-chains, strings, arrays)
     player.py           locate the local player (pure-read, no writes)
     appsingleton.py     resolve the player via the GameApp singleton (read-only)
-    scene.py            walk the scene graph -> Entity / Element snapshot (batched)
+    scene.py            walk the scene graph -> Entity / Element snapshot (batched);
+                        owns the instance gate (dungeon/rift detection)
     attributes.py       HP + level reads (display/boss-bar only for DPS)
     damage_events.py    DamageEvent dataclass (shared input to the engine)
     damage.py           DamageDisplay floaty-number event reader
     group_reader.py     st.Group party-roster probe/reader (real names, leader,
                         solo - any distance)
-    dps_source.py       DamageSourceManager: arbitrates readers, feeds the ring
+    dps_source.py       DamageSourceManager: owns the event ring, routes capture
+    dps_bridge.py       Options 1 & 2: the in-game DLL (proxy / injector, UDP)
+    dps_memory.py       Option 3: the DLL-free memory scanner (offsets live here)
     dps_tracker.py      DPS engine: consumes real events -> CombatSession (no HP-diff)
     model.py            LiveModel: one snapshot/tick, shared by every view
   data/                 static, process-free, CDB-backed (loot, units, rarity, names, icons)
@@ -165,6 +176,10 @@ through `LiveModel`. Keeping that boundary is what lets the logic stay testable.
    change with a `tests/test_dps.py` case; a new tracked stat is a `core/` change.
 3. **Add/extend a test** for anything in `data/`, `combat/`, or the pure parts of
    `core/`. These are the parts we *can* test without the game, so we do.
+   New test files go beside the code they cover (`tests/test_<area>.py`), never as
+   throwaway scratch files. If you need a scratch test while iterating, put it in
+   `tests/scratch/` and delete it before merge — a lone `test_*.py` with no
+   corresponding source change is assumed abandoned and will be flagged in review.
 4. For memory offsets you can't verify without the game: isolate the offset as a
    named constant defaulting to `None`, make the feature no-op until calibrated,
    and say in the PR that it needs live calibration. Never fabricate a value. See
@@ -177,15 +192,51 @@ through `LiveModel`. Keeping that boundary is what lets the logic stay testable.
 
 ## PR checklist
 
-- [ ] Read-only / out-of-process invariant preserved (no writes, no injection in
-      the normal path, no network, no input automation).
+- [ ] Read-only / out-of-process invariant preserved: no writes to the game,
+      no input automation, no network. The only in-game code interface is the
+      optional DPS DLL/proxy/injector path in `core/dps_bridge.py`, and that path
+      is still read-only in intent — if you touch it, say so explicitly in the PR.
 - [ ] `pytest -q` passes.
+- [ ] No abandoned test files: every `tests/test_*.py` is tied to a tracked
+      feature, and anything in `tests/scratch/` is deleted before merge.
 - [ ] New offsets isolated as `None`-defaulting constants if not live-validated,
       with a comment noting how/when they were (or need to be) calibrated.
 - [ ] UI changes follow the design system (dark, flat, sharp corners, shared
       widgets).
 - [ ] PR description says what you tested — and whether it needs live testing
       against the game that you couldn't do yourself.
+- [ ] No orphan `tests/test_*.py` files left behind: any test that is only a
+      scratch pad is either deleted or moved into `tests/scratch/` before merge.
 
 Maintainers run live validation against the game for memory-layer PRs, so it's
 fine to submit a memory change you could only verify by reasoning — just say so.
+
+## Abandoned test files
+
+Left-behind scratch tests are the easiest kind of repo clutter to miss because
+they look legitimate: they live in `tests/`, they start with `test_`, and pytest
+runs them. The rule is simple — a one-off `test_*.py` that isn't tied to an
+actual feature is not a test, it's a scratch pad, and it should be deleted or
+moved into `tests/scratch/` before merge.
+
+- **Real tests** go next to the code they cover: `tests/test_dps.py`,
+  `tests/test_damage.py`, and so on.
+- **Scratch tests** go in `tests/scratch/`. Use them while iterating, but treat
+  the folder as temporary — reviewer expectation is that it's empty in a merged
+  PR.
+- When in doubt, delete the scratch file rather than leave it. The code under
+  test is already in the repo; if the scratch test was worth keeping it
+  probably belongs as a real test somewhere, not on its own.
+
+This rule is mirrored in `AGENTS.md` so humans and agents share one standard:
+scratch tests are temporary, kept only in `tests/scratch/` while being worked on,
+and removed before the change is merged.
+
+### Optional automated check
+
+A lightweight pre-commit or CI check can flag orphan `tests/test_*.py` files —
+that is, test files that exist on disk but are not tied to a tracked feature in
+the same change. The intent is not to block all new test files, only to surface
+one-off scratch files that were left behind. The first pass can be a warning in
+PR review; a hard failure only makes sense once the rule is stable and the team
+has had time to clean up any existing orphans.

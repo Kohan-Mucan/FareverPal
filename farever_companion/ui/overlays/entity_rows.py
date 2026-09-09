@@ -207,13 +207,25 @@ class _EntityRow(QtWidgets.QFrame):
 
 
 class _Section(QtWidgets.QWidget):
-    def __init__(self, title, color):
+    """A titled box of rows (the default), or just the rows.
+
+    ``header=False`` builds NO header widget at all — not a hidden one — for a
+    section whose title would only repeat what the window already says (the
+    Test Dummy board names itself in its title bar and shows the total two
+    lines above the rows). A hidden widget is still a widget: it kept showing
+    up in the devicons element inventory as a ghost row, so the honest form of
+    "label-less" is not building it.
+    """
+
+    def __init__(self, title, color, header: bool = True):
         super().__init__()
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 5, 0, 5)
         lay.setSpacing(2)
-        self.header = SectionHeader(title, color, colored_label=True)
-        lay.addWidget(self.header)
+        self.header = (SectionHeader(title, color, colored_label=True)
+                       if header else None)
+        if self.header is not None:
+            lay.addWidget(self.header)
         self.rows = QtWidgets.QVBoxLayout()
         self.rows.setSpacing(1)
         lay.addLayout(self.rows)

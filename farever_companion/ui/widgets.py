@@ -1,145 +1,25 @@
-"""Shared UI components, the single source of the app's look.
+"""The one shared widget that outlived its module: `GlyphButton`.
 
-Every window builds from these so the design is consistent (the fix for the old
-tool's mismatched windows). Plain QWidgets + a little QPainter; styled by QSS
-object names in theme.py.
+A card frame, a fill bar, a hairline and a percent formatter used to live here
+too. All four are gone as of 2026-09-27, and the shape of that is worth
+keeping: each was the last of its design generation, left behind when the thing
+that used it was rebuilt - the card frame by `cards.py` (NavItem / OverlayCard /
+InfoCard), the bar by the per-overlay widget libraries, the hairline and the
+formatter by the page that had owned them. Nothing referenced them; the dead
+`Card` class in particular reads as very much alive to any grep, because three
+other files call `setObjectName("Card")` for the QSS and that is a style hook,
+not a use of the class.
+
+So what is left is a single painted button, re-exported from `components.py`,
+which is the module every call site actually reaches it through. If a second
+shared widget accumulates here again, this is the file; if this one ever does
+not, `GlyphButton` folds into `components.py` and the module goes with it.
 """
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import theme
-
-
-class Card(QtWidgets.QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("Card")
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
-        self.body = lay
-
-
-class Bar(QtWidgets.QWidget):
-    """A flat horizontal fill bar with an inline label."""
-    def __init__(self, color: str = theme.DANGER, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(14)
-        self._frac = 0.0
-        self._label = ""
-        self._color = QtGui.QColor(color)
-
-    def set(self, frac: float, label: str = ""):
-        self._frac = max(0.0, min(1.0, frac))
-        self._label = label
-        self.update()
-
-    def set_color(self, color: str):
-        self._color = QtGui.QColor(color)
-        self.update()
-
-    def paintEvent(self, _e):
-        p = QtGui.QPainter(self)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QtGui.QColor(theme.PANEL_HI))
-        p.fillRect(0, 0, int(w * self._frac), h, self._color)
-        if self._label:
-            p.setPen(QtGui.QColor(theme.TEXT))
-            f = p.font(); f.setPointSize(8); p.setFont(f)
-            p.drawText(QtCore.QRect(0, 0, w - 3, h),
-                       QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, self._label)
-        p.end()
-
-
-class Sparkline(QtWidgets.QWidget):
-    """A scrolling line chart of recent values."""
-    def __init__(self, color: str = theme.ACCENT, height: int = 46, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(height)
-        self._data: list[float] = []
-        self._color = QtGui.QColor(color)
-
-    def set_data(self, data: list[float]):
-        self._data = list(data)
-        self.update()
-
-    def set_color(self, color: str):
-        self._color = QtGui.QColor(color)
-
-    def paintEvent(self, _e):
-        p = QtGui.QPainter(self)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QtGui.QColor(theme.PANEL))
-        data = self._data
-        if len(data) >= 2:
-            mx = max(data) or 1.0
-            n = len(data)
-            path = QtGui.QPainterPath()
-            for i, v in enumerate(data):
-                x = i * (w - 2) / (n - 1) + 1
-                y = (h - 3) - (v / mx) * (h - 8)
-                path.lineTo(x, y) if i else path.moveTo(x, y)
-            pen = QtGui.QPen(self._color); pen.setWidth(1)
-            p.setPen(pen); p.drawPath(path)
-            p.setPen(QtGui.QColor(theme.MUTED))
-            f = p.font(); f.setPointSize(7); p.setFont(f)
-            p.drawText(QtCore.QRect(0, 1, w - 2, 12),
-                       QtCore.Qt.AlignRight | QtCore.Qt.AlignTop, f"{mx:,.0f}")
-        p.setPen(QtGui.QColor(theme.BORDER))
-        p.drawLine(1, h - 2, w - 1, h - 2)
-        p.end()
-
-
-class ColorButton(QtWidgets.QPushButton):
-    """A swatch button that opens a color picker and emits the chosen hex."""
-    changed = QtCore.Signal(str)
-
-    def __init__(self, color: str, parent=None):
-        super().__init__(parent)
-        self._color = color
-        self.setFixedSize(34, 22)
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setToolTip("Pick color")
-        self.clicked.connect(self._pick)
-        self._apply()
-
-    def _apply(self):
-        self.setStyleSheet(
-            f"QPushButton {{ background: {self._color}; border: 1px solid {theme.BORDER}; }}")
-
-    def color(self) -> str:
-        return self._color
-
-    def set_color(self, c: str):
-        self._color = c
-        self._apply()
-
-    def _pick(self):
-        col = QtWidgets.QColorDialog.getColor(QtGui.QColor(self._color), self,
-                                              "Pick color")
-        if col.isValid():
-            self._color = col.name()
-            self._apply()
-            self.changed.emit(self._color)
-
-
-def hairline() -> QtWidgets.QFrame:
-    f = QtWidgets.QFrame()
-    f.setObjectName("Hairline")
-    return f
-
-
-def fmt_pct(p: float) -> str:
-    v = p * 100.0
-    if v >= 10:
-        return f"{v:.0f}%"
-    if v >= 1:
-        return f"{v:.1f}%"
-    if v > 0:
-        return f"{v:.2g}%"
-    return "0%"
 
 
 class GlyphButton(QtWidgets.QPushButton):

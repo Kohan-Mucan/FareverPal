@@ -7,14 +7,119 @@ from pathlib import Path
 
 from PySide6 import QtWidgets, QtGui, QtCore
 
-from .config import Settings, find_backup_files
-from .master_backup import check_for_data_loss, create_snapshot_if_changed
+from .config import Settings, audit_settings_event, find_backup_files
+from .backup.master import check_for_data_loss, create_snapshot_if_changed
 from .ui import theme
 from .ui.backup_scan import BackupScanDialog
 from .ui.copy_menu import install_copy_menu
 from .ui.control_panel import ControlPanel
 from .data import icons
 from . import paths
+
+
+# Session lifecycle audit (settings_audit.log): a CLEAN exit writes a
+# `shutdown` line for its pid, a crash writes `crash` via the excepthook.
+# The next launch then reports `prev-session=<state>` — so a HARD kill
+# (closed console window, power loss, hard crash with no excepthook) is
+# visible as the *absence* of a shutdown line for the previous pid. This
+# is what answered "did you close my app?" on 2026-09-19: a leftover lock
+# file named the pid, but only a missing shutdown line proves the kill.
+_SESSION_AUDITED = False
+
+
+def _audit_session_end(event: str, detail: str = "") -> None:
+    """Write one end-of-session audit line for this pid (once per event)."""
+    global _SESSION_AUDITED
+    if event != "crash" and _SESSION_AUDITED:
+        return          # shutdown already written; a crash after it is moot
+    try:
+        audit_settings_event(event, None, f"session=end {detail}".strip())
+        _SESSION_AUDITED = True
+    except Exception:
+        pass
+
+
+def _write_dev_crash(text: str) -> None:
+    """Append an uncaught Python exception to the opt-in developer log.
+
+    Stamped like run.py's writer: faulthandler dumps (the access-violation
+    traces) have no timestamp, so every entry this file gains needs its own
+    or the order of multiple crashes is unknowable.
+
+    Routed through ``crash_log``'s single writer rather than opening the path
+    here: this, run.py and the session marker were three text-mode handles
+    beside faulthandler's descriptor and the VEH's, which is why run.log mixed
+    ``\r\n`` in among ``\n`` entries. The label stays distinct so an uncaught
+    exception is still distinguishable from a startup failure.
+    """
+    path = os.environ.get("FAREVER_DEV_CRASH_LOG", "").strip()
+    if not path:
+        return
+    try:
+        from .runtime import crash_log
+        crash_log.write_python_exception(
+            path, text, label="Uncaught Python exception")
+    except Exception:
+        pass
+
+
+def _install_crash_audithook() -> None:
+    """Route uncaught exceptions through the crash audit before Qt's default
+    abort path. Chained: the previous excepthook still runs."""
+    prev = sys.excepthook
+
+    def _hook(etype, value, tb) -> None:
+        import traceback
+        text = "".join(traceback.format_exception(etype, value, tb))
+        _write_dev_crash(text)
+        top = "".join(traceback.format_exception_only(etype, value)).strip()
+        _audit_session_end("crash", f"{etype.__name__}: {top[:120]}")
+        if prev is not None:
+            prev(etype, value, tb)
+
+    sys.excepthook = _hook
+
+
+def _prev_session_end_state() -> str:
+    """How the PREVIOUS session ended: "clean", "unclean", or "unknown".
+
+    The previous session is the pid with the latest `startup` line (the
+    definitive session opener; `launch` also fires for refused instances,
+    so it does not open a session). That session ended cleanly iff a
+    `shutdown` or `crash` line exists for the same pid after its startup.
+    A pid with startup but no end line = hard-killed (unclean). Never raises.
+    """
+    try:
+        # the definition site, not the package hub: the audit writer in
+        # config.store resolves the same name in ITS namespace, so one patch
+        # seam (tests/test_guards.py) covers reader and writer.
+        from .config.store import _audit_path
+        p = _audit_path()
+        if not p.exists():
+            return "unknown"
+        my_pid = os.getpid()
+        last_startup_pid: int | None = None
+        ended: set[int] = set()
+        for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "pid=" not in raw:
+                continue
+            try:
+                pid = int(raw.split("pid=")[1].split()[0])
+            except (ValueError, IndexError):
+                continue
+            # Line shape: "<ts> pid=<pid> <event> ..." — the event token is
+            # the SECOND field after "pid=" (the first is the pid itself).
+            rest = raw.split("pid=")[1].split()
+            ev = rest[1] if len(rest) > 1 else ""
+            if ev == "startup":
+                last_startup_pid = pid
+            elif ev in ("shutdown", "crash"):
+                ended.add(pid)
+        if last_startup_pid is None or last_startup_pid == my_pid:
+            return "unknown"
+        return "clean" if last_startup_pid in ended else "unclean"
+    except Exception:
+        return "unknown"
 
 
 _PROBE = bool(os.environ.get("FAREVER_SCREENSHOT", "").strip()
@@ -25,16 +130,27 @@ _PROBE = bool(os.environ.get("FAREVER_SCREENSHOT", "").strip()
 # QSS sets font-size in px, so every widget font has pointSize -1. No app
 # code passes a non-positive point size (all setPointSize calls use positive
 # constants); this is a cosmetic Qt-internal warning that fires on some
-# Windows font-resolution paths. Drop exactly that message and forward
-# everything else to the previous handler.
+# Windows font-resolution paths.
+# Windows also logs "QWindowsWindow::setGeometry: Unable to set geometry ..."
+# when a top-level window (typically a QMessageBox) races its layout minimum
+# on first show with a requested client size smaller than the enforced
+# minimum: the Win32 window manager clamps it (see the message's own
+# "Resulting geometry" line) and the window displays fine. No app code
+# requests an undersize geometry — every explicit resize() is clamped to
+# minimumSize/minimumSizeHint first — so this is the same class of cosmetic
+# Qt-internal noise. Drop exactly those two messages and forward everything
+# else to the previous handler.
 _prev_msg_handler = None
 
 
-def _filter_cosmetic_font_warning(msg_type, context, msg) -> None:
-    if msg_type == QtCore.QtMsgType.QtWarningMsg \
-            and "QFont::setPointSize" in msg \
-            and "Point size <= 0" in msg:
-        return
+def _filter_cosmetic_qt_warnings(msg_type, context, msg) -> None:
+    if msg_type == QtCore.QtMsgType.QtWarningMsg:
+        if "QFont::setPointSize" in msg \
+                and "Point size <= 0" in msg:
+            return
+        if "QWindowsWindow::setGeometry" in msg \
+                and "Unable to set geometry" in msg:
+            return
     if _prev_msg_handler is not None:
         _prev_msg_handler(msg_type, context, msg)
     else:
@@ -115,6 +231,69 @@ def _instance_lock() -> tuple[str, QtCore.QLockFile | None]:
         return "skip", None
 
 
+def _audit_launch(outcome: str) -> None:
+    """One forensic line per launch (see settings_audit.log): how this
+    process got past the single-instance guard.
+
+    The refused ("conflict") case is the valuable one — it is direct
+    evidence of the second-writer hazard this guard exists to prevent, so
+    every outcome is audited, not just the ones that reach startup.
+    """
+    try:
+        audit_settings_event("launch", None, f"lock={outcome}")
+    except Exception:
+        pass
+
+
+def _acquire_instance_guard() -> tuple[str, QtCore.QLockFile | None]:
+    """Single-instance guard + forensic audit for one launch.
+
+    Returns ("ok", lock) when this launch holds the data-folder lock (keep
+    it referenced for the app's lifetime), ("conflict", None) when another
+    live instance holds it (main() shows _warn_conflict and exits), or
+    ("skip", None) when locking is unavailable. FAREVER_ALLOW_MULTI opts
+    out entirely for tooling/CI runs (audited as bypassed-allow-multi).
+    """
+    allow_multi = os.environ.get("FAREVER_ALLOW_MULTI", "").strip().lower() \
+        in ("1", "true", "yes")
+    if allow_multi:
+        _audit_launch("bypassed-allow-multi")
+        return "ok", None
+    status, lock = _instance_lock()
+    if status == "conflict":
+        _audit_launch("conflict")
+        return status, None
+    _audit_launch(status)          # "ok" or "skip"
+    return status, lock
+
+
+def _focus_running_instance() -> int:
+    """A live instance owns this folder: raise it, say so, and exit.
+
+    Preferred over _warn_conflict because the thing the user wants from a
+    second launch is the app they already have. The warning still runs when no
+    window can be found (the winner may be a headless/tooling run), so the
+    refusal is never silent either way.
+    """
+    shown = False
+    try:
+        from .config import config_dir
+        from .runtime.instance_focus import claim
+
+        def _lost(guard) -> None:
+            nonlocal shown
+            shown = guard.focus_existing()
+
+        claim(config_dir(), on_lost=_lost)
+        if shown:
+            print("[startup] another instance owns this data folder - "
+                  "raised its window and exiting", flush=True)
+            return 0
+    except Exception:
+        pass
+    return _warn_conflict()
+
+
 def _warn_conflict(parent: QtWidgets.QWidget | None = None,
                     timeout_ms: int = 6000) -> int:
     """Warn about a second instance on the same data folder, then exit.
@@ -142,18 +321,22 @@ def main() -> int:
     _probe(f"qapp created platform={app.platformName()}")
     # Single-instance guard: refuse a second instance on the same data folder
     # (two writers = the data-loss hazard). Set FAREVER_ALLOW_MULTI=1 to
-    # opt out for tooling/CI runs.
+    # opt out for tooling/CI runs. Every outcome is audited as
+    # `launch lock=<outcome>` so overlapping writers are visible in
+    # settings_audit.log (ok / bypassed-allow-multi / conflict / skip).
     _lock_guard: QtCore.QLockFile | None = None
-    if os.environ.get("FAREVER_ALLOW_MULTI", "").strip().lower() \
-            not in ("1", "true", "yes"):
-        status, _lock_guard = _instance_lock()
-        if status == "conflict":
-            return _warn_conflict()
+    status, _lock_guard = _acquire_instance_guard()
+    if status == "conflict":
+        # The lock file is the DATA guard and is authoritative about who owns
+        # the folder. A named mutex says the same thing earlier and lets the
+        # loser focus the winner, so try that hand-off first (it resolves to
+        # this dialog when there is no window to raise).
+        return _focus_running_instance()
     # silence the cosmetic Qt-internal pixel-font warning (see above); the
     # installed handler chain stays active for the whole app run
     global _prev_msg_handler
     _prev_msg_handler = QtCore.qInstallMessageHandler(
-        _filter_cosmetic_font_warning)
+        _filter_cosmetic_qt_warnings)
     # Dev-only right-click Copy menu (element + text + parent chain for
     # pasting bug reports back verbatim); frozen builds skip it internally.
     install_copy_menu(app)
@@ -173,6 +356,24 @@ def main() -> int:
 
     settings = Settings.load()
     _probe("settings loaded")
+    # File tripwire for out-of-app resets: record the raw settings.json hash
+    # + mtime at startup. If a future launch shows a hash that no audited
+    # save ever wrote, the file was swapped externally between sessions
+    # (sync tool, AV, manual copy) — no in-app writer can explain that.
+    try:
+        import hashlib
+        from .config import config_dir
+        _sp = config_dir() / "settings.json"
+        _raw = _sp.read_bytes()
+        _mt = _sp.stat().st_mtime
+        import datetime as _dt
+        audit_settings_event(
+            "startup", settings,
+            f"prev-session={_prev_session_end_state()} "
+            f"file={len(_raw)}B#{hashlib.md5(_raw).hexdigest()[:12]} "
+            f"mtime={_dt.datetime.fromtimestamp(_mt).isoformat(timespec='seconds')}")
+    except Exception:
+        pass
     # apply the saved Highlight color app-wide before building the UI
     if settings.hud_accent:
         theme.set_accent(settings.hud_accent)
@@ -183,6 +384,24 @@ def main() -> int:
     from .ui.workers import shutdown_all
     app.aboutToQuit.connect(create_snapshot_if_changed)
     app.aboutToQuit.connect(shutdown_all)
+    # Clean-exit audit: fires for window close AND programmatic quit. The
+    # absence of this line for a pid is how the NEXT startup proves an
+    # unclean kill (closed console, power loss, hard crash).
+    app.aboutToQuit.connect(lambda: _audit_session_end("shutdown"))
+    # Crash audit: any uncaught Python exception (a hard OS-level kill still
+    # leaves NO line — which is itself the signal at the next startup).
+    _install_crash_audithook()
+    # Re-entrancy tripwire. ON by default: a layout or signal cycle
+    # overflows the C stack below the interpreter, so the crash log for one
+    # names nothing at all. FAREVER_REENTRY=off disables it, =abort turns
+    # a would-be unlabelled crash into a labelled one. See
+    # runtime/reentry.py.
+    try:
+        from .runtime import reentry
+        reentry.install(app)
+    except Exception as e:  # never let the watchdog break startup
+        print(f"[reentry] watchdog not installed: {e}", file=sys.stderr,
+              flush=True)
     win = ControlPanel(settings)
     _probe("control panel built")
     win.setWindowIcon(_app_icon())

@@ -16,8 +16,6 @@ class OverlaysPageMixin:
 
         cards = QtWidgets.QGridLayout()
         cards.setSpacing(12)
-        from ...config import experimental_enabled
-
         specs = [
             ("entity", "layers", "Entity HUD",
              "Nearby enemies, chests, companions, orbs & tactical sensors.",
@@ -28,20 +26,26 @@ class OverlaysPageMixin:
             ("map", "map", "Minimap Radar",
              "Real-time top-down POI radar of chests, foes, and gatherables.",
              self.s.minimap_bare, getattr(self.s, "minimap_transparent", False), True, True),
-            ("speedrun", "timer", "Speedrun",
-             "Run timer — start by hotkey, auto-stops on boss kill.",
+            ("speedrun", "timer", "Run Timer",
+             "Dungeon run timer with a boss split. Automatic in dungeons and "
+             "rifts: RUN starts on zone-in, BOSS on the fight's first damage, "
+             "and both stop on the kill. The kill log is on the PB History "
+             "page.",
              self.s.speedrun_bare, getattr(self.s, "speedrun_transparent", False), True, True),
             ("dps", "activity", "Top DPS Meter",
-             "Real-time ranked combat damage meters, group DPS, and target tracker.",
+             "Real-time ranked damage meters and group DPS — dungeons and "
+             "rifts, or everywhere with Instances Only off.",
              getattr(self.s, "dps_bare", False), getattr(self.s, "dps_transparent", False), True, True),
-            ("combat", "activity", "Combat State",
-             "Live game combat fields — isInCombat, combatId, engine fight times (debug).",
-             False, False, False, False),
+            ("dummy", "target-dummy", "Test Dummy HUD",
+             "The dummy test: Stop / Start, DPS, healing and damage taken, "
+             "per-skill numbers, vs-last-test and dummy health bars. Auto-shows "
+             "while a training dummy is in range (Settings > DPS > Test Dummy).",
+             getattr(self.s, "dummy_bare", False), getattr(self.s, "dummy_transparent", False), True, True),
             ("compass", "crosshair", "Compass Needle",
              "Accent ring on minimap + 3D pointer overlay.",
              False, False, False, False),
             # git-ignored dev tool; the card only appears when
-            # ai/dev_scanner/ exists on this machine
+            # ai/workspace/dev_scanner/ exists on this machine
             *([("devscanner", "terminal", "Dev Scanner",
                "All-in-one scanner: units, aggro, elements, player, offsets, "
                "loot watch, full dump. Always visible.", False, False, False, False)]
@@ -49,8 +53,6 @@ class OverlaysPageMixin:
         ]
 
         for i, spec in enumerate(specs):
-            if spec is None:
-                continue
             key, icon, t, d, bare, trans, has_bare, has_trans = spec
             card = C.OverlayCard(icon, t, d,
                                  bare_checked=bare, has_bare=has_bare,
@@ -199,31 +201,6 @@ class OverlaysPageMixin:
     def _set_lock(self, on):
         self.overlay_mgr.set_lock(on)
 
-    def _set_snap_rate(self, rate: int, on: bool) -> None:
-        if on:
-            self._set("snap_mouse_to_player", True)
-            self._set("mouse_snap_rate", rate)
-            self.overlay_mgr.log.emit(f"Mouse snapping ENABLED at {rate}ms rate.")
-        else:
-            if self.s.mouse_snap_rate == rate:
-                self._set("snap_mouse_to_player", False)
-                self.overlay_mgr.log.emit("Mouse snapping disabled.")
-        
-        self.overlay_mgr.update_combat_timer_rate()
-        
-        # Sync toggles / segmented control
-        active_rate = self.s.mouse_snap_rate if self.s.snap_mouse_to_player else None
-        for r, t in ((500, getattr(self, "snap_500", None)),
-                     (250, getattr(self, "snap_250", None)),
-                     (100, getattr(self, "snap_100", None))):
-            if t is not None:
-                t.blockSignals(True)
-                t.setChecked(active_rate == r)
-                t.blockSignals(False)
-        if getattr(self, "_snap_seg", None) is not None:
-            self._snap_seg.blockSignals(True)
-            self._snap_seg.setCurrentText(f"{active_rate}ms" if active_rate else "Off")
-            self._snap_seg.blockSignals(False)
 
     def _set_auto_hide_menus(self, on: bool) -> None:
         self._set("auto_hide_menus", on)
@@ -259,14 +236,10 @@ class OverlaysPageMixin:
 
     def _set_overlay_cards_enabled(self, on: bool):
         self.overlay_mgr.set_cards_enabled(on)
-        if on:
-            for key in ("entity", "map", "speedrun", "dps"):
-                setting_name = f"open_overlay_{key}"
-                if getattr(self.s, setting_name, False):
-                    if self.overlay_mgr.overlays.get(key) is None:
-                        self._request_overlay(key, True)
-            # Dungeon HUD is strictly instance-only: never open in overworld
-            if getattr(self.s, "open_overlay_dungeon", False):
-                if self.model and self.model.is_in_dungeon_or_rift():
-                    if self.overlay_mgr.overlays.get("dungeon") is None:
-                        self._request_overlay("dungeon", True)
+        # Post-locate restore is owned by overlay_mgr.on_located (staggered,
+        # one overlay per tick). This handler used to open every enabled HUD
+        # synchronously here — the all-at-once burst + locate-tick jank — so
+        # it must not request anything itself. Dungeon gating stays intact:
+        # on_located builds it hidden in the overworld (request()'s
+        # instance-only show-gate, read from the placement table) and the
+        # visibility loop surfaces it on zone-in.

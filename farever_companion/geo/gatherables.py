@@ -84,17 +84,37 @@ def get_type_key(label: str) -> str | None:
     base_lower = base_name.lower()
     return _GATHER_TYPE_KEYS.get(base_lower)
 
+# The static index is the OVERWORLD node map — it exists to plot fixed nodes
+# out in the world. Nodes inside an instanced dungeon are read live from the
+# scene (`model.gatherables`) when that instance is loaded, so they must not
+# enter this index. The 2026-09-11 data regen added 18 instance nodes
+# (Z1_POI_Dungeon_KoboldsMines, Z2_POI_Dungeon_ManfishAbyss) whose instance-
+# local coordinates overlap the overworld minimap. Dungeon prefabs name their
+# world `..._POI_Dungeon_...`; overworld nodes carry the world prefab
+# (e.g. 'W1_Siagarta').
+_INSTANCE_WORLD_MARKERS = ("_POI_", "Dungeon")
+
+
+def is_overworld_node(world: str | None) -> bool:
+    """False for a node whose `world` is a dungeon instance, not the overworld."""
+    w = world or ""
+    return not any(m in w for m in _INSTANCE_WORLD_MARKERS)
+
+
 @lru_cache(maxsize=1)
 def load_nodes() -> list[GatherableNode]:
-    """Load all static nodes from compiled raw data."""
+    """Load all static OVERWORLD nodes from compiled raw data."""
     from ..data import cdb
     nodes = []
     for entry in cdb.lines("gatherable_locs"):
+        world = entry.get("world", "W1_Siagarta")
+        if not is_overworld_node(world):
+            continue
         nodes.append(GatherableNode(
             name=entry["name"],
             x=float(entry["x"]),
             y=float(entry["y"]),
             z=float(entry["z"]),
-            world=entry.get("world", "W1_Siagarta")
+            world=world
         ))
     return nodes

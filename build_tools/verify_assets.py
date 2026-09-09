@@ -22,10 +22,14 @@ from build_tools import launcher_check
 
 data_path = ROOT_DIR / "assets" / "data"
 
-# Core database files that are baked into the embedded raw_data.py shim
+# Core database files the app reads (as loose JSON only in raw_data-less
+# fallback mode — the normal build bakes them into raw_data.py).
+# loot_tables / loot_table_contents / items_manifest used to sit here too:
+# every one is a scanner-era summary of a sheet already listed (lootTable,
+# items, item.json), the drops index carries the item -> source edges they
+# described, and nothing in the app ever read them.
 logic_sheets = [
-    "items", "enemies", "loot_tables", "loot_table_contents", 
-    "skills", "items_manifest", "lootTable", "dungeons"
+    "items", "enemies", "skills", "lootTable", "dungeons"
 ]
 
 # Location sheets: required as compiler inputs (they live inside raw_data.py
@@ -226,10 +230,53 @@ for p, label in icon_paths:
         else:
             print(f"{label:18}: {YELLOW}NOT IN REPO{RESET} (Atlas handling it)")
 
+# Compiled shim fields: the compiler's per-sheet field lists drop anything they
+# do not name, and cdb.sheet()'s loose-JSON fallback hides that in a dev
+# checkout while the frozen build (shims only) loses the value. Fail on any
+# field the data layer reads that survives on no row of the payload it reads
+# from while the compile input still carries it (see build_tools/
+# compiled_fields.py; deliberate cases live in its EXCEPTIONS).
+from build_tools.check_compiled_fields import run as run_field_check
+field_count, field_rows = run_field_check()
+if field_count:
+    missing_count += 1
+    print(f"Compiled Fields : {RED}MISSING{RESET} ({field_count} field(s) the "
+          f"compiler drops that the data layer reads)")
+    for shim, payload, field, reads, caller, _ in field_rows:
+        print(f"    - {shim}.{payload}['{field}'] ({reads} read(s)) <- {caller}")
+    print(f"    {YELLOW}-> keep the field in compiler.py's `sheets` table, or "
+          f"re-read it from the source sheet{RESET}")
+else:
+    print(f"Compiled Fields : {GREEN}OK{RESET} (no field the data layer reads "
+          f"was dropped)")
+
+# Shim rebuild contract: the compiler's payload must be a pure function of the
+# game data (its own stated contract, proven by tests/test_compiler.py), so a
+# rebuild in build-mod.bat's [3/5] must leave the raw_*.py shims exactly as
+# committed. Dirt here means the exe this build version-stamps with the current
+# git rev carries data that rev does not describe - commit the dump and its
+# shims together, or restore. FAREVER_ALLOW_DIRTY_SHIMS=1 downgrades to a
+# warning for intentional test-exe builds.
+from build_tools.shim_contract import run as run_shim_contract
+shim_failures, shim_dirt_lines = run_shim_contract()
+if shim_failures:
+    missing_count += 1
+
+# Shim freshness: the compiler SKIPS a shim whose sheet is missing, whose
+# payload is empty, or whose read raised - leaving the previously committed
+# file in place, still large enough for the size gate above and still carrying
+# the old list. Warn (never fail) when a compiled shim is older than the sheet
+# it was built from, so a stale vendor list cannot ship without being seen.
+from build_tools.shim_freshness import run as run_shim_freshness
+freshness_rows = run_shim_freshness()
+
 if missing_count > 0 or launcher_failures:
     print(f"\n{RED}[!] Verification FAILED: {missing_count} missing component(s), "
           f"{len(launcher_failures)} broken launcher(s): {', '.join(launcher_failures) or 'none'}.{RESET}")
     sys.exit(1)
 else:
+    if freshness_rows:
+        print(f"\n{YELLOW}[!] WARNING: {len(freshness_rows)} compiled shim(s) are "
+              f"older than their source sheet - rebuild before shipping.{RESET}")
     print(f"\n{GREEN}[+] Verification SUCCESS: All assets optimized, all launchers run.{RESET}")
     sys.exit(0)

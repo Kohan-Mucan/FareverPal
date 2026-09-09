@@ -33,7 +33,7 @@ out that mapping.
 
 ### MINIMAP_PROVENANCE — open item
 
-The bundled world-map image (`assets/map/W1.png`) needs its source confirmed and
+The bundled world-map image (`assets/map/map.webp`) needs its source confirmed and
 credited or replaced:
 
 - If it was **rendered/produced by farever-map or another community mapper**, it

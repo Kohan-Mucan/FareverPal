@@ -6,117 +6,39 @@ breakdowns. The player rows live in ui/overlays/dps/rows.py; this module
 keeps the overlay window, chrome and the per-tick pipeline. It is the
 lightweight sibling of the Combat & DPS Analysis page — the HUD shows the
 same real events in a compact, HUD-shaped form.
+
+The training-dummy TEST is deliberately not here: no Stop / Start control, no
+per-dummy split, no vs-last-test baseline, no dummy-specific empty state. All
+of that is the standalone Test Dummy HUD (`overlays/dummy_overlay.py`,
+rendering through `dps/dummy_ui.py`). The meter used to carry a second copy of
+that surface for the case where the dummy HUD was off, which meant every dummy
+feature existed twice and the two boards could stack on one dummy; the dummy
+HUD is now the only surface that renders a dummy test.
 """
 from __future__ import annotations
-
-import time
 
 from PySide6 import QtCore, QtWidgets
 
 from ... import theme
 from ...components import ElideLabel as _ElideLabel
 from ...overlay_base import OverlayWindow
-from ....core.dps_tracker import DpsTracker, PlayerParse, solo_status
-from ....data import icons
-from ...dps_source_text import empty_hint
+from ....core import game_state
+from ....core.dps_tracker import (PlayerParse, own_row, solo_status,
+                                  solo_only_view, view_totals)
+from ...dps_source_text import (capture_badge, dungeon_mode_badge, empty_hint,
+                               instance_mode, mode_tooltip,
+                               emit_capture_diagnostic, with_report_hint)
+from . import widgets as _dps_widgets
+from .widgets import _CaptureBadge, insert_into_titlebar
+from .widgets import (adopt_live_tracker, aim_log_sinks, install_dense_chrome,
+                      install_dps_sources, install_titlebar_chrome)
 from ..entity_rows import _Section, _scroll_body
 from .rows import _PlayerRowWidget
+from .widgets import _ModePill, _StatChip  # noqa: F401  (re-exported)
 
 TICK_MS = 100  # 10 FPS smooth, flicker-free UI refresh
 # Global skill budget: total skill rows across all players, top rank first.
 GLOBAL_SKILL_CAP = 8
-
-
-class _StatChip(QtWidgets.QFrame):
-    """Compact group-metric card: dim label, bold value, muted /s sub-rate."""
-    def __init__(self, title: str, parent=None):
-        super().__init__(parent)
-        self.setStyleSheet(
-            f"_StatChip {{ background-color: rgba(22, 27, 34, 0.85); "
-            f"border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 4px 6px; }}"
-        )
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 5)
-        lay.setSpacing(0)
-        self.title_lbl = QtWidgets.QLabel(title.upper())
-        self.title_lbl.setStyleSheet(
-            f"font-size: 8px; font-weight: 800; color: #8b9bb4; "
-            f"letter-spacing: 1.2px;")
-        lay.addWidget(self.title_lbl)
-        self.val_lbl = QtWidgets.QLabel("0")
-        self.val_lbl.setStyleSheet(
-            f"font-size: 15px; font-weight: 900; color: #ffffff; "
-            f"font-family: 'Consolas', monospace;")
-        lay.addWidget(self.val_lbl)
-        self.sub_lbl = QtWidgets.QLabel("0/s")
-        self.sub_lbl.setStyleSheet(
-            f"font-size: 9px; font-weight: 700; color: #00e5ff; font-family: 'Consolas', monospace;")
-        lay.addWidget(self.sub_lbl)
-
-    def set_value(self, val: str, sub: str = ""):
-        self.val_lbl.setText(val)
-        if sub:
-            self.sub_lbl.setText(sub)
-
-class _ModePill(QtWidgets.QFrame):
-    """Compact DMG / HEAL / BOTH segmented pill."""
-    currentChanged = QtCore.Signal(str)
-
-    def __init__(self, current: str = "DMG", parent=None):
-        super().__init__(parent)
-        self._accent = theme.ACCENT
-        self.setStyleSheet(
-            f"QFrame {{ background: {theme.SURFACE}; border: 1px solid {theme.BORDER}; "
-            f"border-radius: 9px; }}")
-        lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(2, 1, 2, 1)
-        lay.setSpacing(2)
-        self._group = QtWidgets.QButtonGroup(self)
-        self._group.setExclusive(True)
-        self._btns: dict[str, QtWidgets.QPushButton] = {}
-        for opt in ("DMG", "HEAL", "BOTH"):
-            b = QtWidgets.QPushButton(opt)
-            b.setCheckable(True)
-            b.setCursor(QtCore.Qt.PointingHandCursor)
-            b.setFixedHeight(16)
-            b.setMinimumWidth(34)
-            self._group.addButton(b)
-            self._btns[opt] = b
-            lay.addWidget(b)
-        self._group.buttonClicked.connect(
-            lambda b: self.currentChanged.emit(b.text()))
-        self.setCurrentText(current)
-
-    def _accent_color(self) -> str:
-        return self._accent or theme.ACCENT
-
-    def _style_btn(self, b: QtWidgets.QPushButton, checked: bool) -> None:
-        if checked:
-            b.setStyleSheet(
-                f"QPushButton {{ border: 0; border-radius: 7px; padding: 0 8px; "
-                f"font-size: 9px; font-weight: 800; letter-spacing: 0.5px; "
-                f"background: {self._accent_color()}; color: {theme.ON_ACCENT}; }}")
-        else:
-            b.setStyleSheet(
-                f"QPushButton {{ border: 0; border-radius: 7px; padding: 0 8px; "
-                f"font-size: 9px; font-weight: 800; letter-spacing: 0.5px; "
-                f"background: transparent; color: {theme.DIM}; }}"
-                f"QPushButton:hover {{ color: {theme.TEXT}; }}")
-
-    def setCurrentText(self, text: str) -> None:
-        for opt, b in self._btns.items():
-            on = (opt.upper() == str(text or "").upper())
-            b.setChecked(on)
-            self._style_btn(b, on)
-
-    def currentText(self) -> str:
-        b = self._group.checkedButton()
-        return b.text() if b else ""
-
-    def retint(self, accent: str) -> None:
-        self._accent = accent or theme.ACCENT
-        for b in self._btns.values():
-            self._style_btn(b, b.isChecked())
 
 
 class DpsOverlay(OverlayWindow):
@@ -125,17 +47,8 @@ class DpsOverlay(OverlayWindow):
 
     def __init__(self, model, settings, parent=None):
         super().__init__("Top DPS", settings, geo_key="dps", parent=parent)
-        # Dense meter: tighter chrome margins so more rows fit.
-        self.content.setContentsMargins(4, 2, 4, 2)
-        self.content.setSpacing(4)
-        self.model = model
-        self.s = settings
-        max_d = getattr(settings, "dps_max_dist", 400.0) if settings else 400.0
-        self.tracker = getattr(model, "dps", None) or DpsTracker(model, max_dist=max_d)
-        if self.tracker is not None:
-            self.tracker.log_line = self.log.emit
-        if hasattr(model, "damage") and model.damage is not None:
-            model.damage.log_line = self.log.emit
+        install_dense_chrome(self)     # dense meter: more rows fit
+        install_dps_sources(self, model, settings)
         self._page_key = "settings:dps"
         self._view_mode = getattr(settings, "dps_view", "damage") if settings else "damage"
         self._row_widgets: dict[str, _PlayerRowWidget] = {}
@@ -146,32 +59,34 @@ class DpsOverlay(OverlayWindow):
         self._VIEW_TO_PILL = {"damage": "DMG", "healing": "HEAL", "both": "BOTH"}
         self._PILL_TO_VIEW = {"DMG": "damage", "HEAL": "healing", "BOTH": "both"}
 
-        self.titlebar.setStyleSheet(
-            f"QFrame#TitleBar {{ background: {theme.PANEL}; border: 0; }}")
-        # green status dot + TOP DPS (mockup header) in the title bar
-        self.titlebar.title.setText(
+        install_titlebar_chrome(self)
+        # green status dot + TOP DPS (mockup header) in the title bar.
+        # _set_title() owns the text: the base header plus the live dungeon
+        # mode badge (· NORMAL / HARD / HEROIC) once the model can read one.
+        self._title_base = (
             f"<span style='color:{theme.GOOD}; font-size:11px;'>●</span>"
             f"&nbsp;&nbsp;TOP DPS")
-        self.titlebar.title.setTextFormat(QtCore.Qt.RichText)
-        self.titlebar.title.setStyleSheet(
-            f"color: {theme.TEXT}; font-weight: 800; font-size: 13px; "
-            f"letter-spacing: 1px;")
+        self._title_state = object()   # sentinel: forces the first paint
+        self._set_title(None)
 
-        # Bridge status pill tucked right after the green-dot title.
-        self._bridge_status_lbl = QtWidgets.QLabel("OFF")
-        self._bridge_status_lbl.setStyleSheet(
-            f"font-size: 9px; font-weight: 800; color: {theme.MUTED}; "
-            f"background: rgba(255,255,255,0.05); border: 1px solid {theme.BORDER}; "
-            f"border-radius: 4px; padding: 1px 6px; "
-            f"letter-spacing: 0.5px;")
-        self.titlebar.extra.insertWidget(0, self._bridge_status_lbl)
+        # Capture-source badge: LIVE / CAL / IDLE / ⚠ at a glance, next to the
+        # title. Maps dm.status() through dps_source_text.capture_badge so it
+        # can never disagree with the settings-page status line. Hidden when
+        # there is nothing to say (no source attached, capture off).
+        self.cap_badge = _CaptureBadge()
+        insert_into_titlebar(self.cap_badge, self.titlebar.extra)
 
+        # View-mode pill. It used to live in the title bar, but that bar only
+        # has ~60px free at the default 320px width, which squeezed the three
+        # DMG/HEAL/BOTH chips into each other (overlapping, so mouse clicks
+        # hit the wrong chip). It now owns the top row of the body where the
+        # full overlay width is available.
         self.mode_pill = _ModePill(
             current=self._VIEW_TO_PILL.get(
                 (getattr(self.s, "dps_view", "damage") or "damage"), "DMG")
             if self.s else "DMG")
         self.mode_pill.currentChanged.connect(self._set_mode)
-        self.titlebar.extra.insertWidget(0, self.mode_pill)
+        self.content.insertWidget(0, self.mode_pill)
 
         status_row = QtWidgets.QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
@@ -234,9 +149,9 @@ class DpsOverlay(OverlayWindow):
         self.target_bar.setFixedHeight(7)
         self.target_bar.setTextVisible(False)
         self.target_bar.setStyleSheet(
-            f"QProgressBar {{ background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 3px; }}"
-            f"QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, "
-            f"stop:0 #ef4444, stop:0.7 #f97316, stop:1 #eab308); border-radius: 2px; }}")
+            "QProgressBar { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 3px; }"
+            "QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, "
+            "stop:0 #ef4444, stop:0.7 #f97316, stop:1 #eab308); border-radius: 2px; }")
         self.target_bar.setRange(0, 100)
         self.target_bar.setValue(0)
         self.content.addWidget(self.target_bar)
@@ -278,20 +193,21 @@ class DpsOverlay(OverlayWindow):
         self.pause_btn.clicked.connect(self.toggle_pause)
         btn_row.addWidget(self.pause_btn)
 
-        # Solo: mirrors Settings > DPS > Combat DPS Meter's "show only my
-        # DPS" toggle — flipping either side updates the other (button state
-        # is re-synced from settings every tick).
+        # Solo: only-my-DPS applies to open-world solo play. Mirrors the
+        # HUD's tab > Top DPS card toggle ("Solo Only"); flipping either side
+        # updates the other (button state is re-synced from settings every
+        # tick). Inside a dungeon/rift everyone always shows, so the button
+        # auto-disables there.
         self.solo_btn = QtWidgets.QPushButton("👤 Solo")
         self.solo_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.solo_btn.setCheckable(True)
         self.solo_btn.setChecked(bool(getattr(self.s, "dps_solo_only", True)))
         solo_sel_qss = _btn_qss + (
             f"QPushButton:checked {{ background: {theme.ACCENT_DIM}; color: {theme.ACCENT}; "
-            f"border: 1px solid {theme.ACCENT}; }}")
+            f"border: 1px solid {theme.ACCENT}; }}"
+            f"QPushButton:disabled {{ color: rgba(255,255,255,0.30); "
+            f"border: 1px solid rgba(255,255,255,0.06); background: transparent; }}")
         self.solo_btn.setStyleSheet(solo_sel_qss)
-        self.solo_btn.setToolTip(
-            "Solo: show only your DPS. Ungrouped rivals are dropped from the "
-            "meter in the open world; groups / dungeons / rifts always show everyone.")
         self.solo_btn.clicked.connect(self._toggle_solo)
         btn_row.addWidget(self.solo_btn)
 
@@ -300,7 +216,10 @@ class DpsOverlay(OverlayWindow):
         self.enable_resize_grip()
         self.setMinimumWidth(260)
         self.setMaximumWidth(500)
-        self.resize(320, 420)
+        if getattr(self, "_saved_size", None) is None:
+            # A drag-resized size was restored above (_restore_geometry);
+            # don't stomp it back to the default on every rebuild.
+            self.resize(320, 420)
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -326,18 +245,37 @@ class DpsOverlay(OverlayWindow):
 
     def set_model(self, model) -> None:
         self.model = model
-        if model is not None:
-            if hasattr(model, "dps") and model.dps is not None:
-                self.tracker = model.dps
-                self.tracker.log_line = self.log.emit
-            elif self.tracker is not None:
-                self.tracker.model = model
-            if hasattr(model, "damage") and model.damage is not None:
-                model.damage.log_line = self.log.emit
+        if model is None:
+            return
+        if getattr(model, "dps", None) is not None:
+            self.tracker = model.dps
+        elif self.tracker is not None:
+            self.tracker.model = model
+        aim_log_sinks(self, model, self.tracker)
 
     def _dm(self):
         m = self.model
         return getattr(m, "damage", None) if m is not None else None
+
+    def _ready_color(self) -> str:
+        """READY label color by capture state: green when the meter is ready
+        to record, gold while the capture is still loading/calibrating (or
+        needs its DLL installed), red when this build cannot capture at all,
+        muted when there is no source to judge."""
+        dm = self._dm()
+        if dm is None:
+            return theme.MUTED
+        try:
+            st = dm.status()
+        except Exception:
+            return theme.MUTED
+        if st in ("locating", "mapping", "missing_proxy", "need_inject"):
+            return theme.GOLD
+        if st == "inject_failed":
+            return theme.DANGER
+        if st == "noscan":
+            return theme.DANGER
+        return theme.GOOD
 
     def reset(self):
         self.tracker.reset()
@@ -350,12 +288,12 @@ class DpsOverlay(OverlayWindow):
         self.time_lbl.setText("00:00.0")
         self.seg_lbl.setText("")
         self.state_lbl.setText("READY")
-        self.state_lbl.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {theme.MUTED};")
+        self.state_lbl.setStyleSheet(
+            f"font-size: 10px; font-weight: 800; color: {self._ready_color()};")
         self.game_lbl.set_full("")
-        self.game_lbl.setToolTip("Game combat fields not read yet (10 Hz poll)")
-        self.chip_dmg.set_value("0", "0/s")
-        self.chip_heal.set_value("0", "0/s")
-        self.chip_taken.set_value("0")
+        self.chip_dmg.set_rate("0.0/s", "0 total")
+        self.chip_heal.set_rate("0.0/s", "0 total")
+        self.chip_taken.set_rate("0.0/s", "0 total")
         self.target_lbl.setText("Target: None")
         self.target_hp_lbl.setText("")
         self.target_bar.setValue(0)
@@ -369,18 +307,6 @@ class DpsOverlay(OverlayWindow):
             session.resume()
             self.pause_btn.setText("❚❚ Pause")
 
-    def _set_bridge_status_lbl(self, text: str, color: str) -> None:
-        """Update the small status pill in the titlebar (BRIDGE / MEM / METER / OFF / ...)."""
-        try:
-            self._bridge_status_lbl.setText(text)
-            self._bridge_status_lbl.setStyleSheet(
-                f"font-size: 9px; font-weight: 800; color: {color}; "
-                f"background: rgba(255,255,255,0.05); border: 1px solid {theme.BORDER}; "
-                f"border-radius: 4px; padding: 1px 6px; "
-                f"letter-spacing: 0.5px;")
-        except Exception:
-            pass
-
     def _retint(self, accent: str) -> None:
         """Re-tint pill and leader-row accents."""
         if hasattr(self, "mode_pill"):
@@ -392,23 +318,60 @@ class DpsOverlay(OverlayWindow):
         if self.model is None:
             return
 
+        # Self-heal tracker binding: the Combat page reads model.dps live,
+        # but this overlay can be left ticking an orphaned tracker across
+        # reattaches/mode churn (frozen 00:00.0 while HITs flow).
+        try:
+            adopt_live_tracker(self)
+        except Exception:
+            pass
+
         self.tracker.update()
 
+        # Settings sync runs even while hidden: the view mode must be right
+        # the instant the overlay is shown rather than one tick later. Only
+        # the rendering below is skipped when hidden.
         if self.s is not None:
             want_view = getattr(self.s, "dps_view", "damage") or "damage"
             if want_view != self._view_mode:
                 self._view_mode = want_view
                 self.mode_pill.setCurrentText(
                     self._VIEW_TO_PILL.get(want_view, "DMG"))
-            want_dist = float(getattr(self.s, "dps_max_dist", 400.0) or 0.0)
-            if want_dist != self.tracker.max_dist:
-                self.tracker.max_dist = want_dist
-            want_hp_est = bool(getattr(self.s, "dps_hp_est", False))
-            if want_hp_est != self.tracker.hp_est_allowed:
-                self.tracker.hp_est_allowed = want_hp_est
-                # Toggle flips the capture source: re-baseline so the fallback
-                # doesn't compare against HP snapshots from while it was off.
-                self.tracker.reset_hp_baselines(reason="HP-diff toggle")
+
+        # The target line and the segment name describe WHERE THE RUN IS, not
+        # which rows are on screen, so they refresh even while the meter is
+        # hidden - a board opened mid-pull shows the right fight instead of
+        # whatever was current the last time it was visible. The rows below
+        # stay tick-only (that is the expensive half).
+        self._update_target_lbl(self.tracker.session)
+        self.seg_lbl.setText((self.tracker.session.name or "Fight").upper())
+
+        if not self.isVisible():
+            return
+
+        # The meter is often restricted to instances (dps_instances_only), and
+        # in an instance BOTH halves of solo are inert: the open-world data
+        # filter returns "not solo", and solo_only_view declines, so the button
+        # was a live-looking control that could not do anything - greyed out
+        # and unchecked, still occupying the titlebar. With the meter pinned to
+        # instances it is not part of this HUD at all, and gone is the honest
+        # state. It returns if instances-only is switched off, because out in
+        # the open world the filter is the only thing keeping a stranger's fight
+        # two fields over out of your session.
+        self.solo_btn.setVisible(
+            not bool(getattr(self.s, "dps_instances_only", False)))
+
+        # Solo filter applies to the open world only: inside a dungeon/rift
+        # the meter always shows everyone. Auto-disable + uncheck the button
+        # there (the saved preference is untouched) so it re-arms outside.
+        if self._in_instance():
+            self.solo_btn.setEnabled(False)
+            if self.solo_btn.isChecked():
+                self.solo_btn.blockSignals(True)
+                self.solo_btn.setChecked(False)
+                self.solo_btn.blockSignals(False)
+        else:
+            self.solo_btn.setEnabled(True)
             want_solo = bool(getattr(self.s, "dps_solo_only", True))
             if self.solo_btn.isChecked() != want_solo:
                 self.solo_btn.blockSignals(True)
@@ -417,14 +380,45 @@ class DpsOverlay(OverlayWindow):
 
         session = self.tracker.session
 
+        # The timer ticks from COMBAT ENTRY, not from the first decoded hit:
+        # a fight whose capture is still blind is still a fight, so the armed
+        # clock owns the display until a session does. The session then starts
+        # from that same anchor, so the number does not jump when the first
+        # hit lands.
+        armed = None
+        try:
+            armed = self.tracker.armed_fight()
+        except Exception:
+            armed = None
+
+        # TWO clocks, and they are not interchangeable (2026-10-03).
+        #
+        # `timer` drives the time LABEL: it is the wall-clock span, which is
+        # the whole point of a fight timer - it must keep advancing between
+        # hits, and the "armed" clock carries it before the first hit decodes.
+        #
+        # `dur` is the RATE denominator for the chips and every player row, so
+        # it is the event-anchored `duration` - the same span DPS Analysis
+        # divides by, and the same one the archive will use. Feeding the wall
+        # span into a rate is exactly the 600-vs-637 split this session fixed
+        # in CombatSession.duration: after a pause the wall span is longer,
+        # so the overlay read low while DPS Analysis read right.
+        timer = session.wall_duration
+        if armed is not None:
+            timer = armed[0]
         dur = session.duration
-        mins = int(dur // 60)
-        secs = dur % 60
+        if armed is not None and dur <= 0.0:
+            # Nothing decoded yet: the armed clock is the only span there is,
+            # and a displayed 0/s under a running timer would be a lie.
+            dur = armed[0]
+        mins = int(timer // 60)
+        secs = timer % 60
         self.time_lbl.setText(f"{mins:02d}:{secs:04.1f}")
 
-        seg_name = (session.name or "Fight").upper()
+        seg_name = ((armed[1] if armed is not None else session.name)
+                    or "Fight").upper()
         self.seg_lbl.setText(seg_name)
-        if session.state == "COMBAT":
+        if session.state == "COMBAT" or armed is not None:
             self.state_lbl.setText("IN COMBAT")
             self.state_lbl.setStyleSheet(
                 f"font-size: 10px; font-weight: 800; color: {theme.GOOD};")
@@ -435,76 +429,91 @@ class DpsOverlay(OverlayWindow):
         else:
             self.state_lbl.setText("READY")
             self.state_lbl.setStyleSheet(
-                f"font-size: 10px; font-weight: 800; color: {theme.MUTED};")
+                f"font-size: 10px; font-weight: 800; color: {self._ready_color()};")
 
         self._update_game_combat_lbl()
         self._update_group_lbl()
+        self._update_capture_badge()
+        # Dungeon mode badge in the title bar (· NORMAL / HARD / HEROIC), by
+        # the SAME resolution the Run Timer uses (see
+        # dps_source_text.instance_mode): inside an instance that is the game's
+        # own read when it has one and the manual fallback when it does not.
+        # Reading dungeon_mode() alone left this blank on a build whose config
+        # read is dead, while the Run Timer still named a mode (2026-09-30).
+        try:
+            self._set_title(*instance_mode(self.model))
+        except Exception:
+            pass
 
         # Solo play: the meter is self-only. Ungrouped rivals' stray events
         # are still tracked, but display (rows + chips) uses your own parse
         # until the game reports a party again. Gated by the dps_solo_only
-        # toggle (Settings > DPS > Combat DPS Meter).
-        solo = (self._is_solo() is True
-                and bool(getattr(self.s, "dps_solo_only", True)))
-        me = next((p for p in session.players.values() if p.is_me), None)
-        if solo and me is not None:
-            grp_dmg = me.total_damage
-            grp_heals = me.heals
-            taken = me.damage_taken
-            taken_est = me.damage_taken_est
-        else:
-            grp_dmg = session.group_damage
-            grp_heals = session.group_heals
-            taken = session.group_taken
-            taken_est = session.group_taken_est
+        # toggle (Settings > DPS > Combat DPS Meter) through the SAME
+        # predicate the Combat & DPS page uses, so the two surfaces can't
+        # disagree about the rows or the group totals.
+        solo = solo_only_view(self.model, self.s, getattr(self, "tracker", None))
+        me = own_row(session)
+        # Same totals the Combat & DPS page shows for the same view.
+        grp_dmg, grp_heals, taken = view_totals(session, solo)
         grp_dps = grp_dmg / max(1.0, dur)
         grp_hps = grp_heals / max(1.0, dur)
+        taken_rate = taken / max(1.0, dur)
 
+        # The PER-SECOND numbers are the focus line and the totals sit under
+        # them (live 2026-10-03: "the dp/s h/s damage taken /s should be the
+        # main focus numbers"). While a fight is running the rate is the
+        # number being read; the total is the receipt. Damage taken gets a
+        # rate too - it was the one chip with no /s at all, so the same figure
+        # the Test Dummy HUD already computes had nowhere to show here.
         # Chips always show real totals regardless of view mode.
-        self.chip_dmg.set_value(f"{grp_dmg:,.0f}", f"{grp_dps:,.1f}/s")
-        self.chip_heal.set_value(f"{grp_heals:,.0f}", f"{grp_hps:,.1f}/s")
-        if taken > 0 and taken_est > 0:
-            self.chip_taken.set_value(f"{taken:,.0f}", "≈ HP est")
-        else:
-            self.chip_taken.set_value(f"{taken:,.0f}")
+        self.chip_dmg.set_rate(f"{grp_dps:,.1f}/s", f"{grp_dmg:,.0f} total")
+        self.chip_heal.set_rate(f"{grp_hps:,.1f}/s", f"{grp_heals:,.0f} total")
+        self.chip_taken.set_rate(f"{taken_rate:,.1f}/s", f"{taken:,.0f} total")
 
-        if session.target_name != "None" and session.target_max_hp > 0:
-            pct = max(0.0, min(100.0, (session.target_hp / session.target_max_hp) * 100.0))
-            clean_name = session.target_name.replace("👑 ", "")
-            prefix = "👑 " if "👑" in session.target_name else "🎯 "
-            self.target_lbl.setText(f"{prefix}{clean_name}")
-            self.target_lbl.setStyleSheet(
-                f"font-size: 11px; font-weight: 700; color: {theme.TEXT};")
-            self.target_hp_lbl.setText(
-                f"{session.target_hp:,.0f} / {session.target_max_hp:,.0f} · {pct:.1f}%")
-            self.target_bar.setValue(int(pct))
-        else:
-            self.target_lbl.setText("Target: None")
-            self.target_lbl.setStyleSheet(
-                f"font-size: 11px; font-weight: 600; color: {theme.MUTED};")
-            self.target_hp_lbl.setText("")
-            self.target_bar.setValue(0)
+        self._update_target_lbl(session)
 
         # Update Player Meters
         d_limit = getattr(self.s, "dps_top_count", 8) if self.s else 8
         h_limit = getattr(self.s, "heals_top_count", 2) if self.s else 2
 
-        # True rank order: never pin "you" to the top.
+        # Inside a dungeon/rift while idle (between pulls) the tracker has
+        # pre-registered every party member with 0 stats — auto-load the
+        # whole group onto the meter (uncapped) instead of only the active
+        # participants. Once combat starts the activity filter applies again.
+        in_instance_idle = bool(self._in_instance()
+                                and session.state != "COMBAT")
+        if in_instance_idle:
+            d_limit = max(d_limit, len(session.players))
+            h_limit = max(h_limit, len(session.players))
+            include_empty = True
+        else:
+            include_empty = False
+
+        # Pin the local player's row to the top when enabled (Settings > HUD's
+        # > Top DPS > Pin Me Top); otherwise true rank order.
+        pin_me = bool(getattr(self.s, "dps_pin_me", True)) if self.s else True
         if self._view_mode == "healing":
-            candidates = session.ranked_players(view="healing", pin_me=False)[:h_limit]
+            candidates = session.ranked_players(view="healing", pin_me=pin_me,
+                                                include_empty_allies=include_empty)[:h_limit]
         elif self._view_mode == "both":
-            top_d = session.ranked_players(view="damage", pin_me=False)[:d_limit]
-            top_h = [p for p in session.ranked_players(view="healing", pin_me=False)[:h_limit] if p not in top_d]
+            top_d = session.ranked_players(view="damage", pin_me=pin_me,
+                                           include_empty_allies=include_empty)[:d_limit]
+            top_h = [p for p in session.ranked_players(view="healing", pin_me=pin_me,
+                                                       include_empty_allies=include_empty)[:h_limit]
+                     if p not in top_d]
             candidates = top_d + top_h
         else:  # damage
-            candidates = session.ranked_players(view="damage", pin_me=False)[:d_limit]
+            candidates = session.ranked_players(view="damage", pin_me=pin_me,
+                                                include_empty_allies=include_empty)[:d_limit]
 
-        # Active participants only (or local player) so 0-damage bystanders don't clutter the meter
-        ranked = [p for p in candidates if (p.total_damage > 0 or p.heals > 0 or p.is_me)]
+        # Active participants only (or local player) so 0-damage bystanders
+        # don't clutter the meter — unless we're auto-loading the party in an
+        # instance between pulls.
+        ranked = [p for p in candidates
+                  if include_empty or (p.total_damage > 0 or p.heals > 0 or p.is_me)]
         if not ranked and session.players:
-            active = [p for p in session.players.values()
-                      if p.is_me or p.total_damage > 0 or p.heals > 0 or p.damage_taken > 0]
-            ranked = active[:d_limit] if active else ([p for p in session.players.values() if p.is_me][:1])
+            active = session.active_players()   # dummy: no chip-damage-only rows
+            ranked = active[:d_limit] if active else ([me] if me else [])
 
         # Solo: drop every ungrouped rival row — only your own parse shows.
         if solo:
@@ -512,22 +521,28 @@ class DpsOverlay(OverlayWindow):
             if not ranked and me is not None:
                 ranked = [me]
 
-        self._update_meters(ranked, dur, grp_dmg, grp_heals)
+        self._update_meters(ranked, dur, grp_dmg, grp_heals,
+                            include_empty=include_empty)
 
     def _update_game_combat_lbl(self):
         """Refresh the game combat badge from the tracker's combat_state."""
         st = getattr(self.tracker, "combat_state", None)
         if not st:
             self.game_lbl.set_full("")
-            self.game_lbl.setToolTip("Game combat fields not read yet (10 Hz poll)")
             return
         in_combat = st.get("in_combat")
-        cid = st.get("combat_id")
         start = float(st.get("combat_start") or 0.0)
         end = float(st.get("combat_end") or 0.0)
-        tip = (f"Hero.isInCombat={in_combat} · combatId={cid} · "
-               f"start={start:.1f}s · end={end:.1f}s (engine seconds)")
-        if in_combat:
+        # A settled combat_end outranks the boolean. The badge used to test
+        # `in_combat` first, so a client that had not cleared the flag yet
+        # kept reading "IN COMBAT · <ever-growing>s" over an encounter the
+        # game had already stamped closed - the same defect the armed clock
+        # had, in the badge beside it.
+        if end > start:
+            self.game_lbl.set_full(f"⚔ GAME OVER · {end - start:.1f}s")
+            self.game_lbl.setStyleSheet(
+                f"font-size: 10px; font-weight: 700; color: {theme.GOLD};")
+        elif in_combat:
             elapsed = getattr(self.tracker, "game_encounter_elapsed", None)
             try:
                 elapsed = self.tracker.game_encounter_elapsed
@@ -539,10 +554,6 @@ class DpsOverlay(OverlayWindow):
                 self.game_lbl.set_full("⚔ IN COMBAT")
             self.game_lbl.setStyleSheet(
                 f"font-size: 10px; font-weight: 800; color: {theme.GOOD};")
-        elif end > start:
-            self.game_lbl.set_full(f"⚔ GAME OVER · {end - start:.1f}s")
-            self.game_lbl.setStyleSheet(
-                f"font-size: 10px; font-weight: 700; color: {theme.GOLD};")
         elif in_combat is False:
             self.game_lbl.set_full("⚔ GAME out")
             self.game_lbl.setStyleSheet(
@@ -551,7 +562,6 @@ class DpsOverlay(OverlayWindow):
             self.game_lbl.set_full("⚔ GAME ?")
             self.game_lbl.setStyleSheet(
                 f"font-size: 10px; font-weight: 700; color: {theme.DIM};")
-        self.game_lbl.setToolTip(tip)
 
     def _group_roster(self):
         """The live party roster (None when unattached/undecodable).
@@ -565,18 +575,84 @@ class DpsOverlay(OverlayWindow):
         except Exception:
             return None
 
+    def _in_instance(self) -> bool:
+        """True inside a dungeon/rift - the tick's shared snapshot when there is
+        one, else the model's own read (see core/game_state.py)."""
+        return game_state.in_instance(self.model)
+
+
     def _is_solo(self) -> bool | None:
-        """True when ungrouped, False when grouped (or inside a dungeon/rift,
-        where party members always show), None while unknown (no readable
-        roster — keep showing all rows). The tracker supplies the recent-hit
-        safety rule so a roster misread never hides a live fight-mate."""
+        """True only when the game DECODED a solo roster, False when grouped
+        (or inside a dungeon/rift, where party members always show), None
+        while unknown — no readable roster, which means keep showing every
+        row. An unreadable roster is not evidence of being alone."""
         return solo_status(self.model, getattr(self, "tracker", None))
+
+    def _set_title(self, mode: str | None, source: str = "") -> None:
+        """Title text = the base header + the dungeon-mode badge. Only the
+        badge half changes, and only on a (mode, source) CHANGE (the tick runs
+        ~10x/s; per-tick rich-text reparse would churn the label for nothing).
+        ``source`` only reaches the tooltip — the bar itself never spells out
+        auto/manual, so the wording matches the Dungeon HUD's badge."""
+        if (mode, source) == self._title_state:
+            return
+        self._title_state = (mode, source)
+        self.titlebar.title.setText(self._title_base + dungeon_mode_badge(mode))
+        self.titlebar.title.setToolTip(mode_tooltip(mode, source))
+
+    def _update_capture_badge(self):
+        """Title-bar badge: whether real damage events are actually arriving.
+
+        A fight can start with capture dead (stale pool, unarmed DLL, reader
+        still calibrating) and the meter then just shows zeros — this makes
+        that state visible at a glance instead of discoverable in Settings.
+        The badge is also the capture DIAGNOSTIC: every state is clickable, and
+        a click writes the event-path report to the Activity Log — how many
+        bytes arrived, how many events decoded, how many the tracker pulled, how
+        many attribution kept. "The board reads zero" has at least three causes
+        (nothing arrived / nothing decoded / attribution dropped it) and the
+        engine status cannot tell them apart. When the capture is also stuck
+        (stale pool / calibrating) the same click forces a real rescan (forced
+        re-hunt + re-derive), which is the actual "unstick capture" action (the
+        Reset button only clears the meter — it never touches capture).
+        """
+        text, color, tip = capture_badge(self._dm())
+        if text:
+            self.cap_badge.apply(text, color, with_report_hint(tip))
+        else:
+            self.cap_badge.clear()
+        self.cap_badge.set_click(
+            self._capture_diagnostic if text else None)
+
+    def _capture_diagnostic(self):
+        """Badge click: report the event path, then rescan if capture is stuck."""
+        emit_capture_diagnostic(self.model, self.log.emit)
+        if capture_badge(self._dm())[0] not in ("⚠", "CAL"):
+            return                      # healthy capture: the report was the ask
+        dm = self._dm()
+        if dm is None:
+            return
+        try:
+            dm.force_wide_rehunt("meter badge rescan")
+        except Exception:
+            pass
+        try:
+            dm.recalibrate()
+        except Exception:
+            pass
+        try:
+            self.log.emit("DPS capture: manual rescan requested from the meter badge")
+        except Exception:
+            pass
 
     def _update_group_lbl(self):
         """Refresh the live party line from model.group_roster()."""
         roster = self._group_roster()
         if roster is None:
-            self.group_lbl.set_full("")
+            if self._is_solo() is True:
+                self.group_lbl.set_full("Group: solo")
+            else:
+                self.group_lbl.set_full("")
             return
         members = list(getattr(roster, "members", []) or [])
         if not members or getattr(roster, "solo", False):
@@ -606,11 +682,31 @@ class DpsOverlay(OverlayWindow):
                           key=lambda s: s.total, reverse=True)
         return p.ranked_skills()
 
+    def _empty_hint_default(self) -> str:
+        """Empty-state text for an idle meter.
+
+        There is no dummy half any more: prompting "attack the dummy" is the
+        Test Dummy HUD's line, and the meter is not the board at a dummy — it
+        just shows whatever session is live.
+        """
+        return "Hit an enemy or heal party to start."
+
+    def _update_target_lbl(self, session) -> None:
+        """The target line: the live boss/dummy HP bar, or the boss that is
+        still waiting behind the pre-boss trash.
+
+        Split out of `_tick` so the segment label and this line refresh even
+        while the meter is hidden; the player rows below stay tick-only.
+        Painting lives in `widgets.render` (see the file budget).
+        """
+        _dps_widgets.render(self, session)
+
     def _update_meters(self, ranked: list[PlayerParse], duration: float,
-                       group_damage: float, group_heals: float):
+                       group_damage: float, group_heals: float,
+                       include_empty: bool = False):
         if not ranked:
             self.empty_lbl.setText(
-                empty_hint(self._dm(), "Hit an enemy or heal party to start."))
+                empty_hint(self._dm(), self._empty_hint_default()))
             self.empty_lbl.show()
             self.dps_top_box.hide()
             for w in list(self._row_widgets.values()):
@@ -627,14 +723,27 @@ class DpsOverlay(OverlayWindow):
                   or GLOBAL_SKILL_CAP)
         budget = max(0, cap)
         rows_lay = self.dps_top_box.rows
+        # Live per-hero HP (name -> (hp, is_me)) from the last scene scan, so
+        # a player at 0 HP shows a death skull on their row.
+        hero_status = getattr(self.tracker, "last_hero_status", {}) or {}
+
+        # Solo meter: your row is the only ACTIVE parse on screen — expand the
+        # per-skill breakdown by default so it is visible. Count active rows
+        # (with damage or heals), not total rows: a second row carrying no
+        # parse of its own (a phantom Party_XXXX, a pre-registered idle ally)
+        # must not keep your skills collapsed when you are the only one
+        # fighting. A saved chevron choice always wins over these defaults.
+        _active = [p for p in ranked if p.total_damage > 0 or p.heals > 0]
+        solo_view = bool(len(_active) == 1 and _active[0].is_me)
 
         for idx, p in enumerate(ranked):
             active_names.add(p.name)
 
-            # Only the local player starts expanded; saved choice wins.
             saved_collapsed = self._row_collapsed.get(p.name)
-            row_expanded = ((not saved_collapsed)
-                            if saved_collapsed is not None else p.is_me)
+            if saved_collapsed is not None:
+                row_expanded = not saved_collapsed
+            else:
+                row_expanded = bool(solo_view and p.is_me)
             list_expanded = self._skills_show_all.get(p.name, False)
 
             if p.name not in self._row_widgets:
@@ -652,8 +761,13 @@ class DpsOverlay(OverlayWindow):
                 rows_lay.addWidget(row_widget)
             else:
                 row_widget = self._row_widgets[p.name]
+            # Scope flips (solo <-> group) apply the default live: leaving a
+            # solo meter collapses my skills at once; going solo re-expands
+            # them. Rows with a saved chevron choice are never overridden.
+            if row_widget.expanded != row_expanded:
+                row_widget.expanded = row_expanded
+                row_widget._sync_visibility()
             row_widget.show()
-            true_rank = self.tracker.session.get_rank(p, view=self._view_mode)
 
             if row_expanded and not list_expanded:
                 n_skills = len(self._ranked_skills_for(p, self._view_mode))
@@ -662,9 +776,17 @@ class DpsOverlay(OverlayWindow):
             else:
                 alloc = None   # full list (user override) or nothing to render
 
+            st = hero_status.get(p.name)
+            dead = bool(st is not None and st[0] <= 0.0)
+            # True rank by the active metric (get_rank ignores pin_me): with
+            # "Pin Me Top" on your row sits at the top of the list, but the
+            # number must show your real DPS position — not "1". The #1 tint
+            # follows the real leader too.
+            true_rank = self.tracker.session.get_rank(
+                p, view=self._view_mode, include_empty_allies=include_empty)
             row_widget.update_stats(true_rank - 1, p, duration, group_damage,
                                     group_heals, mode=self._view_mode,
-                                    skill_budget=alloc)
+                                    skill_budget=alloc, dead=dead)
 
             current_idx = rows_lay.indexOf(row_widget)
             if current_idx != idx:

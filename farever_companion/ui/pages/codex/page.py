@@ -100,11 +100,6 @@ class CodexPageBase:
                 break
         return current_rid, tab_label
 
-    def _on_legend_toggled(self, opt_name: str, checked: bool):
-        if not hasattr(self.s, opt_name): return
-        setattr(self.s, opt_name, checked)
-        if hasattr(self.s, "save"): self.s.save()
-        self._refresh_codex_grid()
 
     def _codex_is_collection_view(self, current_rid: str, tab_label: str) -> bool:
         """True for the compact card style (Collection / Pets / Others /
@@ -572,7 +567,7 @@ class CodexPageBase:
         return grid_header
 
     # --- tab / search / filter handlers ---------------------------------
-    def _codex_tab_changed(self, index: int = 0) -> None:
+    def _codex_tab_changed(self, index: int = 0, record_history: bool = True) -> None:
         """Clear the plotted map pins when switching tabs (they belong to the
         previous tab's context) — the live tracker (overlay compass / HUD
         waypoint) persists. Switch to 'All' status automatically when entering
@@ -580,6 +575,10 @@ class CodexPageBase:
         self._clear_codex_map_selection()
         self._zone_pins_active = False
         tab_label = self._codex_tabs.currentText().strip() if hasattr(self, "_codex_tabs") else ""
+        old_tab = getattr(self, "_codex_active_tab", "")
+        if record_history and old_tab and tab_label and old_tab != tab_label and hasattr(self, "_nav_history") and not getattr(self._nav_history, "_restoring", False):
+            self._nav_history.record(f"codex:{old_tab}", f"codex:{tab_label}")
+        self._codex_active_tab = tab_label
         if tab_label == "Dungeons":
             if hasattr(self, "_status_widgets"):
                 self._status_widgets["All"].setChecked(True)
@@ -654,16 +653,19 @@ class CodexPageBase:
     def _clear_zone_dungeon_pins(self) -> None:
         """Return the codex map to its idle state (no zone pins)."""
         self._zone_pins_active = False
-        if hasattr(self, "_codex_map_widget"):
-            self._codex_map_widget.set_multi_pins("", [])
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText("Left-click card to plot spawns")
+        canvas = self._codex_map_canvas()
+        if canvas is not None:
+            canvas.set_multi_pins("", [])
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText("Left-click card to plot spawns")
 
     def _plot_zone_dungeon_pins(self, zone: str) -> None:
         """Plot entrance pins for every dungeon in the selected zone (same
         coords as the dungeon list's tracking clicks)."""
         self._zone_pins_active = True
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         from ....data import dungeons
         pins = []
@@ -679,16 +681,18 @@ class CodexPageBase:
                 "name": d.get("boss_name") or d.get("name") or "",
                 "is_dungeon": True,
             })
-        self._codex_map_widget.set_multi_pins(f"{zone} Dungeons", pins)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{len(pins)} {zone} dungeon entrances plotted")
+        canvas.set_multi_pins(f"{zone} Dungeons", pins)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{len(pins)} {zone} dungeon entrances plotted")
 
     def _plot_all_dungeon_pins(self) -> None:
         """Plot entrance pins for every dungeon across all zones — the
         Dungeons-tab 'Dungeon Locations' button, which the zone keys (one zone
         at a time) don't cover."""
         self._zone_pins_active = False
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         from ....data import dungeons
         pins = []
@@ -703,9 +707,10 @@ class CodexPageBase:
                 "name": d.get("boss_name") or d.get("name") or "",
                 "is_dungeon": True,
             })
-        self._codex_map_widget.set_multi_pins("All Dungeons", pins)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{len(pins)} dungeon entrances plotted")
+        canvas.set_multi_pins("All Dungeons", pins)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{len(pins)} dungeon entrances plotted")
 
     def _dungeon_entrance_xy(self, d: dict, zone: str) -> tuple[float, float] | None:
         """(x, y) for a dungeon's zone pin. For rifts this is the rift spawn

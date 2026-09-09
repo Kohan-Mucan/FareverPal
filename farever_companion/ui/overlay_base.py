@@ -97,6 +97,36 @@ class _TitleBar(QtWidgets.QFrame):
         self._win.persist_geometry()
 
 
+class TrackerHostMixin:
+    """Shared compass-needle wiring for the HUDs that drive a tracker.
+
+    EntityOverlay and DungeonOverlay each hold the manager's TrackController
+    and expose the same three hooks to their render mixins (`_track` from a
+    row click, `_is_tracked` from a render pass). The bodies were
+    byte-identical in both, so they live here once.
+
+    Deliberately NOT on `OverlayWindow`: `overlay_manager` wires a tracker by
+    duck-typing on `hasattr(ov, "set_tracker")` and connects `tracker.changed`
+    to `self._tick`, so a hook on the base would be handed to windows with no
+    `_tick` (the DPS meter, the minimap, the run timer) and fault at attach.
+    """
+
+    def set_tracker(self, tracker) -> None:
+        self._tracker = tracker
+        tracker.changed.connect(self._tick)
+
+    def _track(self, kind: str, key: str | None, addr=None, force=False) -> None:
+        if self._tracker is not None and key:
+            if force:
+                self._tracker.track(kind, key, addr=addr)
+            else:
+                self._tracker.toggle(kind, key, addr=addr)
+
+    def _is_tracked(self, kind: str, key: str | None) -> bool:
+        return self._tracker is not None and key is not None \
+            and self._tracker.is_tracked(kind, key)
+
+
 class OverlayWindow(QtWidgets.QWidget):
     """Subclass and fill `self.content` (a QVBoxLayout)."""
     request_page = QtCore.Signal(str)
@@ -279,6 +309,34 @@ class OverlayWindow(QtWidgets.QWidget):
             ex &= ~WS_EX_TRANSPARENT
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
 
+    # --- in-game size (read by the 1:1 preview page) ---------------------
+    def _ingame_height(self) -> int:
+        """The height this overlay grows to for the rows it currently holds.
+
+        Zero means "the declared base height is the whole story" — the base
+        answer for a HUD whose content height is set by its layout. The entity
+        and dungeon HUDs measure their own body and override this, and their
+        auto-height resize goes through it, so the live window, the resize and
+        the preview all read the same rule instead of three copies of it.
+        """
+        return 0
+
+    def ingame_size(self) -> QtCore.QSize:
+        """The size this overlay takes on screen in game: base * scale wide,
+        and as tall as the overlay's own rule says — `_ingame_height()` for
+        the content-driven HUDs (the height its auto-height resizes the live
+        window to, which for an empty body is the collapsed 60 it would use),
+        else base * scale. A subclass that declares no base size (the DPS
+        meter sizes itself explicitly) reports the window it already has."""
+        bw = int(getattr(self, "_base_w", 0) or 0)
+        bh = int(getattr(self, "_base_h", 0) or 0)
+        if not (bw and bh):
+            return self.size()
+        scale = float(getattr(self, "_scale", 1.0) or 1.0)
+        height = self._ingame_height() or round(bh * scale)
+        return QtCore.QSize(max(round(bw * scale), self.minimumWidth()),
+                            max(height, 60))
+
     def apply_scale(self, scale: float) -> None:
         """Uniform per-overlay zoom via a scaled QSS (text + metrics); also grows
         the window from the subclass's base size. The first call after a restore
@@ -346,14 +404,19 @@ class OverlayWindow(QtWidgets.QWidget):
     # --- geometry persistence -------------------------------------------
     def persist_geometry(self) -> None:
         """Position always; size too for grip-resizable overlays, so a drag-
-        resize survives the relaunch (it used to snap back to base*scale)."""
+        resize survives the relaunch (it used to snap back to base*scale).
+
+        Writes only on a real change: teardown paths (closeEvent on every
+        close, including detach) must not rewrite the file from a stale copy
+        when nothing moved."""
         if self._settings is None:
             return
         g = f"{self.x()},{self.y()}"
         if getattr(self, "_resizable", False):
             g += f",{self.width()},{self.height()}"
-        self._settings.geometry[self._geo_key] = g
-        self._settings.save()
+        if self._settings.geometry.get(self._geo_key) != g:
+            self._settings.geometry[self._geo_key] = g
+            self._settings.save()
 
     def _restore_geometry(self) -> None:
         if self._settings is None:
@@ -381,6 +444,19 @@ class OverlayWindow(QtWidgets.QWidget):
             self.move(40, 40)
         elif self._geo_key == "speedrun":
             self.move(370, 40)
+        elif self._geo_key == "dummy":
+            # Below the Entity HUD's usual spot, clear of the minimap and of
+            # the Run Timer; the user drags it where they want it anyway (and
+            # that position then persists).
+            self.move(40, 300)
+        elif self._geo_key == "dps":
+            # Right side, below the minimap's usual spot — never
+            # center-screen, which is where Qt drops a window with neither a
+            # saved position nor a default (e.g. a wiped geometry entry).
+            self.move(max(0, screen.width() - 360), 500)
+        elif self._geo_key == "dungeon":
+            # Below the Run Timer's usual spot, clear of the Entity HUD.
+            self.move(370, 300)
     def keyPressEvent(self, e):
         if e.key() == QtCore.Qt.Key_Escape:
             e.ignore()

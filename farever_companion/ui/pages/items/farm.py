@@ -14,9 +14,10 @@ from PySide6 import QtCore, QtWidgets
 
 from ... import theme
 from ... import components as C
+from ...copy_utils import copy_with_feedback
 from ....data import icons
 from ....data import items as idata
-from .... import planner as pdata
+from ....craft import planner as pdata
 from .drops import _KIND_ICON, _NPC_SPRITES, _row_label
 from .support import WrapLabel, FlowLayout
 
@@ -187,30 +188,15 @@ class FarmMixin:
     def _items_farm_copy_btn(self) -> QtWidgets.QPushButton:
         """A small flat COPY button (like Total Needed's) that puts the farm
         list on the clipboard."""
-        btn = QtWidgets.QPushButton("COPY")
-        btn.setCursor(QtCore.Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton{{color:{theme.MUTED};"
-            f"background:{theme.with_alpha(theme.ACCENT, 12)};"
-            f"border:1px solid {theme.BORDER};"
-            "border-radius:4px;padding:2px 9px;font-size:10px;"
-            "font-weight:700;letter-spacing:1px;}"
-            f"QPushButton:hover{{color:{theme.TEXT};"
-            f"background:{theme.with_alpha(theme.ACCENT, 30)};}}")
+        btn = C.copy_button()
         btn.clicked.connect(lambda: self._items_farm_copy(btn))
         return btn
 
     def _items_farm_copy(self, btn) -> None:
-        QtWidgets.QApplication.clipboard().setText(self._items_farm_export())
-        btn.setText("✓ COPIED")
-        QtCore.QTimer.singleShot(
-            1400, lambda b=btn: self._items_farm_copy_restore(b))
+        copy_with_feedback(
+            self._items_farm_export(), btn,
+            copied_text="✓ COPIED", restore_text="COPY", restore_ms=1400)
 
-    def _items_farm_copy_restore(self, btn) -> None:
-        try:
-            btn.setText("COPY")
-        except RuntimeError:          # farm rebuilt while the flash was set
-            pass
 
     def _items_farm_export(self) -> str:
         """The farm list as markdown-flavored plain text, paste-ready for a
@@ -460,7 +446,7 @@ class FarmMixin:
         """The item's base stats at its display rarity, one string per stat
         ('Armor 208', 'Critical 11'). Dungeon-scaled gear (any boss source)
         previews at MAX level — dungeons scale to the character's max and
-        hard mode drops it there, so per-family dungeon levels would just
+        heroic mode drops it there, so per-family dungeon levels would just
         under-read. World/uncommon gear (zone sets, jewelry) keeps its
         authored zone-tier stats, crafted gear its fixed craft level."""
         if idata.item_fixed_level(it):

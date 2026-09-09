@@ -14,10 +14,11 @@ under the UI line budget.
 """
 from __future__ import annotations
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import theme
-from ..overlay_base import OverlayWindow
+from ..overlay_base import OverlayWindow, TrackerHostMixin
+from ...core import game_state
 from ...data import names
 from ...geo import orbs as geo_orbs
 from .entity_gather import EntityGatherMixin
@@ -26,11 +27,33 @@ from .entity_rows import _Section, _scroll_body
 
 POLL_MS = 350
 
+# Titlebar section toggles (2026-09-19): the Entity HUD's own on/off buttons,
+# matching the Dungeon HUD's data-driven set. Only the sections whose switch
+# has no other home are listed — every other Entity HUD section is already a
+# World Layers matrix row. key -> (settings attr, ui_icon glyph, tip on, tip off)
+_ENTITY_SECTION_TOGGLES = (
+    ("rift", "entity_show_rift", "radio", "Hide rift timer", "Show rift timer"),
+    ("loot", "show_loot",        "box",   "Hide loot",       "Show loot"),
+)
+_ENTITY_TOGGLE_ATTR = {k: a for k, a, _i, _on, _off in _ENTITY_SECTION_TOGGLES}
+_ENTITY_TOGGLES_BY_KEY = {k: (a, i, ton, toff)
+                          for k, a, i, ton, toff in _ENTITY_SECTION_TOGGLES}
 
-class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
+
+class EntityOverlay(EntityRenderMixin, EntityGatherMixin, TrackerHostMixin,
+                    OverlayWindow):
     def __init__(self, model, settings, parent=None):
         super().__init__("HUD", settings, geo_key="entity", parent=parent)
         self._page_key = "settings:HUD's"
+        # Header: compass glyph — clicking a row points the centre-screen
+        # compass needle at the selected target, so the icon reads as the
+        # HUD's purpose at a glance.
+        self.titlebar.title.setText(
+            "<span style='font-size:13px;'>🧭</span>&nbsp;&nbsp;HUD")
+        self.titlebar.title.setTextFormat(QtCore.Qt.RichText)
+        self.titlebar.title.setStyleSheet(
+            f"color: {theme.TEXT}; font-weight: 800; font-size: 13px; "
+            f"letter-spacing: 1px;")
         self.titlebar.codex_btn.setVisible(True)
         self.titlebar.dungeon_btn.setVisible(True)
         self.titlebar.soulstone_btn.setVisible(True)
@@ -39,6 +62,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._enemies: list = []          # [(entity, dist)]
         self._spark_mobs: list = []       # [(entity, dist)]
         self._group_members: list = []    # [(entity, dist)]
+        self._group_away: list = []       # [(name, class, zone)] off-scene members
         self._comps: list = []            # [(entity, dist)] wild companions
         self._gatherables: list = []      # [((x,y,z,kind,label,id), dist)]
         self._orbs: list = []             # [(Orb, dist)] uncollected secret orbs
@@ -77,6 +101,24 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._body.addSpacerItem(self._bottom_spacer)
         self._body.addStretch(1)
 
+        # Per-section titlebar toggles (RIFT TIMER / LOOT): icon-lit with the
+        # accent while the section shows, muted while hidden. Data-driven so a
+        # new section is one tuple (same shape as the Dungeon HUD's set).
+        self._section_btns: dict[str, QtWidgets.QPushButton] = {}
+        for spec in _ENTITY_SECTION_TOGGLES:
+            key, icon = spec[0], spec[2]
+            btn = QtWidgets.QPushButton()
+            btn.setObjectName("Icon")
+            btn.setFixedSize(22, 22)
+            btn.clicked.connect(
+                lambda _=False, k=key: self.set_show_section(
+                    k, not self._section_on(k)))
+            btn._entity_icon = icon
+            self._section_btns[key] = btn
+            self.titlebar.extra.insertWidget(
+                self.titlebar.extra.count() - 3, btn)
+        self._sync_section_btns()
+
         self.enable_resize_grip()
         self._base_w, self._base_h = self.s.entity_width, 440
         self.setMinimumWidth(300)
@@ -92,6 +134,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         self._sel = None
         self._enemies = []
         self._group_members = []
+        self._group_away = []
         self._player_deaths = {}
         self._player_prev_alive = {}
         self._comps = []
@@ -161,7 +204,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         t += [("static", p[5]) for p, _ in self._static_pois]
         rift_mode = self._get_rift_mode()
 
-        rst = self.model.rift_status() if (self.model is not None and rift_mode != "Off") else None
+        rst = game_state.rift(self.model) if rift_mode != "Off" else None
         if rst and rst.state in ("WARNING", "ACTIVE", "CLOSING", "SCHEDULED"):
             if rift_mode == "Always" or (rift_mode == "Active" and rst.state in ("WARNING", "ACTIVE", "CLOSING")):
                 r_key = f"s{rst.poi_x:.1f},{rst.poi_y:.1f}" if rst.poi_x is not None else "rift_schedule"
@@ -280,7 +323,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
                 if p_data:
                     self._tracker.track(p_data[3], f"{p_data[0]:.1f},{p_data[1]:.1f},{p_data[2]:.1f}|{p_data[4]}|{key}")
             elif kind == "rift_active":
-                rst = self.model.rift_status() if self.model else None
+                rst = game_state.rift(self.model)
                 px, py, pz, label = None, None, None, "Rift"
                 if rst and rst.poi_x is not None and rst.poi_y is not None:
                     px, py, pz = rst.poi_x, rst.poi_y, rst.poi_z
@@ -345,7 +388,7 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             if p_data:
                 wx, wy = p_data[0], p_data[1]
         elif kind == "rift_active":
-            rst = self.model.rift_status() if self.model else None
+            rst = game_state.rift(self.model)
             if rst and rst.poi_x is not None and rst.poi_y is not None:
                 wx, wy = rst.poi_x, rst.poi_y
             elif isinstance(key, str) and key.startswith("s"):
@@ -409,36 +452,47 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
 
     def _retint(self, accent: str) -> None:
         # selected-row / icon-tile accents are read live each refresh
-        pass
+        self._sync_section_btns()
 
-    def set_scale(self, scale):
-        self.apply_scale(scale)
+    # --- titlebar section toggles -------------------------------------------
+    def _section_on(self, key: str) -> bool:
+        """Is this section currently shown? (reads the live setting)"""
+        attr = _ENTITY_TOGGLE_ATTR.get(key)
+        return bool(getattr(self.s, attr, True)) if attr else False
+
+    def set_show_section(self, key: str, on: bool) -> None:
+        """Persist one Entity HUD section's visibility + re-render now.
+        Unknown keys are a no-op, so a stale button can never crash a tick."""
+        attr = _ENTITY_TOGGLE_ATTR.get(key)
+        if attr is None:
+            return
+        setattr(self.s, attr, bool(on))
+        self.s.save()
+        self._sync_section_btns()
+        self._tick()
+
+    def _sync_section_btns(self) -> None:
+        for key, btn in getattr(self, "_section_btns", {}).items():
+            self._update_section_btn(key, btn)
+
+    def _update_section_btn(self, key: str,
+                            btn: QtWidgets.QPushButton,
+                            icon: str | None = None) -> None:
+        from ...data import icons
+        spec = _ENTITY_TOGGLES_BY_KEY.get(key)
+        if spec is None:
+            return
+        _attr, icon_default, tip_on, tip_off = spec
+        glyph = icon or getattr(btn, "_entity_icon", None) or icon_default
+        on = self._section_on(key)
+        btn.setIcon(QtGui.QIcon(icons.ui_icon(
+            glyph, self.s.hud_accent if on else theme.MUTED, 18)))
+        btn.setIconSize(QtCore.QSize(18, 18))
+        btn.setToolTip(tip_on if on else tip_off)
+
 
     def set_collection_owned(self, owned: set | None) -> None:
         self._owned = owned
-
-    def set_tracker(self, tracker) -> None:
-        self._tracker = tracker
-        tracker.changed.connect(self._tick)
-
-    def _track(self, kind: str, key: str | None, addr=None, force=False) -> None:
-        if self._tracker is not None and key:
-            if force:
-                self._tracker.track(kind, key, addr=addr)
-            else:
-                self._tracker.toggle(kind, key, addr=addr)
-
-    def _is_tracked(self, kind: str, key: str | None) -> bool:
-        return self._tracker is not None and key is not None \
-            and self._tracker.is_tracked(kind, key)
-
-    def _is_tracked_instance(self, kind: str, unit_id: str | None, addr) -> bool:
-        """Only the live instance the needle is locked on shows TRACKING -
-        not every unit of the tracked type."""
-        if not self._is_tracked(kind, unit_id):
-            return False
-        locked = self._tracker.locked_addr
-        return locked is None or locked == addr
 
     def _hide_unit(self, unit_id: str):
         if self._tracker and self.s.track_kind == "unit":
@@ -488,6 +542,8 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
         return sorted(cands, key=lambda t: t[1])[:self.s.orb_count]
 
     def _tick(self):
+        if not self.isVisible():
+            return
         try:
             self._refresh()
         except Exception as e:
@@ -546,18 +602,26 @@ class EntityOverlay(EntityRenderMixin, EntityGatherMixin, OverlayWindow):
             # Use a singleShot to let the layout settle before measuring height
             QtCore.QTimer.singleShot(0, self._do_auto_height)
 
-    def _do_auto_height(self):
+    def _ingame_height(self) -> int:
+        """Body + titlebar chrome, capped to the screen (CHROME is the title
+        bar + margins the section rows do not account for). Also what the
+        1:1 preview pins, so a preview IS the size the live HUD takes."""
         try:
-            if not hasattr(self, "_body") or self._body is None:
-                return
-            body_hint = self._body.sizeHint().height()
-            CHROME = 50
-            target_h = body_hint + CHROME
+            body = getattr(self, "_body", None)
+            if body is None:
+                return 0
             screen = QtWidgets.QApplication.primaryScreen()
             screen_h = screen.availableGeometry().height() if screen else 900
-            target_h = min(target_h, screen_h - 40)
-            target_h = max(target_h, 60)
-            if target_h != self.height():
+            return max(60, min(body.sizeHint().height() + 50, screen_h - 40))
+        except (RuntimeError, AttributeError):
+            return 0
+
+    def _do_auto_height(self):
+        try:
+            if not hasattr(self, "_body") or self._body is None or not self.isVisible():
+                return
+            target_h = self._ingame_height()
+            if target_h and target_h != self.height():
                 self._base_h = target_h
                 self.resize(self.width(), target_h)
         except (RuntimeError, AttributeError):

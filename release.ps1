@@ -56,7 +56,7 @@ if ($LASTEXITCODE -ne 0) { throw "Not authenticated. Run 'gh auth login' first."
 
 # --- confirm the built exe exists ---
 if (-not (Test-Path $exe)) {
-    throw "Missing $exe. Build it first: build.bat then package.bat"
+    throw "Missing $exe. Build it first: build-mod.bat"
 }
 $exeMB = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Host "Release asset: $exe ($exeMB MB)"

@@ -186,6 +186,160 @@ def skill_moves(skill_id: str) -> dict | None:
     return None
 
 
+# --- item procs vs rotation passives ----------------------------------------
+
+@lru_cache(maxsize=1)
+def _item_granted_skill_ids() -> frozenset[str]:
+    """Every skill id at least one catalog item grants, from the ITEM side.
+
+    Built by walking the items rather than the reverse lookup
+    (`items.weapons_for_skill`) because this has to be a whole-set answer: the
+    question is "does gear grant this at all", not "which weapon".
+
+    Imported lazily because `items.catalog` imports this module.
+    """
+    try:
+        from .items import catalog
+    except Exception:
+        return frozenset()
+    out: set[str] = set()
+    for it in catalog.items():
+        out.update(catalog._weapon_skill_ids(it["id"]))
+    return frozenset(out)
+
+
+# The gear system grants every weapon a `<Type>_Upgrade` passive ("Weapon
+# Upgraded") at each upgrade rank, and NO item row references it — so it is a
+# genuine item proc that the reverse lookup can never find. Matched on the
+# sheet's own name, the same signal `items.weapon_upgrade_passive` uses to
+# build `<Type>_Upgrade`, so the two cannot drift.
+_WEAPON_UPGRADED_NAME = "Weapon Upgraded"
+
+
+@lru_cache(maxsize=8192)
+def item_proc_source(skill_id: str) -> dict | None:
+    """The item that grants `skill_id` as a PROC, or None.
+
+    An item proc is damage you get from GEAR, and it reads differently from a
+    passive in your rotation: Bloodrage Aura is not something you press, and
+    a meter that lists both as "(Passive)" cannot say which is which. This
+    returns `{"name", "type", "id"}` for the granting item so the row can say
+    where the number came from.
+
+    Three deliberate exclusions, each because the naive rule is FALSE here
+    rather than merely imprecise (measured over the shipped sheets by
+    ai/workspace/buffy/probe_item_procs3.py):
+
+    - **Base attacks / actives / combos / powers.** Gear lists a weapon's
+      whole rotation, so "an item grants this" is true of 230 skills — 65 of
+      them the base attacks you swing every fight. Only a Passive-nature row
+      can be a proc.
+    - **Class talents.** 11 of them are listed by the augment sigils
+      (11 same-named "Sigil of Bet'Hatesht" rows, one talent each). A talent
+      in your TREE is a rotation passive whether or not a sigil also names it,
+      so tagging it would misreport the tree.
+    - **The name check.** Resolved through the ANCESTOR, because a proc's own
+      ticks arrive on a derived row (`..._Passive_Status`) that no item lists;
+      without that walk a proc shows untagged whenever the parent never cast.
+    """
+    sid = skill_id or ""
+    # Walk up to the row that actually carries the passive. A derived row's
+    # own nature is Status (see _NATURE_LABELS), so checking the row itself
+    # would reject every tick a proc produces.
+    candidates = [sid]
+    parent = names.parent_skill_id(sid)
+    if parent and parent != sid:
+        candidates.append(parent)
+
+    for cand in candidates:
+        if "Talent" in cand:
+            continue
+        row = skill_row(cand)
+        if not row:
+            continue
+        texts = row.get("texts") or {}
+        if texts.get("name") == _WEAPON_UPGRADED_NAME:
+            # No item row references it; name the weapon FAMILY, which is what
+            # the upgrade ladder is keyed to.
+            fam = cand[: -len("_Upgrade")] if cand.endswith("_Upgrade") else ""
+            return {"id": "", "name": "Weapon Upgraded", "type": fam}
+        if cand not in _item_granted_skill_ids():
+            continue
+        if _NATURE_LABELS.get(row.get("nature")) != "Passive":
+            continue
+        from .items import weapons_for_skill
+        for w in weapons_for_skill(cand):
+            return {"id": w.get("id", ""), "name": w.get("name", ""),
+                    "type": w.get("type", "")}
+    return None
+
+
+# --- summons ---------------------------------------------------------------
+
+# Leading skill-id tokens that name a WEAPON family. Copied from core/dps_data's
+# `_WEAPON_TOKENS` (the keys) rather than imported: `data/` must not reach up
+# into `core/`. Same list, same order-of-magnitude, kept beside the rule that
+# uses it so the two cannot drift far.
+_WEAPON_TOKENS = frozenset({
+    "sword", "greatsword", "dualswords", "shield", "axe", "greataxe",
+    "dualaxes", "mace", "greatmace", "dualmaces", "dagger", "daggers",
+    "fists", "spear", "staff", "scepter", "bow", "thrown", "crescent",
+    "halos", "book",
+})
+_CLASS_TOKENS = ("warrior", "rogue", "mage", "priest")
+
+# Two summon families whose WEAPON is not in the shipped item catalog, so the
+# family token above cannot recognise them. Named here rather than guessed:
+# `SummonBee_*` is the bee harvester's bolt and `Summon_Imp_Auto` the imp's,
+# both weapon-summon rotations (live report 2026-10-03: "i only want weapon
+# summons").
+_CATALOG_BLIND_WEAPON_SUMMONS = ("summonbee", "summon")
+
+
+def _family_token(skill_id: str) -> str:
+    """Leading skill-id token, cleaned for the weapon-family test."""
+    parts = (skill_id or "").strip().split("_")
+    tok = parts[0].lower()
+    if tok in _CLASS_TOKENS and len(parts) > 1:
+        tok = parts[1].lower()
+    return re.sub(r"\d+$", "", tok)
+
+
+@lru_cache(maxsize=8192)
+def is_summon(skill_id: str) -> bool:
+    """True when `skill_id` belongs to a WEAPON's summon family.
+
+    Scoped to weapon summons deliberately (reported live 2026-10-03: "why is it
+    talking about pet, i only want weapon summons"). A bare "summon" substring
+    also matches the BOSS encounters' own scripts — `Ulserous_Summon`,
+    `Phrixes_Demon_Summon`, `Faerie_Demon_Summon`, `Cleodora_ChampionSummon` —
+    and tagging those "summon" told the player their own summon did damage the
+    boss, which is false: they are the fight's spawn.
+
+    So the family must ALSO be a weapon: the id's leading token is a weapon
+    family (`Staff_SummonDemon_*` is the Silhouette of Almaz staff), or it is
+    one of the two catalog-blind weapon summons above. Matched on the id and
+    the sheet's name, because the families spell it differently, and derived
+    rows are covered by walking to `parent_skill_id` — the same ancestor walk
+    `item_proc_source` uses, because a summon attack often arrives on a child.
+    """
+    sid = skill_id or ""
+    for cand in (sid, names.parent_skill_id(sid) or ""):
+        if not cand:
+            continue
+        token = _family_token(cand)
+        if token not in _WEAPON_TOKENS and token not in _CATALOG_BLIND_WEAPON_SUMMONS:
+            continue
+        if re.search("summon", cand, re.I):
+            return True
+        row = skill_row(cand)
+        texts = (row or {}).get("texts") or {}
+        name = texts.get("name") or ""
+        if name and re.search("summon", name, re.I):
+            return True
+    return False
+
+
 def skill_meta(skill_id: str) -> dict:
     """The skill's numeric stat line: {cooldown, range} where the sheet
     has them — the SAME values the ::cooldown:: / ::range:: template
@@ -250,6 +404,48 @@ def skill_rank_descriptions(skill_id: str) -> list[str]:
             continue
         rrow = _row_at_rank(row, i + 1)
         out.append(_resolve(desc, rrow, frozenset(), i + 1))
+    return out
+
+
+# The infusion skill affixes' attribute ids -> display names (the gear
+# stat vocabulary). 'Mastery' attributes are the physical/magic ratings.
+_AFFIX_ATTR_LABELS = {
+    "CritChance": "Critical Chance",
+    "Armor": "Armor",
+    "Vitality": "Vitality",
+    "Fervor": "Fervor",
+    "MagicMastery": "Magic Mastery",
+    "PhysicalMastery": "Physical Mastery",
+    "ArmorPenetration": "Armor Penetration",
+    "SpellPenetration": "Spell Penetration",
+}
+
+
+def skill_set_bonus_affixes(skill_id: str) -> list[str]:
+    """The skill's set-bonus stat lines, from its `affixes` rows (the
+    infusion skills' (4) Set bonus: each affix grants an attribute when
+    its minRank threshold is met — rank 2 = the (6)-piece set tier in the
+    crucible UI). Flat affixes are points ('+2.5% Critical Chance'),
+    ARatio affixes are fractions of the base ('+2.5% Armor'); both render
+    as the percentage the game shows. [] when the skill has no
+    threshold-gated affixes."""
+    row = skill_row(skill_id)
+    if not row:
+        return []
+    out = []
+    for a in row.get("affixes") or []:
+        if (a.get("conds") or {}).get("minRank") != 2:
+            continue
+        attr = (a.get("target") or {}).get("attribute") or ""
+        label = _AFFIX_ATTR_LABELS.get(attr, attr)
+        if not label:
+            continue
+        ref = a.get("ref") or ""
+        val = a.get("val") or 0
+        if ref == "TAttribute_ARatio":
+            out.append(f"+{val * 100:g}% {label}")
+        else:
+            out.append(f"+{val:g}% {label}")
     return out
 
 
@@ -395,6 +591,13 @@ def _fallback(base: str, pct: bool) -> str:
     if base in _FALLBACKS:
         return _FALLBACKS[base]
     return "X%" if pct else "X"
+
+
+def stat_label(attr: str) -> str:
+    """A raw sheet attribute name ('CritChance', 'PhysicalMastery') -> the
+    readable label the skill prose uses ('Critical Chance', 'Physical
+    Mastery'), humanized when the sheet has no entry."""
+    return _STAT_REFS.get(attr) or names.humanize(attr) or attr
 
 
 def _bracket_label(x: str) -> str:

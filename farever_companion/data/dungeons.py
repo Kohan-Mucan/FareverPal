@@ -115,3 +115,33 @@ def get_dungeon_info(activity_id_or_name: str | None) -> dict | None:
                 return d
             
     return None
+
+
+def declared_boss_id(zone: str | None) -> str | None:
+    """The boss unit id the game itself names for this instance, else None.
+
+    The zone the player is standing in is resolved to a dungeon row, and that
+    row's ``boss_id`` is the instance declaring who its boss is. This is the
+    only INDEPENDENT boss signal the tracker has: everything else it can see
+    (a unit's class, the runtime boss flag, a distance) describes a unit that is
+    present, not the one this instance is actually about.
+
+    Rifts return None on purpose. Both rifts share one entrance zone, so the
+    lookup can only ever name one of the two and the answer would be wrong half
+    the time - worse than saying nothing, because a rift boss is recognised
+    perfectly well by its own unit id (see `units._is_rift_boss`). A zone with
+    no dungeon row, a row with no boss id, and the shared Rifts entrance all
+    return None, which reads downstream as "this instance declares no boss".
+
+    Restored 2026-10-03 after a concurrent edit dropped the function while
+    `core/model.py` and `core/dps_tracker_tick.py` still called it (an
+    AttributeError on the zone read, not only in tests).
+    """
+    if not zone:
+        return None
+    info = get_dungeon_info(zone)
+    if not info:
+        return None
+    if info.get("entrance_zone") == "Rifts":
+        return None
+    return (info.get("boss_id") or None)

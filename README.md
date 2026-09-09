@@ -72,8 +72,10 @@ directory and consolidated into the app during build.
 
 ## Utility Scripts
 
-The `farever_companion/data/tools/` directory contains helper scripts for
-data management and asset extraction.
+The `build_tools/` directory holds the dev-only helper scripts (asset and
+launcher checks, the compiled-field and unnamed-item audits, the icon/overlay
+preview page under `build_tools/dev/`, and the pre-build environment doctor
+`build_tools/doctor.bat`). They never ship inside the app.
 
 ## Run from source
 

@@ -18,8 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets  # noqa: E402
 
 from farever_companion import paths  # noqa: E402
-from farever_companion import planner as pdata  # noqa: E402
-from farever_companion.ui import theme  # noqa: E402
+from farever_companion.craft import planner as pdata  # noqa: E402
 from farever_companion.data import items as idata  # noqa: E402
 from farever_companion.ui.pages.craft import detail as cdetail  # noqa: E402
 from farever_companion.ui.pages.craft.detail import CraftDetailMixin  # noqa: E402
@@ -136,10 +135,19 @@ def test_heavy_raw_material_gets_collapsible_groups():
         inline = [t for t in lbls if t.startswith("← ")]
         assert any("Guild Merchant" in t for t in inline), inline
         # Veiled Wing is no longer boss-only: its farmable mobs render in
-        # a collapsible MOBS · 7 group (the faction groups + the boss are
-        # all in there, hidden until the header is clicked)
-        assert any(b.startswith("MOBS · 7") and b.endswith("▾")
-                   for b in btns), btns
+        # a collapsible MOBS group (the faction groups + the boss + the
+        # Nightmare units are all in there, hidden until the header is
+        # clicked). The count is derived from the drop table rather than
+        # hardcoded — the Phrixes/Nightmare sources joined it since this
+        # hint was written, and they'll keep moving
+        from farever_companion.ui.pages.craft.queue import _craft_material_sources
+        from farever_companion.ui.pages.items.drops import _deduped_drops
+        mob_rows = [d for d in _deduped_drops(
+            _craft_material_sources(idata.shown_drops("VeiledWing")))
+            if d["kind"] == "unit"]
+        assert mob_rows, "Veiled Wing should still carry mob sources"
+        assert any(b.startswith(f"MOBS · {len(mob_rows)}") and b.endswith("▾")
+                   for b in btns), (len(mob_rows), btns)
         assert any("Nightqueen Shaarlize" in t for t in lbls), lbls
         # the collapsible group starts collapsed (names hidden) and a
         # header click reveals it
@@ -385,7 +393,6 @@ def test_queue_total_needed_check_off():
     tag to the still-missing summary ('K DONE · R RAW LEFT'); unticking
     restores it, and the gathered state survives rail rebuilds (qty edits
     re-render, re-deriving each checkbox from the shared got-state)."""
-    from farever_companion.ui import components as C
 
     class _Dummy(CraftDetailMixin):
         _codex_jump_to_unit = staticmethod(lambda *a: None)
@@ -679,10 +686,12 @@ def test_queue_copy_button_exports_merged_bill():
         host.deleteLater()
 
 
-def test_recipe_card_total_needed_check_off_shares_state():
-    """The recipe card's Total Needed list is checkable too, and its ticks
-    share the queue's gathered state — checking Vial on the card marks it
-    gathered in the queue's still-missing tally."""
+def test_recipe_card_total_needed_is_read_only():
+    """The recipe card's Total Needed list is a READ-ONLY bill: the gather
+    toggles live on the Craft List tab only — they were taken off the card
+    to stop it reflashing on every keystroke — so the card renders no
+    checkboxes and its tag stays the static 'N ITEMS · M RAW'. The batch
+    stepper still refills it in place."""
     from farever_companion.ui import components as C
 
     class _Dummy(CraftDetailMixin):
@@ -699,28 +708,67 @@ def test_recipe_card_total_needed_check_off_shares_state():
                                qty_selector=True, qty=10)
     host.show()
     try:
-        boxes = host.findChildren(QtWidgets.QCheckBox)
-        assert len(boxes) == 18, len(boxes)   # the card's Total Needed too
+        bill = idata.craft_bill("SmallAlchemistCauldron", 10)
+        assert bill
+        # no toggles on the card — the queue owns gathering now
+        assert host.findChildren(QtWidgets.QCheckBox) == []
+        lbls = [l.text() for l in host.findChildren(QtWidgets.QLabel)
+                if l.text()]
+        assert any(t == f"{len(bill['items'])} ITEMS · {bill['raw_total']:g} RAW"
+                   for t in lbls), lbls
+        assert any(t == "40×  Vial" for t in lbls), lbls
+        # the batch stepper refills the read-only bill in place
+        step = host.findChildren(C.Stepper)[0]
+        step.setValue(15)
+        lbls = [l.text() for l in host.findChildren(QtWidgets.QLabel)
+                if l.text()]
+        assert any("60×  Vial" in t for t in lbls), lbls
+    finally:
+        host.deleteLater()
+
+
+def test_queue_bill_check_off_drives_shared_gathered_state():
+    """The Craft List's bill IS the checkable one, and its ticks share the
+    recipe card's gathered state — ticking Vial records 40 units in the
+    shared progress dict and flips the bill tag to the still-missing
+    tally."""
+    from farever_companion.ui import components as C
+
+    class _Dummy(CraftDetailMixin):
+        _codex_jump_to_unit = staticmethod(lambda *a: None)
+        _craft_refresh_scroll = staticmethod(lambda: None)
+
+    dummy = _Dummy()
+    host = QtWidgets.QWidget()
+    dummy._craft_rail = QtWidgets.QFrame()
+    dummy._craft_rail_lay = QtWidgets.QVBoxLayout(host)
+    dummy._craft_tabs = C.SegmentedControl(["Recipes", "Jobs", "Craft List"])
+    dummy._craft_queue = [{"item": "SmallAlchemistCauldron", "qty": 10,
+                           "name": "Minor Alchemist Cauldron"}]
+    dummy._craft_rail_build()
+    host.resize(900, 700)
+    host.show()
+    try:
+        for _ in range(8):
+            QtWidgets.QApplication.processEvents()
+        bill = idata.craft_bill("SmallAlchemistCauldron", 10)
+        assert bill
+        head = dummy._craft_rail_head
+        assert head._tag.text() == \
+            f"{len(bill['items'])} ITEMS · {bill['raw_total']:g} RAW"
         vial = next(l for l in host.findChildren(QtWidgets.QLabel)
                     if l.text() == "40×  Vial")
         _row_checkbox(vial).click()
         assert dummy._craft_got.get("Vial") == 40
-        lbls = [l.text() for l in host.findChildren(QtWidgets.QLabel)
-                if l.text()]
-        assert any(t == "1 DONE · 550 RAW LEFT" for t in lbls), lbls
-        # the batch stepper refills the bill and keeps the gathered row
-        # (gathered rows are rich text, so match the label by substring)
-        step = host.findChildren(C.Stepper)[0]
-        step.setValue(10)                     # same qty: still gathered
+        # 40 raw units are now gathered, so the tag counts them off the
+        # total (the number itself comes from the data, never hardcoded)
+        assert head._tag.text() == \
+            f"1 DONE · {bill['raw_total'] - 40:g} RAW LEFT"
+        # the ticked row reads struck-through at its full count
         vial = next(l for l in host.findChildren(QtWidgets.QLabel)
-                    if "40×  Vial" in l.text())
+                    if "40×" in l.text() and "Vial" in l.text())
         assert _row_checkbox(vial).isChecked()
-        step.setValue(15)                     # need 60 > gathered 40
-        # bill rows show what's STILL needed once gathering starts, so the
-        # Vial row reads 20× (60 needed − 40 gathered), unchecked
-        vial = next(l for l in host.findChildren(QtWidgets.QLabel)
-                    if l.text().startswith("20×") and "Vial" in l.text())
-        assert not _row_checkbox(vial).isChecked()
+        assert "line-through" in vial.text()
     finally:
         host.deleteLater()
 
@@ -806,9 +854,12 @@ def test_queue_page_splits_into_two_columns():
         bxs = [b.mapTo(host, QtCore.QPoint(0, 0)).x() for b in boxes]
         assert min(bxs) > max(xs), (max(xs), min(bxs))
         # each entry row: item icon on the LEFT, then the name, then the
-        # stepper (the stepper is right of its row's name, not leading it)
+        # stepper (the stepper is right of its row's name, not leading it).
+        # The bill rows carry their own 28px tiles (and source-hint icons),
+        # so scope to the entry tiles — the 36px ones the queue lines build
         icons = [l for l in host.findChildren(QtWidgets.QLabel)
-                 if l.pixmap() and not l.pixmap().isNull()]
+                 if l.pixmap() and not l.pixmap().isNull()
+                 and l.size() == QtCore.QSize(36, 36)]
         assert len(icons) == 2, len(icons)     # one icon tile per entry
         ix = [i.mapTo(host, QtCore.QPoint(0, 0)).x() for i in icons]
         assert max(ix) < min(xs), (ix, xs)     # icons left of every stepper
@@ -925,7 +976,7 @@ def test_queue_is_own_tab_and_job_chips_filter():
         # shows the empty-state card while nothing is queued (explicit hide
         # state — the rail/empty live on the non-current stack page, so
         # isVisible() is False regardless; isHidden() is the real signal)
-        assert d._craft_stack.currentIndex() == 0
+        assert d._craft_stack.currentWidget() is not d._craft_queue_page
         assert not d._craft_rail_empty.isHidden()
         assert d._craft_rail.isHidden()
         # adding a recipe fills the queue page; the tab carries the count
@@ -934,9 +985,11 @@ def test_queue_is_own_tab_and_job_chips_filter():
         assert not d._craft_rail.isHidden()
         assert d._craft_rail_empty.isHidden()
         assert "· 1" in d._craft_tabs._btns["Craft List"].text()
+        # look the page up by identity — the tab's stack index moved when the
+        # Jobs tab took index 1, and could move again
         d._craft_tabs.setCurrentText("Craft List")
         d._craft_tab_changed("Craft List")
-        assert d._craft_stack.currentIndex() == 1
+        assert d._craft_stack.currentWidget() is d._craft_queue_page
         # the tab bar returns to the browse; the grid + selection survive
         d._craft_tabs.setCurrentText("Recipes")
         d._craft_tab_changed("Recipes")
@@ -1146,7 +1199,6 @@ def test_material_link_opens_material_card():
     Used In rows that jump back to their recipes) in the detail pane, so
     the whole crafting loop stays browsable from the one flat list. The
     card is the non-gear item's full page — no OPEN IN GEAR button."""
-    from PySide6 import QtCore
     from farever_companion.ui import components as C
     from farever_companion.ui.pages.craft import CraftPageMixin
 

@@ -22,7 +22,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import theme
 from ..overlay_base import OverlayWindow
 from ... import constants as C
-from ...core import chest_resolver
+from ...core import chest_resolver, game_state
 from ...data import icons, names, units as udata
 from ...geo import nav, orbs as geo_orbs, zones as geo_zones, gatherables as geo_gatherables, pois as geo_pois
 from . import minimap_render as render
@@ -75,9 +75,9 @@ class _Canvas(QtWidgets.QWidget):
 
         if (self._pan_x != 0.0 or self._pan_y != 0.0) and self._last_player_pos is not None:
             dx, dy = xyz[0] - self._last_player_pos[0], xyz[1] - self._last_player_pos[1]
-            if math.hypot(dx, dy) > 0.5:
-                # Always clear pan when the player moves — whether the pan was
-                # set by the tracker (pan_to) or by the user dragging.
+            if math.hypot(dx, dy) > 0.5 and self._tracking_pan:
+                # Only TRACKER pans auto-clear on move; a user's right-drag
+                # pan sticks until right-double-click or a zone transition.
                 self._pan_x = self._pan_y = 0.0
                 self._tracking_pan = False
                 self.update()
@@ -93,7 +93,7 @@ class _Canvas(QtWidgets.QWidget):
         return True
 
     def refresh_fast(self):
-        if self.model is None:
+        if self.model is None or not self.window().isVisible():
             return
         if self._read_player():
             self.update()
@@ -117,23 +117,31 @@ class _Canvas(QtWidgets.QWidget):
         return True
 
     def refresh(self):
-        if self.model is None:
-            self._pois = []; self.update(); return
+        if self.model is None or not self.window().isVisible():
+            self._pois = []
+            return
 
         profile = self.model.player_profile()
-        done_list = self.s.get_poi_done(profile)
+        done_list = self.s.get_poi_done_authoritative(profile)
 
         if not self._read_player():
             self._pois = []; self.update(); return
 
         pois, s = [], self.s
+        here = (self._px, self._py, self._pz)   # every "nearest ..." query below
         limit_z = getattr(s, "minimap_limit_by_zone", False)
-        p_zone = geo_zones.resolve_zone(self._px, self._py, self._pz) if limit_z else None
+        p_zone = geo_zones.resolve_zone(*here) if limit_z else None
         p_area = geo_zones.get_area_id(p_zone) if p_zone else None
         max_d = 400.0 if limit_z else (s.max_dist if s.max_dist > 0 else 600.0)
         hide_c = getattr(s, "minimap_hide_collected", False)
+        # The profile stores canonical static IDs, while the live scene can
+        # return the same POI with different casing. Keep one normalized lookup
+        # for every minimap filter instead of mixing exact and case-sensitive
+        # membership tests.
+        done_lower = {str(done_id or "").casefold() for done_id in done_list}
+        self._done_ids = done_lower
 
-        merged_chests = self.model.nearest_chests_merged((self._px, self._py, self._pz), n=200, max_dist=max_d, player_zone=p_zone, use_2d=True)
+        merged_chests = self.model.nearest_chests_merged(here, n=200, max_dist=max_d, player_zone=p_zone, use_2d=True)
 
         # ⛔ ORB-CHEST ACTIVITY LOGIC — DO NOT EDIT.  Everything below (the
         # end-chest done sets, section 1's activity handling, and section 5's
@@ -198,9 +206,9 @@ class _Canvas(QtWidgets.QWidget):
                         # REAL end-chest suffix, never the base id itself, or a
                         # garbage zone prefix hides every base in the zone.
                         _base_l = chest_resolver.activity_base_id(r.chest_id) or cid_l
-                        if _base_l in end_open_live or _base_l in end_open_profile or r.chest_id in done_list:
+                        if _base_l in end_open_live or _base_l in end_open_profile or cid_l in done_lower:
                             continue
-                if hide_c and r.chest_id and (r.chest_id in done_list or cid_l in end_open_live or cid_l in end_open_profile):
+                if hide_c and r.chest_id and (cid_l in done_lower or cid_l in end_open_live or cid_l in end_open_profile):
                     continue
                 is_r = "recipe" in cid_l or (r.loot_table and "recipe" in r.loot_table.lower())
                 self._add_poi(pois, r.x, r.y, r.z, "recipe" if is_r else "chest", names.chest_label(r.chest_id, r.loot_table), r.chest_id)
@@ -209,29 +217,26 @@ class _Canvas(QtWidgets.QWidget):
         show_e = s.minimap_enemies
         show_s = getattr(s, "minimap_spark_mobs", False)
         if show_e or show_s:
-            pool = self.model.nearest_enemies((self._px, self._py, self._pz), n=150, max_dist=max_d, player_zone=p_zone, use_2d=True)
+            pool = self.model.nearest_enemies(here, n=150, max_dist=max_d, player_zone=p_zone, use_2d=True)
             hidden = set(s.get_entity_hidden_units(profile)) if show_e else set()
             if show_e and hide_c:
                 hidden.update(done_list)
 
-            for e, d in pool:
+            for e, _d in pool:
                 is_spark = udata.drops_spark(e.unit_id)
-                # Show if:
-                # 1. Spark toggle is ON and it's a spark mob (bypass hidden)
-                # 2. Enemies toggle is ON and it's not hidden
+                # a spark mob shows on its own toggle, bypassing the hidden set
                 if (show_s and is_spark) or (show_e and e.unit_id not in hidden):
-                    # Use a special kind if it's a spark mob AND toggle is on for special rendering
                     kind = "spark_enemy" if (show_s and is_spark) else "enemy"
                     self._add_poi(pois, e.x, e.y, e.z, kind, e.unit_id or "?", f"e{e.addr}")
         if getattr(s, "minimap_players", True):
-            for e, d in self.model.nearest_group_members((self._px, self._py, self._pz), n=20, max_dist=max_d, use_2d=True):
+            for e, _d in self.model.nearest_group_members(here, n=20, max_dist=max_d, use_2d=True):
                 if e.addr != self.model.player_addr:
                     h_cls = (getattr(e, "hero_class", None) or udata.resolve_hero_class(e.cls, e.unit_id) or "warrior").lower()
                     self._add_poi(pois, e.x, e.y, e.z, f"hero_{h_cls}", e.unit_id or "?", f"hero{e.addr}")
         if getattr(s, "minimap_companions", True):
             c_dist = float(s.show_companions_debug) if isinstance(getattr(s, "show_companions_debug", False), (int, float)) else (250.0 if not getattr(s, "show_companions_debug", False) else max_d)
             hide_comps = set(s.get_companion_hidden_units(profile))
-            for e, d in self.model.nearest_companions((self._px, self._py, self._pz), n=100, max_dist=c_dist, player_zone=p_zone, use_2d=True, hide_units=hide_comps):
+            for e, _d in self.model.nearest_companions(here, n=100, max_dist=c_dist, player_zone=p_zone, use_2d=True, hide_units=hide_comps):
                 self._add_poi(pois, e.x, e.y, e.z, "companion", e.unit_id or "?", f"comp{e.addr}")
 
         # 3. Gatherables
@@ -261,7 +266,7 @@ class _Canvas(QtWidgets.QWidget):
                     # Ascension Start points are teleporters: always keep them
                     # on the map, even after the course completes or they're
                     # marked done. Only checkpoints/finish hide once collected.
-                    if hide_c and o.elem_id and o.elem_id in done_list and not is_start:
+                    if hide_c and o.elem_id and o.elem_id.casefold() in done_lower and not is_start:
                         continue
                     if is_start or state_l in ("waitactivation", "desactivated"):
                         label = names.poi_label(o.elem_id) or o.elem_id or o.kind
@@ -289,24 +294,20 @@ class _Canvas(QtWidgets.QWidget):
         # 5. Orbs
         if s.minimap_orbs:
             for ob in geo_orbs.load_orbs():
-                if not hide_c or not ob.orb_id in done_list:
+                if not hide_c or str(ob.orb_id or "").casefold() not in done_lower:
                     if p_area and geo_zones.get_area_id(ob.zone) != p_area:
                         continue
                     # Static locations have no distance limit (allows panning to them)
                     self._add_poi(pois, ob.x, ob.y, ob.z, "orb", ob.orb_id, ob.orb_id, max_dist=0)
             for e in self.model.live_orbs(player_zone=p_zone, max_dist=max_d, use_2d=True):
-                if not hide_c or not e.elem_id in done_list:
+                if not hide_c or str(e.elem_id or "").casefold() not in done_lower:
                     self._add_poi(pois, e.x, e.y, e.z, "orb", e.elem_id or "orb", e.elem_id or f"orb{e.addr}")
 
             # Chest Orbs + TimerCollectRun event orbs (live elements only) —
-            # goldorb markers.  While a chain is active, every available orb
-            # renders as a goldorb.  Once the chain is done, no orbs linger:
-            # the reward chest covers the spot instead.  Spent orbs
-            # (disabled/opened/looted) never render.
-            #
-            # A chain's orbs render only while the activity is live: spent orbs
-            # (disabled/opened/looted) never render, and once the end chest is
-            # opened live the whole chain disappears (see end_open_live above).
+            # goldorb markers. A chain's orbs render only while the activity is
+            # live: spent orbs (disabled/opened/looted) never render, and once
+            # the end chest is opened live — `end_open_live` above — the whole
+            # chain disappears, the reward chest covering the spot.
             chains: dict[str, list] = {}
             for e in self.model.live_chest_orbs(player_zone=p_zone, max_dist=max_d, use_2d=True):
                 if not e.elem_id:
@@ -324,7 +325,7 @@ class _Canvas(QtWidgets.QWidget):
                         continue
                     if live_done:
                         continue
-                    if not hide_c or (pid not in done_list and e.elem_id not in done_list):
+                    if not hide_c or (str(pid or "").casefold() not in done_lower and str(e.elem_id or "").casefold() not in done_lower):
                         self._add_poi(pois, e.x, e.y, e.z, "chest_orb", e.elem_id, e.elem_id, max_dist=max_d)
 
         # 6. Dungeons / Rifts (Static only)
@@ -334,7 +335,7 @@ class _Canvas(QtWidgets.QWidget):
         self._zone_name = _zname
 
         if s.minimap_dungeons:
-            rst = self.model.rift_status() if hasattr(self.model, "rift_status") else None
+            rst = game_state.rift(self.model)
             for p in geo_pois.load_pois():
                 if p.sub_kind in ("dungeon", "rift"):
                     if p_area and geo_zones.get_area_id(p.zone) != p_area:
@@ -478,7 +479,7 @@ class _Canvas(QtWidgets.QWidget):
         else:
             p.drawEllipse(QtCore.QPointF(cx, cy), rad_x, rad_y)
 
-        track_pos, profile = render.track_pos(self), (self.model.player_profile() if self.model is not None else "")
+        track_pos = render.track_pos(self)
         for (wx, wy, _wz, kind, label, poi_id) in self._pois:
             orig_kind, hero_class = kind, None
             if kind.startswith("hero_"): hero_class = kind.split("_", 1)[1]; kind = "hero"
@@ -501,7 +502,7 @@ class _Canvas(QtWidgets.QWidget):
                     dy_c *= (rad_x - 4) / dist
                     edge = True
 
-            done = bool(poi_id and self.s.is_done(poi_id, profile))
+            done = bool(poi_id and str(poi_id).casefold() in getattr(self, "_done_ids", set()))
             is_wp = render.is_waypoint(self, kind, label, poi_id, wx, wy, track_pos)
             # Type-level gather tracking (e.g. "Madrigold") highlights nodes
             # with the green halo but never clamps them to the edge.
@@ -562,7 +563,11 @@ class _Canvas(QtWidgets.QWidget):
                         p.drawEllipse(QtCore.QPointF(sx, sy), rad + 2, rad + 2)
 
         p.setClipping(False)
-        render.draw_compass(self, p, cx, cy, min(w, h) / 2 - 4, phi)
+        # N/E/S/W direction labels are their OWN toggle (minimap_compass_labels)
+        # — deliberately independent of the main compass needle (show_compass),
+        # so turning the needle off never hides the map's orientation letters.
+        if getattr(self.s, "minimap_compass_labels", True):
+            render.draw_compass(self, p, cx, cy, min(w, h) / 2 - 4, phi)
         accent = QtGui.QColor(self.s.hud_accent)
         fwd = (phi - self._heading) if self._heading is not None else (math.pi / 2)
         arrow_pm = icons.asset_icon("arrow", int(self.s.minimap_icon_size * 1.3))
@@ -628,7 +633,8 @@ class _Canvas(QtWidgets.QWidget):
 
                 # ChestOrb / TimerCollectRun spawned orbs are informational
                 # markers only — not clickable, never tracked as chests.
-                # Right-click done-marking still works via _mark_done.
+                # Right-click done-marking still works (render.mark_done,
+                # dispatched from the right-click branch further down).
                 if kind == "orb" and poi_id in geo_orbs.by_id():
                     tr.toggle("orb", poi_id)
                 elif (kind.startswith("hero_") or kind in ("enemy", "companion", "spark_enemy")) and label != "?":
@@ -745,6 +751,11 @@ class _Canvas(QtWidgets.QWidget):
     def mouseDoubleClickEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton and hasattr(self.window(), "set_bare"):
             self.window().set_bare(not self.s.minimap_bare)
+        elif e.button() == QtCore.Qt.RightButton:
+            if self._pan_x != 0.0 or self._pan_y != 0.0:  # back to follow
+                self._pan_x = self._pan_y = 0.0
+                self._tracking_pan = False
+                self.update()
 
 
 class MinimapOverlay(OverlayWindow):

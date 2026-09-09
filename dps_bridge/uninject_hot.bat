@@ -14,15 +14,20 @@ if exist "%GCC_BIN%\gcc.exe" (
     echo [1/2] Compiling fresh injector with bundled GCC...
     set "PATH=%GCC_BIN%;!PATH!"
     pushd "%SRC_DIR%hook\farever_dps"
+    rem safe_uninject_client.h (SafeUnload-aware uninjector) lives here with
+    rem injector.c, which #includes it. Build outputs stay in this source folder.
+    if not exist "safe_uninject_client.h" (
+        echo [FAIL] hook\farever_dps\safe_uninject_client.h is missing.
+        echo        injector.c includes it, so the uninjector cannot be rebuilt;
+        echo        uninjecting with an older binary could tear the DLL out live.
+        echo        Restore the file and rerun.
+        popd
+        pause
+        exit /b 1
+    )
     gcc -O2 -o farever_dps.exe injector.c
     if !ERRORLEVEL! equ 0 (
-        if exist "%SCRIPT_DIR%farever_dps.exe" (
-            del "%SCRIPT_DIR%farever_dps.exe.old" 2>nul
-            ren "%SCRIPT_DIR%farever_dps.exe" farever_dps.exe.old 2>nul
-        )
-        copy /y farever_dps.exe "%SCRIPT_DIR%" >nul 2>&1
-        copy /y farever_dps.exe "%SCRIPT_DIR%farever_uninject.exe" >nul 2>&1
-        echo [OK] Injector compiled and updated.
+        echo [OK] Injector compiled in "%SRC_DIR%hook\farever_dps".
     ) else (
         echo [WARN] Compilation of injector failed, using existing binary.
     )
@@ -35,9 +40,7 @@ echo.
 echo [2/2] Uninjecting farever_dps.dll from running game...
 cd /d "%SCRIPT_DIR%"
 
-if exist "farever_dps.exe" (
-    farever_dps.exe --uninject
-) else if exist "%SRC_DIR%hook\farever_dps\farever_dps.exe" (
+if exist "%SRC_DIR%hook\farever_dps\farever_dps.exe" (
     "%SRC_DIR%hook\farever_dps\farever_dps.exe" --uninject
 ) else (
     echo [ERROR] farever_dps.exe not found!
@@ -48,3 +51,4 @@ echo =======================================================
 echo Uninject complete. The game continues running normally.
 echo =======================================================
 pause
+exit /b 0

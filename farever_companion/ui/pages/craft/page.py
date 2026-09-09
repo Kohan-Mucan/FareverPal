@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid as _is_valid
 
 from ... import theme
 from ... import components as C
 from ...layout import FlowLayout, make_scroll
-from .... import planner
+from ....craft import planner
 from ....data import icons
 from ....data import items as idata
-from ..items import support
 from . import detail
 
 _CRAFT_JOB_CHIPS = ["Blacksmith", "Outfitter", "Jeweller", "Alchemist", "Cook"]
@@ -101,8 +101,11 @@ class CraftPageBase:
         self._craft_stack.addWidget(self._craft_jobs_placeholder)
         self._jobs_page_built = False
 
-        # Index 2: Craft List / Queue page
+        # Index 2: Craft List / Queue page (kept on self: the tab index is
+        # not fixed — the Jobs tab took index 1 — so callers look the page
+        # up by identity instead of hardcoding a number)
         queue_page = QtWidgets.QWidget()
+        self._craft_queue_page = queue_page
         qv = QtWidgets.QVBoxLayout(queue_page)
         qv.setContentsMargins(0, 0, 0, 0)
         qv.setSpacing(12)
@@ -139,8 +142,16 @@ class CraftPageBase:
         self._craft_rail_built = False
         self._craft_rail_sync()
         QtCore.QTimer.singleShot(50, self._craft_ensure_jobs)
+        page.consume_pane_back = self._on_craft_pane_back
         return page
 
+    def _on_craft_pane_back(self) -> bool:
+        hist = getattr(self, "_craft_recipe_history", None)
+        if hist:
+            prev_id = hist.pop()
+            self._craft_jump_to_recipe(prev_id, record_history=False)
+            return True
+        return False
 
     def _build_jobs_page(self) -> QtWidgets.QWidget:
         """The Jobs list tab: a clean, compact catalog of all recipes with
@@ -456,13 +467,19 @@ class CraftPageBase:
     def _craft_ensure_jobs(self) -> None:
         if getattr(self, "_jobs_page_built", False):
             return
+        stack = getattr(self, "_craft_stack", None)
+        if stack is None or not _is_valid(stack):
+            # the first-visit build is deferred by a singleShot timer, so it
+            # can fire after the page/window is gone — inserting into a
+            # deleted QStackedWidget raises inside the Qt event loop
+            return
         self._jobs_page_built = True
         jobs_page = self._build_jobs_page()
         if hasattr(self, "_craft_jobs_placeholder") and self._craft_jobs_placeholder is not None:
-            self._craft_stack.removeWidget(self._craft_jobs_placeholder)
+            stack.removeWidget(self._craft_jobs_placeholder)
             self._craft_jobs_placeholder.deleteLater()
             self._craft_jobs_placeholder = None
-        self._craft_stack.insertWidget(1, jobs_page)
+        stack.insertWidget(1, jobs_page)
 
     def _craft_ensure_rail(self) -> None:
         if getattr(self, "_craft_rail_built", False):

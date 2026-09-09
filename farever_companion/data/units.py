@@ -1,20 +1,68 @@
 """Unit metadata + boss detection. Pure (CDB-only), so a unit-id always
 resolves the same way.
 
-Boss detection: a unit whose id also names a loot table (named bosses), or one
-whose unit.flags carries BOSS_FLAG_BIT.
+Boss detection: a unit whose id also names a loot table (named bosses), one
+whose unit.flags carries BOSS_FLAG_BIT, or one in the curated Rift list
+(`_CURATED_RIFT_BOSSES`) because the shipped sheets predate it.
 """
 from __future__ import annotations
 
+import os
+import re
 from functools import lru_cache
 
-from . import cdb
+from . import cdb, names
 
-# unit.flags boss bit, calibrated from the CDB: exactly 13 of 403 units carry
-# 0x10 (all named bosses plus Phrixes/PhrixesP1/Ulserous), zero trash mobs.
-BOSS_FLAG_BIT: int | None = 0x10
-# Unique/named units (like the RamPatrol dogs) carry 0x80 (often 192/0xC0).
-UNIQUE_FLAG_BIT: int = 0x80
+# The `unit.flags` bits live in ONE place now (`farever_companion/unit_flags.py`)
+# because the compiler read the same bare numbers differently (0x40 vs 0x80 for
+# "unique", and 0x80 used as a dungeon hint there). Re-exported here so the
+# names keep resolving from this module, where they have always lived, and so
+# `is_boss`/`is_unique` provably share the compiler's bits. See that module for
+# what each bit was measured to mean and how confident that reading is.
+from ..unit_flags import (BOSS_FLAG_BIT, UNIQUE_FLAG_BIT,
+                          is_boss_flag, is_unique_flag)
+
+
+def canonical_unit_id(raw_id: str | None) -> str | None:
+    """The ONE canonical form of a unit/entity id, whichever reader produced it.
+
+    Two very different readers carry the same field and must compare equal:
+
+      * the live scene walk, which reads the unit's own `unitId` hl String and
+        stores it per foe address (core/dps_tracker_tick.py `_foe_raw_ids`),
+      * the native bridge's kill notification, which reads that same field in
+        C and puts it on the wire verbatim (`{"t":"kill","uid":...}`).
+
+    What the bridge sends is the RAW value: `Units/Enemies/Wolf/Wolf_Z1W.prefab`
+    for a prefab spawn, `Boss_Foo(Clone)` for an engine-pooled instance - while
+    every static lookup in this module (is_boss, is_training_dummy, unit_info,
+    loot tables) is keyed by the CDB's plain id. So the shape is reduced HERE,
+    once, and both sides use it: `(Clone)`/`(Instance)` suffixes dropped, a
+    prefab path reduced to its basename without extension, and the patrol/
+    unique spawn suffixes (`_Elite`, `_1` ... `_5`) folded back onto the static
+    id.
+
+    Idempotent by construction, and that is load-bearing: a caller may reduce
+    both sides of a comparison without knowing which one came off the wire.
+    """
+    if not raw_id:
+        return raw_id
+    # 1. Strip (Clone), (Instance), etc. - the engine's pooling suffixes.
+    clean = raw_id.split("(")[0].strip()
+    # 2. Handle path-like IDs (e.g. 'Units/Enemies/Wolf/Wolf_Z1W.prefab'
+    #    -> 'Wolf_Z1W') - a prefab spawn names its own asset.
+    if "/" in clean or "\\" in clean:
+        clean = os.path.splitext(os.path.basename(clean))[0]
+    # 3. Handle trailing variants for patrol/unique units (e.g. _Elite, _1)
+    #    to ensure they match their static CDB definitions. Scoped to patrol
+    #    ids on purpose: no other family documents a variant suffix, so
+    #    elsewhere the tail is left exactly as the game wrote it.
+    if "Patrol" in clean:
+        for suffix in ("_Elite", "_1", "_2", "_3", "_4", "_5"):
+            if clean.endswith(suffix):
+                clean = clean[:-len(suffix)]
+                break
+    return clean
 
 
 @lru_cache(maxsize=1)
@@ -34,13 +82,59 @@ def _named_bosses() -> frozenset[str]:
     return frozenset(u for u in _units_by_id() if u in table_ids)
 
 
+# Rift bosses the shipped sheets do not carry.
+#
+# The unit table (530 rows) and the dungeons table (14 rows) were compiled
+# before this season's Rift encounters, so ids the live scene hands out can
+# resolve to nothing at all: no unit row, no display name, `is_boss` no. The
+# boss fight then had nothing to recognise it by except the instance's boss
+# read - and that read is `dungeon_boss`, which model.units() derives from
+# THIS function, so a gap here is circular: it silently costs the DPS meter
+# its boss row AND the Run Timer its boss kill (live 2026-10-01, the rift
+# fight split into mob rows and the run never finished on the boss dying).
+#
+#   Asuna                 the rift's second boss; no row anywhere in the CDB,
+#                         yet the live scene spawns and reports her.
+#   Nightking_Maat_Demon  the underscored asset id for the boss whose CDB row
+#                         is `DemonSuperElite` (display name "Nightking Maat
+#                         Demon"). The row spelling is already a boss, so this
+#                         second entry only matters if the scene sends the
+#                         asset id instead of the row id - then the fight must
+#                         not depend on which spelling arrived.
+_CURATED_RIFT_BOSSES: frozenset[str] = frozenset({
+    "Asuna",
+    "Nightking_Maat_Demon",
+})
+
+# The Rift family in the CDB: `DemonSuperElite` and its clones.
+RIFT_BOSS_PREFIX: str = "DemonSuperElite"
+
+
+def _is_rift_boss(unit_id: str) -> bool:
+    """True for the Rift boss line, its curated siblings, and nothing else.
+
+    `DemonSuperElite_Fairy_Guardian` ("Shaarlize's Guardian") is excluded on
+    purpose: it is an ADD that spawns during the Fairy fight, and letting it
+    take the boss board handed one fight's whole damage total to an add.
+    Every other member of the family is the boss or a true clone of it.
+    """
+    if unit_id in _CURATED_RIFT_BOSSES:
+        return True
+    if not unit_id.startswith(RIFT_BOSS_PREFIX):
+        return False
+    return "FalseClone" not in unit_id and "_Guardian" not in unit_id
+
+
 # Training dummies are NOT bosses (no loot table, no boss flag) but the DPS
 # tracker treats them boss-like so dummy parses get their own boss-session
 # group instead of polluting trash. Accepts raw unit ids (PunchingBag,
-# PunchingBagArmor/MagicRes/Invulnerable/Shield, TrainingDummy, TestDummy)
-# as well as display names ("Test Dummy", "Training Dummy", "Punching Bag",
-# plus the variant short names "Armor"/"MagicRes"/"Invu"/"Shielded", resolved
-# back to their unit through the enemies manifest).
+# PunchingBagArmor/MagicRes/Invulnerable/Shield, TrainingDummy, TestDummy,
+# and the bare Dummy the open-world hubs actually spawn) as well as display
+# names ("Test Dummy", "Training Dummy", "Punching Bag", "Dummy", plus the
+# variant short names "Armor"/"MagicRes"/"Invu"/"Shielded", resolved back to
+# their unit through the enemies manifest). The manifest's OTHER "Dummy_*"
+# rows are props, not targets and stay out: Dummy_Runner is "Fleeing Bag",
+# Dummy_Support an "Ally dummy", Dummy_FX a "FXTest" — none is a parse bench.
 # Deliberately NOT part of is_boss(): dummies must stay out of the Bosses
 # codex tab and boss-marked drop rows.
 @lru_cache(maxsize=1)
@@ -56,8 +150,12 @@ def _display_name_to_id() -> dict[str, str]:
 
 
 def _is_dummy_compact(compact: str) -> bool:
+    # The bare "dummy" is the game's own plain training dummy (`id='Dummy'`,
+    # display name "Dummy") — the one the open-world hubs spawn, and the whole
+    # reason a parse against it never engaged: every member of this family was
+    # matched EXCEPT the commonest one.
     return (compact.startswith("punchingbag")
-            or compact in ("testdummy", "trainingdummy"))
+            or compact in ("dummy", "testdummy", "trainingdummy"))
 
 
 def is_training_dummy(unit_id: str | None) -> bool:
@@ -80,28 +178,38 @@ def is_training_dummy(unit_id: str | None) -> bool:
     return False
 
 
+def is_known_unit(unit_id: str | None) -> bool:
+    """Whether the shipped unit table has a row for this id.
+
+    The gate on `is_boss`'s ENGINE fallback (the scene's boss class / boss
+    flag, read in core/dps_tracker_tick.py `_scan_foes`): those may only speak
+    for units the data layer has never heard of — content the sheets predate,
+    which is the whole reason the fallback exists. When the CDB knows the
+    unit, the CDB's verdict IS the verdict: Lost City of Mayda's trash crab
+    is spawned from the `ent.boss.Crabgantua` prefab, so the class alone
+    promoted a dungeon mob to "the boss" and the pre-boss pulls were swallowed
+    into a boss fight that never split (live 2026-10-02). Every `ent.boss.*`
+    unit in the shipped table is already a boss by `is_boss`, so nothing the
+    engine can say is lost for a unit the data knows.
+    """
+    return bool(unit_id) and unit_id in _units_by_id()
+
+
 def is_boss(unit_id: str | None) -> bool:
     """A named boss (has a signature loot table), Rift boss, or flagged as one
     once the boss flag bit is calibrated."""
     if not unit_id:
         return False
-    # Explicit recognition for Rift bosses and true clones.
-    # _Guardian (Shaarlize's Guardian) is an add, not a boss — exclude it
-    # from the prefix sweep.
-    if (unit_id == "DemonSuperElite"
-            or unit_id == "DemonSuperElite_Fairy"
-            or unit_id == "DemonSuperElite_Fairy_TrueClone"
-            or (unit_id.startswith("DemonSuperElite")
-                and "FalseClone" not in unit_id
-                and "_Guardian" not in unit_id)):
+    # The Rift family (CDB row ids + the curated ids the sheets predate).
+    # _Guardian (Shaarlize's Guardian) is an add, not a boss — excluded.
+    if _is_rift_boss(unit_id):
         return True
     if unit_id in _named_bosses():
         return True
-    if BOSS_FLAG_BIT is not None:
-        row = _units_by_id().get(unit_id)
-        flags = row.get("flags") if row else None
-        if isinstance(flags, int) and (flags & BOSS_FLAG_BIT):
-            return True
+    row = _units_by_id().get(unit_id)
+    flags = row.get("flags") if row else None
+    if is_boss_flag(flags):
+        return True
     return False
 
 
@@ -168,8 +276,60 @@ def spark_unit_ids() -> frozenset[str]:
     return frozenset()
 
 
+# The game spells a Spark unit three ways, and nothing else does the matching:
+# "Sparkling <creature>" in the display name (`Sparkling Wild Bee`), the `_Spark`
+# / `Spark*` id the companions use (`Rabbit_Spark` "Sparkling Buttontail",
+# `SparkHorse_01`), and `<creature> Sparkle` (`Sparkle of Estrone`, `Pyrh
+# Sparkle`). The COMPILER's own name test looks for the single substring
+# "sparkling" against the codex_order name, so it misses every `<creature>
+# Sparkle` row and every `_Spark` companion — that gap is the build's, and it is
+# the dust flag's (see `drops_spark`). This is the runtime's answer to the
+# broader question, in one place, so no widget invents its own spelling test.
+_SPARK_TOKEN_RE = re.compile(r"spark", re.IGNORECASE)
+
+
+def is_spark_variant(unit_id: str | None) -> bool:
+    """THE 'is this a Spark unit' question — one predicate, every caller.
+
+    True for a unit the build flagged as a dust source, and for any unit whose
+    id or display name carries one of the game's Spark spellings (which includes
+    the catchable `_Spark` companions and the `<creature> Sparkle` elementals
+    the compiler's single-substring test misses).
+
+    This is the VARIANT question — the card's gold outline and anything else that
+    marks "this is a sparkling one". It is deliberately NOT the dust question:
+    Spark Dust comes from the `FoeUniqueDrops` table, which the game attaches to
+    unique FOES, and critters are caught, not killed — see `drops_spark`.
+    """
+    if not unit_id:
+        return False
+    if unit_id in spark_unit_ids() or _SPARK_TOKEN_RE.search(unit_id):
+        return True
+    # The name the UI actually draws — `unit_name` appends "(Spark)" to an id
+    # that names one — falling back to the sheet row the compiler baked. Reading
+    # both is what keeps this predicate and the label on the card agreeing.
+    shown = (names.unit_name(unit_id)
+             or (_units_by_id().get(unit_id) or {}).get("name") or "")
+    return bool(_SPARK_TOKEN_RE.search(shown))
+
+
 def drops_spark(unit_id: str | None) -> bool:
-    """True if the unit is a 'Spark' variant that drops Spark Dust."""
+    """THE 'does this unit drop Spark Dust' question — one predicate, every
+    reader (the card's dust badge, the Codex "Spark Dust" filter, the entity HUD
+    and minimap spark toggles, the tracker's spark bypass).
+
+    It answers with the flag the build bakes, which is the only evidence the app
+    has: `compiler.py` flags a unit when it carries the unique-foe bit and is not
+    in its five-unit EXCLUDE_DUST list. Nothing here re-derives the rule.
+
+    Narrower than `is_spark_variant` ON PURPOSE, and the two must not be
+    conflated: Spark Dust is the `FoeUniqueDrops` table's `UpgradeAll`, and the
+    game attaches that table to unique FOES. Critters and mounts/gliders are
+    excluded by the build because they are caught, not killed — and the app's own
+    item index agrees, attributing Spark Dust to activity chests/crates and one
+    vendor (DemonHuntZoey) and to no unit at all. So a sparkling companion is a
+    Spark VARIANT (`is_spark_variant`) and correctly NOT a dust source.
+    """
     if not unit_id:
         return False
     return unit_id in spark_unit_ids()
@@ -182,7 +342,7 @@ def is_unique(unit_id: str | None) -> bool:
         return False
     row = _units_by_id().get(unit_id)
     flags = row.get("flags") if row else None
-    return isinstance(flags, int) and (flags & UNIQUE_FLAG_BIT)
+    return is_unique_flag(flags)
 
 
 def boss_loot_table(unit_id: str | None) -> str | None:

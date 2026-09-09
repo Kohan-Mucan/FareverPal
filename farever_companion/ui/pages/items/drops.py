@@ -5,18 +5,16 @@ with the '+N more sources' expander grouped by drop kind.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from ....data import icons
 from ....data import names
-from ....data.items.sources import (_CHEST_COUNT_RE, _CHEST_GROUP_IDS,
+from ....data.items.sources import (_CHEST_GROUP_IDS,
                                     _CHEST_SINGLE_RE, _KIND_GROUP_LABEL,
                                     _KIND_LABEL, _NODE_SIZE_SUFFIXES,
-                                    chest_source_label as _chest_source_label,
-                                    chest_zone_name as _chest_zone_name)
+                                    chest_source_label as _chest_source_label)
 from . import support
 from .support import GLYPH_DOWN, GLYPH_UP, GLYPH_RIFT
 
@@ -85,17 +83,31 @@ def _boss_cell(d: dict, on_codex_click) -> QtWidgets.QWidget:
 
 # non-boss drop-kind icon markers/colors (the Codex card's source keys)
 _KIND_ICON = {"chest": ("chest", theme.GOLD), "npc": ("npc", theme.GOLD),
+              "cache": ("chest", theme.GOLD),
               "unit": ("sword", theme.BROWN),
               "gatherable": ("flower", theme.GOOD),
               "achievement": ("trophy", theme.GOLD),
               "worldloot_affinity": ("sword", theme.BROWN),
               "worldrecipe": ("recipe", theme.GOLD)}
-# vendor source id -> the NPC's actual unit sprite (the scan stamps the
-# hub-spawn id, not the sprite); unknown vendors keep the npc marker
+# vendor source id -> the vendor's CODEX UNIT id (the scan stamps the
+# hub-spawn id, not the unit id). The unit id names the codex CARD, which may
+# be a `TODO_*` placeholder (`TODO_StableMaster`); the icon itself is the
+# card's own `icon` field, resolved by `_codex_unit_sprite`. Unknown vendors
+# keep the npc marker.
 _NPC_SPRITES = (("WanderingMerchant", "TODO_WanderingMerchant"),
                 ("DemonHuntMira", "DemonHunterMira"),
                 ("DemonHuntZoey", "DemonHunterZoey"),
+                ("DemonHuntRumi", "DemonHunterRumi"),
+                ("MedalogGloryTrader", "MedalogGloryTrader"),
                 ("MountTamer", "TODO_StableMaster"))
+
+
+def _codex_unit_sprite(unit_id: str) -> str:
+    """The atlas sprite behind a vendor's codex unit id (see
+    `codex.unit_icon`): the card's own `icon` field, else the id itself. One
+    chain, so a drop row and the Merchants view draw the SAME face."""
+    from ....data import codex
+    return codex.unit_icon(unit_id)
 
 
 def _plain_icon(d: dict):
@@ -105,9 +117,12 @@ def _plain_icon(d: dict):
     if kind == "unit" and icons.has_icon("Units", sid):
         return icons.outlined("Units", sid, _ROW_ICON, theme.BROWN, border=2)
     if kind == "npc":
-        for prefix, sprite in _NPC_SPRITES:
+        for prefix, unit_id in _NPC_SPRITES:
             if sid.startswith(prefix):
-                return icons.pixmap("Units", sprite, _ROW_ICON)
+                sprite = _codex_unit_sprite(unit_id)
+                if sprite and icons.has_icon("Units", sprite):
+                    return icons.pixmap("Units", sprite, _ROW_ICON)
+                break
     name, accent = _KIND_ICON.get(kind, ("sword", theme.BROWN))
     return icons.marker(name, _ROW_ICON, accent)
 
@@ -168,11 +183,23 @@ def _plain_cell(d: dict, on_codex_click=None,
         f"color:{theme.DIM};font-size:11px;letter-spacing:1px;"
         "background:transparent;")
     line.addWidget(kind, 0, QtCore.Qt.AlignVCenter)
-    if d["kind"] == "npc" and not d.get("codex"):
+    if d.get("shop_price") is not None:
+        # a recorded MerchantUI sale: what that vendor charged, and nothing
+        # more — the scan names no currency for it, so the chip reads SHOP n
+        # rather than inventing 'Nightblood' / 'Demonic Souls' the way a
+        # drops-index cost row can
+        sold = QtWidgets.QLabel(f"SHOP {d['shop_price']:,}")
+        sold.setStyleSheet(
+            f"color:{theme.DIM};font-size:11px;letter-spacing:1px;"
+            "background:transparent;")
+        line.addWidget(sold, 0, QtCore.Qt.AlignVCenter)
+    if d["kind"] == "npc" and not d.get("codex") \
+            and d.get("shop_price") is None:
         # the guild vendors sell at Rare quality — show the sale quality
         # and the town's sale level (no price: it's not the point); codex
         # mount/glider vendors (Perina Wann, Zoey) sell for currency, not
-        # at Rare quality, so their rows skip the tag
+        # at Rare quality, and a recorded MerchantUI row carries its own
+        # charge chip instead, so those rows skip the tag too
         rare = QtWidgets.QLabel("RARE" + (f" L{d['hub_level']}"
                                           if d.get("hub_level") else ""))
         rare.setStyleSheet(
@@ -257,6 +284,10 @@ def _row_label(d: dict) -> str:
         return _node_type_label(d)
     if d["kind"] == "chest":
         return _chest_source_label(d)
+    if d["kind"] == "cache":
+        # the box a piece is cached in; an unreleased box says so on its row
+        return (f"{d.get('source', '')} — UNRELEASED"
+                if d.get("unreleased") else _friendly_source_name(d))
     return _friendly_source_name(d)
 
 
@@ -286,7 +317,6 @@ def _kind_group_rows(rows: list[dict],
             continue      # ordered kinds may be absent after filtering
         grp = by[kind]
         title = f"{_KIND_GROUP_LABEL.get(kind, kind.upper())} · {len(grp)}"
-        kind_label = _KIND_GROUP_LABEL.get(kind, kind.upper())
         # build the deduped, dot-separated name widgets first so the group
         # shape (plain line vs collapsible block) can be chosen after
         widgets: list[QtWidgets.QWidget] = []
@@ -384,9 +414,66 @@ def _vendor_codex_unit(d: dict) -> str:
 
 # the mount/glider vendors' sprite prefix (codex cards name the vendor but
 # carry no unit id — the scan's ids did, so the icon lookup needs the same
-# prefix to draw the Stable Master / Demon Huntress sprites)
+# prefix to draw the Stable Master / Demon Huntress sprites; Shiro James's
+# recorded shop rows carry no unit id either, and his scanner key
+# `Glory_Merchant` matches no unit, so his display name is the only handle
+# on his sprite)
+#
+# "Guild Merchant" is here for a different reason: the counter is scanned, so
+# the Merchants view has a vendor to draw, and the game's own name for them
+# ("Guild Merchant", from unit.json `WanderingMerchant`) shares no substring
+# with the unit id the sprite map is keyed on. Without this entry they got the
+# shop marker while every other vendor wore a face.
 _VENDOR_SPRITE_PREFIX = {"Perina Wann": "MountTamer_NPC",
-                         "Zoey, Demon Huntress": "DemonHuntZoey_NPC"}
+                         "Zoey, Demon Huntress": "DemonHuntZoey_NPC",
+                         "Mira, Demon Huntress": "DemonHuntMira_NPC",
+                         "Rumi, Demon Huntress": "DemonHuntRumi_NPC",
+                         "Shiro James, the Medal of Glory vendor": "MedalogGloryTrader_NPC",
+                         "Guild Merchant": "WanderingMerchant_NPC_Azuram"}
+
+
+def vendor_sprite(vendor: str, display: str = "") -> str:
+    """The NPC sprite for a recorded vendor, or '' when they have none.
+
+    The SAME chain an item's drop row uses, so a vendor wears the same face on
+    the Merchants view that she wears on the item page: the display name finds
+    its hub-spawn id in `_VENDOR_SPRITE_PREFIX`, and that id finds the sprite
+    in `_NPC_SPRITES` (the atlas keys units by model ref, not by NPC id).
+
+    A scanned vendor is named by the key the scanner read off the live NPC, so
+    `display` is checked as well as `vendor` - "DemonicSoul" is the CURRENCY
+    Zoey takes, and only her display name reaches the map.
+
+    '' is a real answer, not a failure to try harder. The atlas carries a
+    portrait for every vendor whose display name reaches the map: the three
+    Demon Huntresses (DemonHunterZoey, DemonHunterMira, DemonHunterRumi) and
+    the Medal of Glory trader's own `MedalogGloryTrader` sprite. The
+    Riftstalker Intendant is the gap - his scanner key and humanized title
+    carry no name the map keys on, so only "Rumi, Demon Huntress" gives him
+    his face.
+
+    The unit id is the codex CARD, not the atlas key: `TODO_StableMaster`
+    names the placeholder card, while the card's own `icon` field carries the
+    real art (see `_codex_unit_sprite` / `codex.unit_icon`). Resolution runs
+    through that field, so Guild Merchant / Stable Master get a face instead
+    of the placeholder box the raw id drew. A sprite whose key STILL starts
+    with `TODO_` after that is a shipped developer placeholder with no real
+    art, so it counts as no portrait at all.
+    """
+    for probe in (display, vendor):
+        if not probe:
+            continue
+        sid = _VENDOR_SPRITE_PREFIX.get(probe, "")
+        for prefix, unit_id in _NPC_SPRITES:
+            hit = ""
+            if sid and sid.startswith(prefix):
+                hit = _codex_unit_sprite(unit_id)
+            elif prefix.lower() in probe.lower():
+                hit = _codex_unit_sprite(unit_id)
+            # a shipped developer placeholder is not a face
+            if hit and not hit.startswith("TODO_"):
+                return hit
+    return ""
 
 
 def _codex_zone_names(coords: list[dict]) -> list[str]:
@@ -493,6 +580,8 @@ def _codex_target(d: dict, item_id: str | None = None) -> str | None:
                 and _CHEST_SINGLE_RE.search(sid):
             return sid
         return None
+    elif d["kind"] == "cache":
+        return None       # a gear box has no codex card
     else:
         return None
     if not uid:

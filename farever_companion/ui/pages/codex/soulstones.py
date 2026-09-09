@@ -194,21 +194,23 @@ class SoulstoneMixin:
     def _plot_soulstone_on_map(self, poi: dict) -> None:
         """Plot a single soulstone summon spot as a labeled pin (boss name
         under the marker) and report it in the info line."""
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         wp = poi.get("world_pos") or {}
         boss = poi.get("name") or poi.get("spawn_unit") or "Soulstone"
         s_col = theme.KIND_COLOR.get("soulstone", "#e879f9")
-        self._codex_map_widget.set_multi_pins(boss, [{
+        canvas.set_multi_pins(boss, [{
             "x": wp.get("x", 0), "y": wp.get("y", 0),
             "color": QtGui.QColor(s_col),
             "name": boss,
             "show_label": True,
         }])
-        if hasattr(self, "_map_info_lbl"):
+        lbl = self._codex_info_label()
+        if lbl is not None:
             from ....data import names as _names
             zone = _names.zone_name(poi.get("zone")) or ""
-            self._map_info_lbl.setText(f"{boss} — {zone}" if zone else boss)
+            lbl.setText(f"{boss} — {zone}" if zone else boss)
 
     def _soulstone_pins(self, zone: str | None = None) -> list[dict]:
         """Labeled pin dicts for the soulstone summon spots (one per spot, or
@@ -232,23 +234,27 @@ class SoulstoneMixin:
         the zone keys on the Soulstones view (All clears, like the dungeon
         zone keys)."""
         self._zone_pins_active = True
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         pins = self._soulstone_pins(zone)
-        self._codex_map_widget.set_multi_pins(f"{zone} Soulstones", pins)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{len(pins)} {zone} soulstones plotted")
+        canvas.set_multi_pins(f"{zone} Soulstones", pins)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{len(pins)} {zone} soulstones plotted")
 
     def _plot_all_soulstone_pins(self) -> None:
         """Plot every soulstone summon spot — the Soulstones view's pins
         button."""
         self._zone_pins_active = False
-        if not hasattr(self, "_codex_map_widget"):
+        canvas = self._codex_map_canvas()
+        if canvas is None:
             return
         pins = self._soulstone_pins()
-        self._codex_map_widget.set_multi_pins("All Soulstones", pins)
-        if hasattr(self, "_map_info_lbl"):
-            self._map_info_lbl.setText(f"{len(pins)} soulstones plotted")
+        canvas.set_multi_pins("All Soulstones", pins)
+        lbl = self._codex_info_label()
+        if lbl is not None:
+            lbl.setText(f"{len(pins)} soulstones plotted")
 
     def _codex_open_soulstone(self, poi_id: str) -> None:
         """Reveal a soulstone summon spot in the Dungeons tab's Soulstones

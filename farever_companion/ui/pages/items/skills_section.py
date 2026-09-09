@@ -11,7 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ... import theme
 from ... import components as C
-from ...layout import clear_layout
+from ...layout import clear_layout, place_popup
 from ....data import icons, skills
 from .support import GLYPH_DOWN, GLYPH_UP
 
@@ -32,6 +32,49 @@ def skill_color(typ: str) -> str:
     """The accent color of a skill type (Base Attack / Combo / Active /
     Power / Passive). Unknown types fall back to the muted text color."""
     return _SKILL_TYPE_COLORS.get(typ, theme.MUTED)
+
+
+class _ClickableLabel(QtWidgets.QLabel):
+    """A label that reads as a link: pointer cursor, underline on hover, and
+    a click. Private to this module - the only two call sites are the hit
+    list's "show all" link and the focused skill's name (this used to live in
+    components.py as ClickableLabel, with no other users in the app)."""
+
+    clicked = QtCore.Signal()
+
+    def __init__(self, text: str, color: str, size: int = 12,
+                 parent=None, on_click=None):
+        super().__init__(text, parent)
+        self._color = color
+        self._size = size
+        self._hover = False
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        if on_click is not None:
+            self.clicked.connect(on_click)
+        self._apply()
+
+    def _apply(self) -> None:
+        deco = "underline" if self._hover else "none"
+        self.setStyleSheet(
+            f"color:{self._color};font-weight:700;font-size:{self._size}px;"
+            f"text-decoration:{deco};background:transparent;")
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self._apply()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self._apply()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == QtCore.Qt.LeftButton:
+            self.clicked.emit()
+            e.accept()
+            return
+        super().mousePressEvent(e)
 
 
 _ROMAN = ("", "I", "II", "III", "IV", "V", "VI", "VII", "VIII",
@@ -149,7 +192,7 @@ class _ChainBlock(QtWidgets.QWidget):
             row = self._build_hit(i, hit, chain_desc)
             self._rows.append(row)
             lay.addWidget(row)
-        self._more = C.ClickableLabel(
+        self._more = _ClickableLabel(
             f"show all {len(hits)} hits {GLYPH_DOWN}", theme.ACCENT, size=10,
             on_click=self._toggle)
         self._more.hide()
@@ -449,17 +492,7 @@ class SkillBar(QtWidgets.QWidget):
                 QtCore.QPoint(0, anchor.height() + 6))
         else:
             pos = self.window().mapToGlobal(QtCore.QPoint(16, 16))
-        scr = QtGui.QGuiApplication.screenAt(pos)
-        if scr is None:
-            scr = QtGui.QGuiApplication.primaryScreen()
-        if scr is not None:
-            geo = scr.availableGeometry()
-            pos.setX(max(geo.left(), min(pos.x(),
-                                        geo.right() - pop.width())))
-            pos.setY(max(geo.top(), min(pos.y(),
-                                        geo.bottom() - pop.height())))
-        pop.move(pos)
-        pop.show()
+        place_popup(pop, pos)
 
     def _render_focus(self, s: dict) -> None:
         """Fill the detail bar: name + type chip, the stat line and the
@@ -480,7 +513,7 @@ class SkillBar(QtWidgets.QWidget):
         hd.setSpacing(8)
         # the name is a link — clicking opens the full skill popup (it
         # already reads as a link: underlined on hover, pointing hand)
-        nm = C.ClickableLabel(s["name"], col, on_click=lambda _s=s: self._open_popup(_s))
+        nm = _ClickableLabel(s["name"], col, on_click=lambda _s=s: self._open_popup(_s))
         self._focus_name = nm
         hd.addWidget(nm)
         if s.get("type"):

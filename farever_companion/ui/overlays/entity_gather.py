@@ -13,7 +13,7 @@ from collections import defaultdict
 
 from ...data import names, units as udata
 from ...data import dungeons
-from ...core import chest_resolver
+from ...core import chest_resolver, game_state
 from ...geo import orbs as geo_orbs, pois as geo_pois, zones as geo_zones
 from .entity_rows import _is_chest_orb_id
 
@@ -41,7 +41,7 @@ class EntityGatherMixin:
         # Clear all lists while inside a dungeon/rift — overworld enemies, chests
         # and orbs are irrelevant there and stale data would be confusing.
         try:
-            in_dg = self.model.is_in_dungeon() or self.model.is_in_rift()
+            in_dg = game_state.in_instance(self.model)
 
             # If we just entered or just left a dungeon, clear ALL tracking
             if in_dg != self._last_was_in_dungeon:
@@ -58,6 +58,7 @@ class EntityGatherMixin:
                 self._enemies = []
                 self._spark_mobs = []
                 self._group_members = []
+                self._group_away = []
                 self._comps = []
                 self._orbs = []
                 self._gatherables = []
@@ -81,7 +82,6 @@ class EntityGatherMixin:
         eff_max_dist = 400.0 if self.s.limit_by_zone else self.s.max_dist
         if eff_max_dist <= 0:
             eff_max_dist = 1000.0  # Plausible world-load limit if off
-        enemy_max_dist = eff_max_dist
 
         # Companion range: False = 300m, Number = that range, True = eff_max_dist (fallback)
         c_debug = getattr(self.s, "show_companions_debug", False)
@@ -100,6 +100,54 @@ class EntityGatherMixin:
         self._check_auto_height()
 
     # --- 1) gather every section's list (selection cycles across all of them)
+    def _gather_group_away(self) -> list:
+        """Off-scene party members as (name, class, zone_name), for the
+        PLAYERS section.
+
+        The scene scan only ever sees heroes near you, so a member who is in
+        another zone was previously invisible in the HUD entirely. The party
+        roster carries every member at any distance, and each member's hero
+        has a readable world position, so their zone resolves with the same
+        anchor lookup the map uses.
+
+        Reads the roster CACHE only (`cached_group_roster`), never a live
+        decode: the decode is a heap sweep measured in seconds, and this runs
+        on the overlay's tick. The DPS tracker seeds the same cache, so it is
+        normally already warm; when it is not, this simply lists nothing
+        rather than stalling the HUD.
+        """
+        cached = getattr(self.model, "cached_group_roster", None)
+        zones_of = getattr(self.model, "group_member_zones", None)
+        if not callable(cached) or not callable(zones_of):
+            return []
+        try:
+            roster = cached()
+            if roster is None:
+                return []
+            zones = zones_of(roster)
+        except Exception:
+            return []
+        if not zones:
+            return []
+        # Members already listed from the scene carry a live distance; this
+        # list is only for the ones the scene cannot see.
+        shown = {getattr(e, "addr", 0) for e, _d in self._group_members}
+        out = []
+        for m in (getattr(roster, "members", None) or []):
+            hero = getattr(m, "hero", 0) or 0
+            if not hero or hero in shown or getattr(m, "is_me", False):
+                continue
+            zname = zones.get(hero)
+            if not zname:
+                continue
+            try:
+                cls = self.model.hero_class_of(hero) or ""
+            except Exception:
+                cls = ""
+            out.append((getattr(m, "name", "") or "Hero", cls, zname))
+        out.sort(key=lambda t: t[2].lower())
+        return out
+
     def _gather_data(self, xyz, profile, done_list, eff_max_dist, comp_max_dist, show_e, show_s):
         # Using 2D distance for filtering ensures consistency with the Minimap's top-down view
 
@@ -144,6 +192,22 @@ class EntityGatherMixin:
         # Zone filtering was removed as it was unreliable.
         self._group_members = self.model.nearest_group_members(
             xyz, self.s.group_count, eff_max_dist, use_2d=True) \
+            if getattr(self.s, "show_group_members", False) else []
+        # The local player is part of the party too ("players inc. myself"):
+        # nearest_group_members deliberately excludes player_addr, so re-add
+        # me at distance 0 the way the Dungeon HUD's PLAYERS list does - my
+        # class always sorts first.
+        if getattr(self.s, "show_group_members", False):
+            pa = getattr(self.model, "player_addr", 0) or 0
+            if pa and not any(getattr(e, "addr", 0) == pa for e, _d in self._group_members):
+                me = next((e for e in self.model.units()
+                           if e.is_hero and e.addr == pa), None)
+                if me is not None:
+                    self._group_members.insert(0, (me, 0.0))
+        # Members in another zone have no scene entity, so the list above can
+        # never show them - this is where their location comes from (the
+        # roster's own hero positions, resolved to a zone name).
+        self._group_away = self._gather_group_away() \
             if getattr(self.s, "show_group_members", False) else []
         self._comps = self.model.nearest_companions(
             xyz, self.s.companion_count, eff_max_dist, player_zone=None, use_2d=True,
@@ -285,7 +349,6 @@ class EntityGatherMixin:
                                     if display_name.startswith(prefix):
                                         display_name = display_name[len(prefix):]
                                 # Simple typo fix for display if we still don't have d_info
-                                display_name = display_name.replace("Abbandoned", "Abandoned")
                                 dungeon_name = "Dungeon"
                         else:
                             display_name = names.poi_label(label or tk)
@@ -365,15 +428,14 @@ class EntityGatherMixin:
                     changed = True
                 opened_chests.append((eid, e.x, e.y))
             else:
-                # Two-way memory-scanner sync (the pre-v0.3.0 behaviour the
-                # user relies on): a chest observed live and NOT opened is
-                # not collected — undo a manual right-click mark so it
-                # shows again automatically.
+                # A closed live chest is not evidence that a persisted mark is
+                # stale. During zoning/loading the game can briefly report a
+                # collected chest as closed; removing the mark here makes the
+                # minimap and Entity HUD show it as uncollected again. Manual
+                # un-marking remains available from the minimap.
                 # ⛔ ORB-CHEST ACTIVITY LOGIC — DO NOT EDIT (see
                 # docs/CHEST_ORB_LOGIC.md).
-                if eid in done_list:
-                    done_list.remove(eid)
-                    changed = True
+                pass
 
         # 2. World Orbs (RedOrb_World)
         # Glow disappears reliably when collected. Live elements resolve to
@@ -407,12 +469,9 @@ class EntityGatherMixin:
                             self._tracker.track("orb", nxt.orb_id)
                         else:
                             self._tracker.clear()
-            elif sid in done_list:
-                # glowing again = live truth says not collected after all
-                done_list.remove(sid)
-                changed = True
-            # Note: We don't automatically un-mark orbs because glow can be missing
-            # during load transitions or distance LOD. Manual reset only.
+            # Glow can be missing during load transitions or distance LOD, so
+            # it is not sufficient evidence to remove a persisted collection
+            # mark. Manual reset only.
 
         # ⛔ ORB-CHEST ACTIVITY LOGIC — DO NOT EDIT (see docs/CHEST_ORB_LOGIC.md).
         #
@@ -478,6 +537,11 @@ class EntityGatherMixin:
 
     # --- 3) chest list + keep selection/tracker valid
     def _force_selection_targets(self, xyz, profile, done_list, eff_max_dist):
+        done_lower = {str(done_id or "").casefold() for done_id in done_list}
+        for d in done_list:
+            b = chest_resolver.activity_base_id(d)
+            if b:
+                done_lower.add(b.casefold())
         raw_chests = self.model.nearest_chests_merged(
             xyz, self.s.chest_count + 20, eff_max_dist, player_zone=None, use_2d=True) if self.s.show_chests else []
 
@@ -490,16 +554,11 @@ class EntityGatherMixin:
             # so an exact-only check keeps showing a completed event chest.
             # Normalize BOTH sides: done end-chest ids contribute their base
             # (same end_open_profile set the minimap builds).
-            done_lower = {d.lower() for d in done_list}
-            for d in done_list:
-                b = chest_resolver.activity_base_id(d)
-                if b:
-                    done_lower.add(b)
             def _is_done(cid: str) -> bool:
-                if cid.lower() in done_lower:
+                if str(cid or "").casefold() in done_lower:
                     return True
                 b = chest_resolver.activity_base_id(cid)
-                return bool(b and b in done_lower)
+                return bool(b and b.casefold() in done_lower)
             raw_chests = [c for c in raw_chests if not _is_done(c.chest_id)]
 
         self._chests = raw_chests[:self.s.chest_count]
@@ -595,7 +654,7 @@ class EntityGatherMixin:
                     if o:
                         self._orbs.append((o, o.dist2d(xyz[0], xyz[1])))
             elif skind in ("chest", "recipe") and not _is_chest_orb_id(skey) and not any(str(c.chest_id) == str(skey) for c in self._chests):
-                if not getattr(self.s, "entity_hide_collected", True) or skey not in done_list:
+                if not getattr(self.s, "entity_hide_collected", True) or str(skey or "").casefold() not in done_lower:
                     from ...core.chest_resolver import ChestRow
                     matching_c = next((c for c in self.model.chests if str(c.chest_id) == str(skey)), None)
                     if matching_c:

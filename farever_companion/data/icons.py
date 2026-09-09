@@ -14,13 +14,26 @@ inside functions here.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # annotation-only: Qt binds lazily inside _qt()
+    from PySide6 import QtGui
 
 from .. import paths
 from . import atlas
+from . import units
 
 # Qt is imported lazily so the data layer stays importable headless.
 _QtGui = None
 _QtCore = None
+
+# The paper-doll tile's stronger tint (2026-09-26), used ONLY when a caller
+# asks for it via `item_tile(..., strong=True)`. The standard tile is 46/140
+# (18%/55%); these roughly double the fill so a pale `Common` accent is
+# actually visible on the near-black paper-doll cell. Every other surface keeps
+# the standard values — see `tile`.
+_TILE_BG_ALPHA = 88        # ~35%
+_TILE_BORDER_ALPHA = 190   # ~75%
 
 
 def _qt():
@@ -70,18 +83,6 @@ def _crop_atlas(atlas_path, x: int, y: int, src_size: int, dst_size: int):
     )
 
 
-_SHEET_MAP = {
-    "units": "units",
-    "unit": "units",
-    "enemies": "units",
-    "enemy": "units",
-    "items": "items",
-    "item": "items",
-    "skills": "skills",
-    "skill": "skills",
-}
-
-
 @lru_cache(maxsize=None)
 def _icon_path(sheet: str, id_: str):
     # Cached: called once per icon in has_icon() AND again in _raw(), and
@@ -89,7 +90,7 @@ def _icon_path(sheet: str, id_: str):
     # tree never changes at runtime, so the result is stable.
     # Normalize to the canonical plural name (e.g., "unit" -> "units")
     s_low = sheet.lower()
-    canonical = _SHEET_MAP.get(s_low, s_low)
+    canonical = atlas.SHEET_MAP.get(s_low, s_low)
     
     # Build list of folders to try: plural lowercase, TitleCase, and original
     sheets_to_try = [canonical, canonical.capitalize(), sheet]
@@ -123,7 +124,7 @@ def _raw(sheet: str, id_: str):
     """The icon's source pixmap at its native resolution — the atlas cell crop
     when the id has atlas data, else the loose file on disk. None when the
     icon is missing. Atlas-first."""
-    QtGui, _ = _qt()
+    QtGui, QtCore = _qt()
     if sheet and id_:
         entry = atlas.find_entry(sheet, id_)
         if entry and isinstance(entry, dict):
@@ -256,6 +257,33 @@ def has_icon(sheet: str, id_: str) -> bool:
     return _icon_path(sheet, id_) is not None
 
 
+def _is_mount_or_glider(item_id: str) -> bool:
+    """A mount or glider belongs on the `collection` icon sheet, like the
+    codex's companion rows (see `data/codex.py` `Mounts`/`Gliders` groups).
+
+    The raw `item` sheet is for sellable gear; the `collection` sheet is the
+    one the game uses for craftable/companion-ish units. Mounts and gliders
+    do not appear on `item`, so a loot/companion row that only knows the item
+    id would silently fall back to the `units` sheet (or a blank box). Reuse
+    the same sheet both HUDs render by."""
+    if not item_id:
+        return False
+    return item_id.startswith("Mount_") or item_id.startswith("Glider_")
+
+
+def map_icon_sheet(item_id: str) -> str:
+    """Return the idiomatically-correct icon sheet for `item_id`.
+
+    Companions use the `collection` sheet already; mounts and gliders share
+    that sheet now. Everything else keeps its existing sheet lookup.
+    """
+    if _is_mount_or_glider(item_id):
+        return "collection"
+    if units.is_companion(item_id):
+        return "collection"
+    return "item"
+
+
 def atlas_sprite_resolvable(sheet: str, id_: str) -> bool:
     """True only when the atlas entry exists AND its image file is actually
     present on disk (a renamed/missing sheet makes the entry unusable)."""
@@ -297,43 +325,81 @@ def trim_caches() -> None:
         pass
 
 
-def item_tile(item_id: str, item_name: str, size: int, accent: str) -> QtGui.QPixmap:
+def item_tile(item_id: str, item_name: str, size: int, accent: str,
+              *, strong: bool = False) -> "QtGui.QPixmap":
     """Smart item icon resolver: tries ID first, then display Name (since some
     assets use spaces), then falls back to the 'unit' sheet for scanned
-    boss gear. Returns the standard tinted tile."""
+    boss gear. Returns the standard tinted tile.
+
+    `strong=True` uses the paper-doll tile's stronger tint (see `tile`); it
+    defaults off so every other surface keeps the standard 18%/55%.
+    """
+    bg_a, bd_a = (_TILE_BG_ALPHA, _TILE_BORDER_ALPHA) if strong else (46, 140)
+
     # 1. Try 'item' sheet with the technical ID
     if has_icon("item", item_id):
-        return tile("item", item_id, size, accent)
+        return tile("item", item_id, size, accent, bg_alpha=bg_a,
+                    border_alpha=bd_a)
 
     # 2. Try 'item' sheet with the display Name (handles names with spaces)
     if item_name and has_icon("item", item_name):
-        return tile("item", item_name, size, accent)
+        return tile("item", item_name, size, accent, bg_alpha=bg_a,
+                    border_alpha=bd_a)
 
     # 3. Fallback to 'unit' sheet (scanned mob/boss gear)
     if has_icon("unit", item_id):
-        return tile("unit", item_id, size, accent)
+        return tile("unit", item_id, size, accent, bg_alpha=bg_a,
+                    border_alpha=bd_a)
 
     # 4. Final placeholder tile (the tinted square with ID if possible)
-    return tile("item", item_id, size, accent)
+    return tile("item", item_id, size, accent, bg_alpha=bg_a, border_alpha=bd_a)
+
+
+def item_sprite_resolvable(item_id: str, item_name: str = "") -> bool:
+    """True when `item_tile` would draw a REAL sprite for this item (2026-09-26).
+
+    `item_tile` NEVER returns a null pixmap: when it cannot find a sprite it
+    draws the tinted placeholder box, which on a filled tile reads as a broken
+    image rather than as "this item has no art". So a caller that wants to fall
+    back to something else has to ask this first.
+
+    It walks the SAME three attempts `item_tile` makes, in the same order, so
+    the two can never disagree about what "has a sprite" means. It uses
+    `atlas_sprite_resolvable` rather than `has_icon` on purpose: an atlas entry
+    whose sheet file is missing or renamed resolves to nothing at crop time,
+    and that is exactly the case this is meant to catch.
+    """
+    return (atlas_sprite_resolvable("item", item_id)
+            or bool(item_name and atlas_sprite_resolvable("item", item_name))
+            or atlas_sprite_resolvable("unit", item_id))
 
 
 @lru_cache(maxsize=1024)
 def tile(sheet: str | None, id_: str | None, size: int, accent: str,
-         trim: bool = False):
+         trim: bool = False, bg_alpha: int = 46, border_alpha: int = 140):
     """Game icon on a rounded, accent-tinted square, the standard row leading
     element (Loot table + both HUDs). `accent` is a hex color (rarity / faction
     / gold / cyan). Background = accent @18%, 1px border = accent @55%, the PNG
     centred with ~2px padding. Missing PNG -> the tinted square still shows.
     With `trim=True` the sprite's transparent margins are cut first so small
     sprites fill the tile instead of floating tiny in empty space (see
-    pixmap_cropped)."""
+    pixmap_cropped).
+
+    `bg_alpha`/`border_alpha` override the tint strengths and DEFAULT TO THE
+    VALUES ABOVE, so every existing caller is byte-identical. They exist for
+    the paper-doll tiles (2026-09-26), which sit on a near-black cell rather
+    than in a row: at 18% a pale `Common` accent is invisible there, and the
+    dark consumable artwork had nothing to read against — measured glyph
+    luminance 0.36-0.42 against the cell's 0.12, next to a Rare sword's 0.61.
+    Only that page asks for the stronger tint; raising it globally would
+    change the loot table and both HUDs too."""
     QtGui, QtCore = _qt()
     pm = QtGui.QPixmap(size, size)
     pm.fill(QtGui.QColor(0, 0, 0, 0))
     p = QtGui.QPainter(pm)
     p.setRenderHint(QtGui.QPainter.Antialiasing)
-    bg = QtGui.QColor(accent); bg.setAlpha(46)        # ~18%
-    bd = QtGui.QColor(accent); bd.setAlpha(140)       # ~55%
+    bg = QtGui.QColor(accent); bg.setAlpha(bg_alpha)   # ~18%
+    bd = QtGui.QColor(accent); bd.setAlpha(border_alpha)   # ~55%
     p.setBrush(bg)
     p.setPen(QtGui.QPen(bd, 1))
     p.drawRect(QtCore.QRectF(0.5, 0.5, size - 1, size - 1))   # sharp (0px) per design
@@ -504,7 +570,7 @@ def achievement_marker(size: int, accent: str = "#fbbf24"):
     return pm
 
 
-def _placeholder_glyph(size: int) -> QtGui.QPixmap:
+def _placeholder_glyph(size: int) -> "QtGui.QPixmap":
     """Fallback 16x16 icon when QtSvg can't load the real SVG.
 
     Renders a simple item-box icon so the card still has visual weight.
@@ -593,6 +659,71 @@ def _loose_candidates(name: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _master_svg_text(name: str) -> str | None:
+    """The master icons.svg symbol for `name` as a standalone `<svg>` document.
+
+    The sheet registers both `target-dummy` and `target_dummy`, so `name` is
+    looked up as given; None when the sheet has no such symbol (or is missing).
+    """
+    res = _get_master_symbol(name)
+    if not res:
+        return None
+    inner, vb = res
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'xmlns:xlink="http://www.w3.org/1999/xlink" '
+            f'viewBox="{vb}">{inner}</svg>')
+
+
+def _loose_svg_text(name: str) -> str | None:
+    """Text of the first loose `<cand>.svg` under the loose SVG folder.
+
+    Candidates are tried in `_loose_candidates` order; a file that exists but
+    will not read is skipped in favour of the next one, and None comes back
+    when no candidate resolves (or the folder is absent).
+    """
+    cand_dir = paths.svgs_dir()
+    if not cand_dir.exists():
+        return None
+    for cand_name in _loose_candidates(name):
+        cand = cand_dir / f"{cand_name}.svg"
+        if cand.exists():
+            try:
+                return cand.read_text(encoding="utf-8")
+            except Exception:
+                continue
+    return None
+
+
+def _render_svg(txt: str, size: int, color: str | None = None,
+                margin: float = 0.0):
+    """Render an SVG document string onto a `size`x`size` transparent pixmap.
+
+    `color` substitutes every `currentColor` - the master sheet and the loose
+    files are authored with it - and None leaves the document's own colors
+    alone. `margin` (px) insets the drawing; 0 fills the tile. Returns None
+    when the document will not parse, never a blank pixmap, so a caller keeps
+    falling through to its next candidate.
+    """
+    QtGui, QtCore = _qt()
+    if color is not None:
+        txt = txt.replace("currentColor", color)
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtGui.QColor(0, 0, 0, 0))
+    try:
+        from PySide6.QtSvg import QSvgRenderer
+        r = QSvgRenderer(QtCore.QByteArray(txt.encode("utf-8")))
+        if not r.isValid():
+            return None
+        p = QtGui.QPainter(pm)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        r.render(p, QtCore.QRectF(margin, margin, size - 2 * margin,
+                                  size - 2 * margin))
+        p.end()
+    except Exception:
+        return None
+    return pm if not pm.isNull() else None
+
+
 @lru_cache(maxsize=64)
 def asset_icon(sheet_name: str, size: int):
     """A bundled SVG or PNG map icon from assets/map_icons/<name>.(svg|png), scaled.
@@ -616,26 +747,11 @@ def asset_icon(sheet_name: str, size: int):
             if pm and not pm.isNull():
                 return pm
     # 2. Try master icons.svg single-file sprite sheet next
-    res = _get_master_symbol(sheet_name)
-    if res:
-        try:
-            from PySide6.QtSvg import QSvgRenderer
-            inner, vb = res
-            pm = QtGui.QPixmap(size, size)
-            pm.fill(QtGui.QColor(0, 0, 0, 0))
-            txt = f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="{vb}">{inner}</svg>'
-            if "currentColor" in txt:
-                txt = txt.replace("currentColor", "#ffffff")
-            r = QSvgRenderer(QtCore.QByteArray(txt.encode("utf-8")))
-            if r.isValid():
-                p = QtGui.QPainter(pm)
-                p.setRenderHint(QtGui.QPainter.Antialiasing, True)
-                r.render(p, QtCore.QRectF(0, 0, size, size))
-                p.end()
-                if not pm.isNull():
-                    return pm
-        except Exception:
-            pass
+    svg = _master_svg_text(sheet_name)
+    if svg:
+        pm = _render_svg(svg, size, color="#ffffff")
+        if pm is not None:
+            return pm
 
     # 3. Fallback to loose files on disk (svg, webp, png) in the single fallback folder
     fb_dir = paths.fallback_icons_dir()
@@ -645,22 +761,13 @@ def asset_icon(sheet_name: str, size: int):
             svg_file = fb_dir / f"{cand_name}.svg"
             if svg_file.exists():
                 try:
-                    from PySide6.QtSvg import QSvgRenderer
                     svg_txt = svg_file.read_text(encoding="utf-8")
-                    if "currentColor" in svg_txt:
-                        svg_txt = svg_txt.replace("currentColor", "#ffffff")
-                    pm = QtGui.QPixmap(size, size)
-                    pm.fill(QtGui.QColor(0, 0, 0, 0))
-                    r = QSvgRenderer(QtCore.QByteArray(svg_txt.encode("utf-8")))
-                    if r.isValid():
-                        p = QtGui.QPainter(pm)
-                        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
-                        r.render(p, QtCore.QRectF(0, 0, size, size))
-                        p.end()
-                        if not pm.isNull():
-                            return pm
                 except Exception:
-                    pass
+                    svg_txt = None
+                if svg_txt:
+                    pm = _render_svg(svg_txt, size, color="#ffffff")
+                    if pm is not None:
+                        return pm
 
             # 3b. Check WebP / PNG
             for ext in ("webp", "png"):
@@ -700,57 +807,34 @@ def tinted_asset(name: str, color: str, size: int):
 @lru_cache(maxsize=1024)
 def ui_icon(name: str, color: str, size: int):
     """A theme-tinted UI-chrome glyph.
-
     Resolution order: minimap atlas (raster) -> master icons.svg -> loose SVG.
     The atlas sprite is recolored to `color` via tinted_asset; SVGs use
-    currentColor substitution. Missing/invalid -> an empty transparent pixmap."""
-    QtGui, QtCore = _qt()
+    currentColor substitution.
+
+    Missing/invalid -> a NULL pixmap (2026-09-26). It used to return a
+    transparent-but-NON-null one, which every caller's `isNull()` test read as
+    a hit: a name with no glyph drew an empty box and the caller's own
+    fallback (a letter, a different sprite) never ran. The Player Inspect
+    class avatars were blank boxes that way — the classes simply are not
+    glyph names. A null pixmap is falsy, so the `ui_icon(...) or fallback`
+    call sites keep working too."""
+    QtGui, _ = _qt()
 
     # 1. Minimap atlas (pixel-art raster, recolored to the requested color)
     g = tinted_asset(name, color, size)
     if g is not None and not g.isNull():
         return g
 
-    # 2. Master icons.svg single-file sprite sheet
-    from PySide6.QtSvg import QSvgRenderer
-    pm = QtGui.QPixmap(size, size)
-    pm.fill(QtGui.QColor(0, 0, 0, 0))
-    txt = None
-    res = _get_master_symbol(name)
-    if res:
-        inner, vb = res
-        txt = f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="{vb}">{inner}</svg>'
-
-    # 3. Fallback to loose SVG on disk (assets/icons)
-    if not txt:
-        for cand_dir in (paths.svgs_dir(),):
-            if not cand_dir.exists():
-                continue
-            for cand_name in _loose_candidates(name):
-                cand = cand_dir / f"{cand_name}.svg"
-                if cand.exists():
-                    try:
-                        txt = cand.read_text(encoding="utf-8")
-                        break
-                    except Exception:
-                        txt = None
-            if txt:
-                break
-
+    # 2. Master icons.svg, then 3. the loose SVG on disk (assets/icons).
+    # Inset by 8%: this one is drawn as chrome beside text, and a glyph that
+    # touches its own tile edge reads heavier than the text it labels.
+    txt = _master_svg_text(name) or _loose_svg_text(name)
     if txt:
-        try:
-            rendered_txt = txt.replace("currentColor", color)
-            r = QSvgRenderer(QtCore.QByteArray(rendered_txt.encode("utf-8")))
-            if r.isValid():
-                p = QtGui.QPainter(pm)
-                m = max(1.0, size * 0.08)
-                r.render(p, QtCore.QRectF(m, m, size - 2 * m, size - 2 * m))
-                p.end()
-                if not pm.isNull():
-                    return pm
-        except Exception:
-            pass
-    return pm
+        pm = _render_svg(txt, size, color=color,
+                         margin=max(1.0, size * 0.08))
+        if pm is not None:
+            return pm
+    return QtGui.QPixmap()          # nothing resolved -> NULL, not blank
 
 
 def ui_qicon(name: str, color: str, size: int = 18):
@@ -762,47 +846,22 @@ def ui_qicon(name: str, color: str, size: int = 18):
 @lru_cache(maxsize=64)
 def brand_icon(name: str, size: int):
     """A multi-color brand glyph from master icons.svg or loose SVG/image rendered AS-IS.
-    Missing/invalid -> transparent pixmap. Cached by (name, size)."""
+    Missing/invalid -> transparent pixmap. Cached by (name, size).
+
+    Its only consumer was the account row's brand button (removed with the
+    account feature, 2026-09-27); the cache-clear in trim_caches still names
+    it, and the glyph itself stays for any future sidebar branding."""
     QtGui, QtCore = _qt()
-    from PySide6.QtSvg import QSvgRenderer
     pm = QtGui.QPixmap(size, size)
     pm.fill(QtGui.QColor(0, 0, 0, 0))
-    
-    txt = None
-    # 1. Try master icons.svg first
-    res = _get_master_symbol(name)
-    if res:
-        inner, vb = res
-        txt = f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="{vb}">{inner}</svg>'
 
-    # 2. Fallback to loose SVG on disk (assets/svgs)
-    if not txt:
-        for cand_dir in (paths.svgs_dir(),):
-            if not cand_dir.exists():
-                continue
-            for cand_name in _loose_candidates(name):
-                cand = cand_dir / f"{cand_name}.svg"
-                if cand.exists():
-                    try:
-                        txt = cand.read_text(encoding="utf-8")
-                        break
-                    except Exception:
-                        txt = None
-            if txt:
-                break
-
+    # 1. master icons.svg, then 2. the loose SVG on disk (assets/svgs).
+    # Rendered AS-IS: a brand glyph keeps its own colors, so no color is given.
+    txt = _master_svg_text(name) or _loose_svg_text(name)
     if txt:
-        try:
-            r = QSvgRenderer(QtCore.QByteArray(txt.encode("utf-8")))
-            if r.isValid():
-                p = QtGui.QPainter(pm)
-                p.setRenderHint(QtGui.QPainter.Antialiasing, True)
-                r.render(p, QtCore.QRectF(0, 0, size, size))
-                p.end()
-                if not pm.isNull():
-                    return pm
-        except Exception:
-            pass
+        g = _render_svg(txt, size)
+        if g is not None:
+            return g
 
     # 3. Fallback to loose raster image on disk (assets/svgs)
     cand_dir = paths.fallback_icons_dir()

@@ -7,6 +7,7 @@ from shiboken6 import isValid
 from ... import components as C
 from ... import theme
 from ....data import codex
+from ....data import units as udata
 from .card import CodexUnitCard
 
 
@@ -169,7 +170,6 @@ class CodexGridMixin:
         is_others_tab = current_rid == "Z0" or tab_label in ("Others", "Other")
         if hasattr(self, "_others_sub_bar"):
             self._others_sub_bar.setVisible(is_others_tab)
-            self._was_others_tab = is_others_tab
 
         # Dungeons-tab view switcher: the list is the default view; 'Dungeon
         # Mobs' switches to the old card grid, 'Soulstones' to the summon-spot
@@ -389,7 +389,10 @@ class CodexGridMixin:
                 continue
             if query and query not in uname.lower() and query not in uid.lower():
                 continue
-            if getattr(self, "_spark_only", False) and not item.get("drops_spark"):
+            # The "Spark Dust" filter asks the DUST question through the one
+            # shared predicate rather than the payload key, so the filter and the
+            # card badge cannot be built from two different rules.
+            if getattr(self, "_spark_only", False) and not udata.drops_spark(uid):
                 continue
             # Dungeon tab mobs are already dungeon mobs, so never filter them
             if getattr(self, "_dungeon_only", False) and not item.get("is_dungeon") and not dungeon_tab:
@@ -697,7 +700,7 @@ class CodexGridMixin:
             btn.setEnabled(not faded)
             # Fade keys that can't match the current view instead of just
             # dimming the label — same QGraphicsOpacityEffect approach as
-            # ToggleCard.setEnabled, so the icon tile fades too.
+            # OverlayCard.setEnabled (ui/cards.py), so the icon tile fades too.
             eff = btn.graphicsEffect()
             if faded:
                 if not isinstance(eff, QtWidgets.QGraphicsOpacityEffect):
@@ -755,6 +758,9 @@ class CodexGridMixin:
         tag = checked_btn.text().lower()
         if tag in ("chests", "orbs"):
             return
+        old_sub = getattr(self, "_collection_sub", "pets")
+        if old_sub != tag and hasattr(self, "_nav_history") and not getattr(self._nav_history, "_restoring", False):
+            self._nav_history.record(f"codex:Collection:{old_sub.capitalize()}", f"codex:Collection:{tag.capitalize()}")
         self._collection_sub = tag
         self._chest_orb_kind = None
         self._dungeon_list_mode = False
@@ -770,6 +776,12 @@ class CodexGridMixin:
                    else "mobs"))
         if mode == cur:
             return
+        if hasattr(self, "_nav_history") and not getattr(self._nav_history, "_restoring", False):
+            tab_label = self._codex_tabs.currentText().strip() if hasattr(self, "_codex_tabs") else ""
+            if tab_label == "Collection" and mode in ("chests", "orbs"):
+                self._nav_history.record(f"codex:Collection:{cur.capitalize()}", f"codex:Collection:{mode.capitalize()}")
+            elif tab_label == "Dungeons" and mode in ("list", "soulstones", "mobs"):
+                self._nav_history.record(f"codex:Dungeons:{cur.capitalize()}", f"codex:Dungeons:{mode.capitalize()}")
         self._dungeon_list_mode = mode == "list"
         self._soulstones_mode = mode == "soulstones"
         self._chest_orb_kind = mode if mode in ("chests", "orbs") else None

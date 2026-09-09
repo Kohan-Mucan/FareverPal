@@ -666,11 +666,18 @@ class CraftDetailMixin(CraftQueueMixin):
         lay.addLayout(body)
         lay.addStretch(1)
 
-    def _craft_jump_to_recipe(self, item_id: str) -> None:
+    def _craft_jump_to_recipe(self, item_id: str, record_history: bool = True) -> None:
         """Jump to a crafted material's OWN recipe on this page: reset the job
         chips and the search so the tile is visible, select it, and scroll
         it into view. If the jump came from the Craft List tab, switch back
         to the Recipes tab first."""
+        if record_history:
+            cur_shown = getattr(self, "_craft_shown_id", None)
+            if cur_shown and cur_shown != item_id:
+                hist = getattr(self, "_craft_recipe_history", None)
+                if hist is None:
+                    hist = self._craft_recipe_history = []
+                hist.append(cur_shown)
         tabs = getattr(self, "_craft_tabs", None)
         if tabs is not None and tabs.currentText() != "Recipes":
             tabs.setCurrentText("Recipes")
@@ -716,7 +723,11 @@ class CraftDetailMixin(CraftQueueMixin):
             if idata.is_craftable(item_id):
                 self._craft_jump_to_recipe(item_id)
                 return
+            # other non-gear outputs live on the Items tab (mats,
+            # consumables, misc) — the gear list never carried them, so the
+            # old path left these rows unselectable
             self._select_nav("gear")
+            self._items_set_mode("Items")
             if hasattr(self, "_items_show_id"):
                 self._items_show_id(item_id)
             return

@@ -176,7 +176,10 @@ FLOWER_COLOR = {
 
 
 def rarity_color(rarity: str | None) -> str:
-    return RARITY.get(rarity or "", TEXT)
+    """Colour for a rarity label. A trailing `+` marks a FLOOR rather than a
+    rarity of its own ("Epic+" = Epic or better), so it colours as its base
+    rung instead of falling through to the neutral text colour."""
+    return RARITY.get((rarity or "").strip().rstrip("+"), TEXT)
 
 
 def with_alpha(hex_color: str, alpha: int) -> str:
@@ -184,6 +187,65 @@ def with_alpha(hex_color: str, alpha: int) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha / 255:.3f})"
+
+
+# --- shared button QSS -----------------------------------------------------
+
+def segment_btn_qss(col: str | None = None) -> str:
+    """The `#SegmentBtn` tab style: a coloured chip when `col` is given (a
+    rarity chip), else the neutral tab that follows the theme accent.
+
+    `components.SegmentedControl` and the Settings layers toggle grid each
+    built this string by hand, byte for byte; the shared copy is what keeps a
+    restyle from landing on one tab row and not the other."""
+    if col:
+        return (
+            f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+            f"color: {col}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+            f"QPushButton#SegmentBtn:hover {{ background: {with_alpha(col, 30)}; color: {col}; }}"
+            f"QPushButton#SegmentBtn:checked {{ background: {with_alpha(col, 45)}; "
+            f"border: 0; color: {col}; font-weight: 600; }}"
+            f"QPushButton#SegmentBtn:checked:hover {{ background: {with_alpha(col, 60)}; }}")
+    return (
+        f"QPushButton#SegmentBtn {{ background: transparent; border: 0; padding: 6px 10px; "
+        f"color: {MUTED}; font-size: 13px; font-weight: 600; min-height: 0px; border-radius: 4px; }}"
+        f"QPushButton#SegmentBtn:hover {{ color: {TEXT}; background: {with_alpha(PANEL_HI, 90)}; }}"
+        f"QPushButton#SegmentBtn:checked {{ background: {with_alpha(ACCENT, 40)}; "
+        f"border: 0; color: {ACCENT}; font-weight: 600; }}"
+        f"QPushButton#SegmentBtn:checked:hover {{ background: {with_alpha(ACCENT, 55)}; }}")
+
+
+def checkable_btn_qss(padding: str = "6px 10px", checked_hover_alpha: int = 60,
+                      checked_border: bool = False) -> str:
+    """The plain checkable-button style for a cell grid of toggles: muted at
+    rest, hover on PANEL_HI, checked on the accent.
+
+    `chips.ChipGrid` and the Settings rift sound picker each built this by
+    hand. The picker's two deltas - tighter padding, and a border reset inside
+    `:checked` - are arguments, so neither surface moves."""
+    return (
+        f"QPushButton {{"
+        f"  background: transparent;"
+        f"  border: 0;"
+        f"  padding: {padding};"
+        f"  color: {MUTED};"
+        f"  font-size: 13px;"
+        f"  font-weight: 600;"
+        f"}}"
+        f"QPushButton:hover {{"
+        f"  color: {TEXT};"
+        f"  background: {with_alpha(PANEL_HI, 90)};"
+        f"}}"
+        f"QPushButton:checked {{"
+        f"  background: {with_alpha(ACCENT, 40)};"
+        + ("  border: 0;" if checked_border else "")
+        + f"  color: {ACCENT};"
+        f"  font-weight: 600;"
+        f"}}"
+        f"QPushButton:checked:hover {{"
+        f"  background: {with_alpha(ACCENT, checked_hover_alpha)};"
+        f"}}"
+    )
 
 
 # --- fonts ----------------------------------------------------------------

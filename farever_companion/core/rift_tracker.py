@@ -12,7 +12,7 @@ import time
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from ..data import dungeons, names
+from ..data import names
 from ..geo import pois as geo_pois
 
 if TYPE_CHECKING:
@@ -229,6 +229,9 @@ class RiftTracker:
 
         in_rift = False
         if is_attached:
+            # Read the model live, NOT through core.game_state: this call is the
+            # source the per-tick snapshot's own `rift_status()` is built from,
+            # so consuming the snapshot here would close the loop.
             try:
                 in_rift = self.model.is_in_rift()
             except Exception:
@@ -285,6 +288,36 @@ class RiftTracker:
             in_range=in_range,
             at_any_rift=at_any_rift
         )
+
+
+# Default lead-time chime selection (minutes before the :00 spawn).
+RIFT_DING_DEFAULT = (15, 10, 5, 1)
+
+
+def parse_rift_ding(raw) -> list[int]:
+    """Selected rift lead times (minutes) from the stored setting.
+
+    Tolerates every shape ever written: None (default), the legacy "off" /
+    "all" strings, a single "15" / "15m" string, and lists/tuples/sets of
+    ints or "Nm" strings. "all" means every lead time including Live (0);
+    "off" / empty disables. Unparseable input falls back to the default.
+    """
+    if raw is None:
+        return list(RIFT_DING_DEFAULT)
+    if isinstance(raw, str):
+        low = raw.strip().lower()
+        if low == "off":
+            return []
+        if low == "all":
+            return [0, 1, 5, 10, 15]
+        try:
+            return [int(low.replace("m", "").strip())]
+        except ValueError:
+            return list(RIFT_DING_DEFAULT)
+    try:
+        return sorted({int(str(x).replace("m", "").strip()) for x in raw})
+    except (TypeError, ValueError):
+        return list(RIFT_DING_DEFAULT)
 
 
 def rift_summary() -> dict:
